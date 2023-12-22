@@ -1,0 +1,12 @@
+#graph{
+    background-color: gray;
+}
+
+.inputDesc{
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+#error{
+    color: red;
+}
