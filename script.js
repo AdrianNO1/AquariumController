@@ -59,7 +59,44 @@ nodes.forEach(function(d) {
 // Define the links based on the nodes
 var links = d3.range(nodes.length - 1).map(i => ({source: nodes[i], target: nodes[i + 1]}));
 
-// ... (rest of the code for creating links and nodes remains the same)
+// Function to update or create the wrap-around link
+function updateWrapAroundLink() {
+    var lastNode = nodes[nodes.length - 1];
+    var firstNode = nodes[0];
+    
+    var p1 = [lastNode.x, lastNode.y]
+    var p2 = [width + firstNode.x, firstNode.y]
+
+    var m = (p2[1] - p1[1]) / (p2[0] - p1[0]);
+
+    // Calculate the y-coordinate when x equals width
+    var yPoint = m * (width - p1[0]) + p1[1];
+
+    // Remove any existing wrap-around links
+    svg.selectAll(".wrap-around-link").remove();
+
+    // Line from the last node to the right boundary
+    svg.append("line")
+        .attr("class", "wrap-around-link")
+        .attr("x1", lastNode.x)
+        .attr("y1", lastNode.y)
+        .attr("x2", p2[0])
+        .attr("y2", p2[1])
+        .attr("stroke", "black")
+
+    // Line from the left boundary to the first node
+    svg.append("line")
+        .attr("class", "wrap-around-link")
+        .attr("x1", 0)
+        .attr("y1", yPoint)
+        .attr("x2", firstNode.x)
+        .attr("y2", firstNode.y)
+        .attr("stroke", "black")
+}
+
+
+
+updateWrapAroundLink();
 
 var radius = 10;
 
@@ -147,7 +184,7 @@ function dragged(event, d) {
     d.y = yScale(percentage);
     
     
-    console.log(d.x, d.y, d.time)
+    //console.log(d.x, d.y, d.time)
 
     d3.select(this)
         .attr("cx", d.x)
@@ -164,6 +201,8 @@ function dragged(event, d) {
         .attr("x", d.x + (d.time > new Date().setHours(23, 30, 0, 0) ? -45 : 0) + (d.time < new Date().setHours(0, 50, 0, 0) ? 45 : 0))
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0))
         .text(timeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
+
+    updateWrapAroundLink();
 }
 
 function dragended(event, d) {
@@ -239,7 +278,6 @@ document.getElementById("form").addEventListener("submit", function(event) {
             // Update the node data
             selected.percentage = percentage;
             selected.time = time.getTime();
-            console.log(selected.percentage, selected.time)
     
             // Update the node's position based on the new data
             selected.x = xScale(selected.time);
@@ -264,6 +302,8 @@ document.getElementById("form").addEventListener("submit", function(event) {
                 .attr("x", selected.x)
                 .attr("y", selected.y)
                 .text(timeFormat(time) + ", " + Math.round(percentage) + "%");
+            
+            updateWrapAroundLink();
         }
     }
 });
