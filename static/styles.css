@@ -10,3 +10,15 @@
 #error{
     color: red;
 }
+
+#upload, #uploadStatus {
+    display: inline-block; /* or use display: inline; */
+    vertical-align: top; /* Aligns them at the top if they have different heights */
+    margin-top: 5px;
+    margin-bottom: 5px;
+    margin-right: 5px; /* Optional: Adds some space between the button and the paragraph */
+}
+
+#uploadStatus{
+    color: blue;
+}

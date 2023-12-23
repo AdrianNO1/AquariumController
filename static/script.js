@@ -12,8 +12,8 @@ var svg = d3.select("#graph")
 
 
 // Define the scales for x and y
-var xScale = d3.scaleTime()
-    .domain([new Date().setHours(0, 0, 0, 0), new Date().setHours(23, 59, 59, 999)])
+var xScale = d3.scaleLinear()
+    .domain([0, 1439])
     .range([0, width]);
 
 var yScale = d3.scaleLinear()
@@ -23,10 +23,26 @@ var yScale = d3.scaleLinear()
 // Define the time format for the x-axis
 var timeFormat = d3.timeFormat("%H:%M");
 
+function minutesToTimeFormat(minutes){
+    var date = new Date();
+    
+    var hours = Math.floor(minutes / 60);
+    
+    var remainingMinutes = minutes % 60;
+    
+    date.setHours(hours, remainingMinutes, 0, 0);
+    
+    return timeFormat(date);
+}
+
+var customXAxisScale = d3.scaleTime()
+    .domain([new Date(0, 0, 0, 0, 0), new Date(0, 0, 0, 23, 59)]) // From midnight to 23:59 of the same day
+    .range([0, width]);
+
 // Add the x-axis with more frequent ticks
 var xAxis = svg.append("g")
     .attr("transform", "translate(0," + height + ")")
-    .call(d3.axisBottom(xScale)
+    .call(d3.axisBottom(customXAxisScale)
         .ticks(d3.timeHour.every(1)) // Adjust this for the desired tick interval
         .tickFormat(timeFormat)
         .tickSize(-height) // Make the ticks span the entire height for the grid
@@ -45,9 +61,9 @@ var yAxis = svg.append("g")
 
 // Sample data with time of day (as Date objects) and percentage
 var nodes = [
-    {time: new Date().setHours(9, 0, 0, 0), percentage: 20},
-    {time: new Date().setHours(12, 0, 0, 0), percentage: 50},
-    {time: new Date().setHours(15, 0, 0, 0), percentage: 30}
+    {time: 540, percentage: 20},
+    {time: 720, percentage: 50},
+    {time: 900, percentage: 30}
 ];
 
 // Convert the time and percentage to x and y coordinates
@@ -132,10 +148,11 @@ function getLinks(){
         var y1 = line.attr("y1");
         var x2 = line.attr("x2");
         var y2 = line.attr("y2");
+        let link = {source: {time: Math.round(xScale.invert(Number(x1))), percentage: Math.round(yScale.invert(Number(y1))), x: Number(x1), y: Number(y1)}, target: {time: Math.round(xScale.invert(Number(x2))), percentage: Math.round(yScale.invert(Number(y2))), x: Number(x2), y: Number(y2)}}
         if (i == 0){
-            links.push({source: {x: Number(x1), y: Number(y1)}, target: {x: Number(x2), y: Number(y2)}})
+            links.push(link)
         } else{
-            links.unshift({source: {x: Number(x1), y: Number(y1)}, target: {x: Number(x2), y: Number(y2)}})
+            links.unshift(link)
         }
         i++
       });
@@ -156,7 +173,7 @@ svg.on("click", function(event) {
             let link = links[i]
             if (link.source.x <= mouseX && link.target.x >= mouseX){
                 graphY = link.source.y + ((mouseX - link.source.x)/(link.target.x - link.source.x)) * (link.target.y - link.source.y)
-                let time = xScale.invert(mouseX).getTime()
+                let time = Math.round(xScale.invert(mouseX))
                 let percentage = Math.round(yScale.invert(graphY))
                 let newNode = {time: time, percentage: percentage, x: Math.round(xScale(time)), y: Math.round(yScale(percentage))}
                 nodes.splice(i, 0, newNode)
@@ -220,8 +237,20 @@ function updateWrapAroundLink() {
 
     var m = (p2[1] - p1[1]) / (p2[0] - p1[0]);
 
+    // Calculate the slope of the original line
+    var slope = (p2[1] - lastNode.y) / (p2[0] - lastNode.x);
+
+    // Calculate the new y-coordinate for point B using the slope
+    var newY = Math.round(lastNode.y + slope * (width - lastNode.x));
+
     // Calculate the y-coordinate when x equals width
-    var yPoint = m * (width - p1[0]) + p1[1];
+    var yPoint = Math.round(m * (width - p1[0]) + p1[1]);
+    if (isNaN(yPoint)){
+        yPoint = lastNode.y
+        newY = lastNode.y
+    }
+
+
 
     // Remove any existing wrap-around links
     svg.selectAll(".wrap-around-link").remove();
@@ -231,8 +260,8 @@ function updateWrapAroundLink() {
         .attr("class", "wrap-around-link")
         .attr("x1", lastNode.x)
         .attr("y1", lastNode.y)
-        .attr("x2", p2[0])
-        .attr("y2", p2[1])
+        .attr("x2", width)
+        .attr("y2", newY)
         .attr("stroke", "black")
 
     // Line from the left boundary to the first node
@@ -255,15 +284,15 @@ function dragstarted(event, d) {
         .style("opacity", 1)
         .attr("x", d.x)
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0)) // Position the tooltip above the node
-        .text(timeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
+        .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
     
     //document.getElementById("percentage").value = Math.round(d.percentage) + "%"
-    //document.getElementById("time").value = timeFormat(d.time).toString()
+    //document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
 }
 
 function dragged(event, d) {
     // Convert the drag coordinates to time and percentage
-    var percentage = Math.min(Math.max(yScale.invert(event.y), 0), 100)
+    var percentage = Math.min(Math.max(Math.round(yScale.invert(event.y)), 0), 100)
     
     d.percentage = percentage;
     
@@ -289,15 +318,15 @@ function dragged(event, d) {
     
     if (event.x <= upperLimit && event.x >= lowerLimit){
         d.x = event.x;
-        d.time = xScale.invert(event.x)
+        d.time = Math.round(xScale.invert(event.x))
     } else if (event.x > upperLimit){
         d.x = upperLimit;
-        d.time = xScale.invert(upperLimit)
+        d.time = Math.round(xScale.invert(upperLimit))
     } else{
         d.x = lowerLimit;
-        d.time = xScale.invert(lowerLimit)
+        d.time = Math.round(xScale.invert(lowerLimit))
     }
-    d.y = yScale(percentage);
+    d.y = Math.round(yScale(percentage));
     
     
     //console.log(d.x, d.y, d.time)
@@ -314,12 +343,12 @@ function dragged(event, d) {
         .attr("x2", d.x)
         .attr("y2", d.y);
     tooltip
-        .attr("x", d.x + (d.time > new Date().setHours(23, 30, 0, 0) ? -45 : 0) + (d.time < new Date().setHours(0, 50, 0, 0) ? 45 : 0))
+        .attr("x", d.x + (d.time > 1410 ? -45 : 0) + (d.time < 50 ? 45 : 0))
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0))
-        .text(timeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
+        .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
     
-        document.getElementById("percentage").value = Math.round(d.percentage) + "%"
-        document.getElementById("time").value = timeFormat(d.time).toString()
+    document.getElementById("percentage").value = Math.round(d.percentage) + "%"
+    document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
 
     updateWrapAroundLink();
 }
@@ -354,8 +383,7 @@ document.getElementById("form").addEventListener("submit", function(event) {
     var time;
     if (isValidTime) {
         var parts = timeInput.split(':');
-        time = new Date();
-        time.setHours(parseInt(parts[0], 10), parseInt(parts[1], 10), 0, 0);
+        time = Number(parts[0]) * 60 + Number(parts[1])
 
 
         let nodeIndex
@@ -368,12 +396,12 @@ document.getElementById("form").addEventListener("submit", function(event) {
         let lowerLimit
         let upperLimit
         if (nodeIndex == 0){
-            lowerLimit = new Date().setHours(0, 0, 0, 0)
+            lowerLimit = 0
         } else{
             lowerLimit = nodes[nodeIndex-1].time
         }
         if (nodeIndex == nodes.length-1){
-            upperLimit = new Date().setHours(23, 59, 59, 999)
+            upperLimit = 1440
         } else{
             upperLimit = nodes[nodeIndex+1].time
         }
@@ -396,7 +424,7 @@ document.getElementById("form").addEventListener("submit", function(event) {
         if (selected) {
             // Update the node data
             selected.percentage = percentage;
-            selected.time = time.getTime();
+            selected.time = time
     
             // Update the node's position based on the new data
             selected.x = xScale(selected.time);
@@ -420,7 +448,7 @@ document.getElementById("form").addEventListener("submit", function(event) {
             tooltip
                 .attr("x", selected.x)
                 .attr("y", selected.y)
-                .text(timeFormat(time) + ", " + Math.round(percentage) + "%");
+                .text(minutesToTimeFormat(time) + ", " + Math.round(percentage) + "%");
             
             updateWrapAroundLink();
         }
@@ -447,4 +475,22 @@ document.getElementById("delete").addEventListener("click", function(){
         }
         selected = null
     }
+})
+
+
+document.getElementById("upload").addEventListener("click", function(){
+    $.ajax({
+        url: '/message',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({type: "upload", data: getLinks(), name: "blue" }),
+        success: function(response) {
+            console.log(response.message);
+            document.getElementById("uploadStatus").textContent = response.message
+        },
+        error: function(error) {
+            console.log(error);
+            document.getElementById("uploadStatus").textContent = error
+        }
+    });
 })
