@@ -56,8 +56,158 @@ nodes.forEach(function(d) {
     d.y = Math.round(yScale(d.percentage));
 });
 
-// Define the links based on the nodes
-var links = d3.range(nodes.length - 1).map(i => ({source: nodes[i], target: nodes[i + 1]}));
+var links
+var radius
+var link
+var node
+var tooltip
+var selected
+
+function refreshGraph(){
+    svg.selectAll(".link").remove();
+    svg.selectAll(".node").remove();
+    svg.selectAll("text").remove();
+    // Define the links based on the nodes
+    links = d3.range(nodes.length - 1).map(i => ({source: nodes[i], target: nodes[i + 1]}));
+
+    radius = 10;
+
+    // Create the lines
+    link = svg.selectAll(".link")
+        .data(links)
+        .enter().append("line")
+        .attr("class", "link")
+        .attr("x1", d => d.source.x)
+        .attr("y1", d => d.source.y)
+        .attr("x2", d => d.target.x)
+        .attr("y2", d => d.target.y)
+        .attr("stroke", "black");
+
+    // Create the nodes
+    node = svg.selectAll(".node")
+        .data(nodes)
+        .enter().append("circle")
+        .attr("class", "node")
+        .attr("cx", d => d.x)
+        .attr("cy", d => d.y)
+        .attr("r", radius)
+        .attr("fill", "blue")
+        .call(d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended));
+
+
+    // Create a text element for the tooltip
+    tooltip = svg.append("text")
+        .style("opacity", 0)
+        .attr("text-anchor", "middle")
+        .attr("dy", "-1em");
+
+    selected = null
+    updateWrapAroundLink()
+}
+
+
+var placingNode = false
+
+// Add a transparent rect to capture mouse events over the entire SVG area
+svg.append("rect")
+    .attr("width", "100%")
+    .attr("height", "100%")
+    .style("fill", "none") // You can set this to "transparent" or any other color if needed
+    .style("pointer-events", "all"); // This ensures that the rect captures mouse events
+
+function getLinks(){
+    let links = []
+    
+    svg.selectAll(".link").each(e => {
+        links.push(e)
+    })
+    let i = 0
+    svg.selectAll("line.wrap-around-link").each(function() {
+        var line = d3.select(this);
+        var x1 = line.attr("x1");
+        var y1 = line.attr("y1");
+        var x2 = line.attr("x2");
+        var y2 = line.attr("y2");
+        if (i == 0){
+            links.push({source: {x: Number(x1), y: Number(y1)}, target: {x: Number(x2), y: Number(y2)}})
+        } else{
+            links.unshift({source: {x: Number(x1), y: Number(y1)}, target: {x: Number(x2), y: Number(y2)}})
+        }
+        i++
+      });
+    return links
+}
+
+svg.on("click", function(event) {
+    if (placingNode){
+        var mouse = d3.pointer(event);
+        var mouseX = Math.min(Math.max(mouse[0], 0), width);
+        placingNode = false
+
+        svg.selectAll(".selection-circle").remove();
+        svg.selectAll(".vertical-selection-bar").remove();
+    
+        let links = getLinks()
+        for (let i=0; i < links.length; i++){
+            let link = links[i]
+            if (link.source.x <= mouseX && link.target.x >= mouseX){
+                graphY = link.source.y + ((mouseX - link.source.x)/(link.target.x - link.source.x)) * (link.target.y - link.source.y)
+                let time = xScale.invert(mouseX).getTime()
+                let percentage = Math.round(yScale.invert(graphY))
+                let newNode = {time: time, percentage: percentage, x: Math.round(xScale(time)), y: Math.round(yScale(percentage))}
+                nodes.splice(i, 0, newNode)
+                refreshGraph()
+                break
+            }
+        }
+    }
+})
+
+svg.on("mousemove", function(event) {
+    if (placingNode) {
+        var mouse = d3.pointer(event);
+        var mouseX = Math.min(Math.max(mouse[0], 0), width);
+
+        let graphY
+        let links = getLinks()
+        for (let i=0; i < links.length; i++){
+            let link = links[i]
+            if (link.source.x <= mouseX && link.target.x >= mouseX){
+                graphY = link.source.y + ((mouseX - link.source.x)/(link.target.x - link.source.x)) * (link.target.y - link.source.y)
+                //console.log(yScale.invert(graphY))
+                //console.log(xScale.invert(mouseX))
+                break
+            }
+        }
+
+        // Remove any existing circles
+        svg.selectAll(".selection-circle").remove();
+        
+        // Remove any existing wrap-around links
+        svg.selectAll(".vertical-selection-bar").remove();
+        
+        // Line from the last node to the right boundary
+        svg.append("line")
+        .attr("class", "vertical-selection-bar")
+        .attr("x1", mouseX)
+        .attr("y1", yScale(0))
+        .attr("x2", mouseX)
+        .attr("y2", yScale(100))
+        .attr("stroke", "black")
+
+        // Draw a white circle at the specified location
+        svg.append("circle")
+            .attr("class", "selection-circle")
+            .attr("cx", mouseX) // Center x-coordinate of the circle
+            .attr("cy", graphY) // Center y-coordinate of the circle, assuming you want it centered vertically
+            .attr("r", 4) // Radius of the circle
+            .attr("fill", "white"); // Fill color of the circle
+    }
+});
+
 
 // Function to update or create the wrap-around link
 function updateWrapAroundLink() {
@@ -94,45 +244,7 @@ function updateWrapAroundLink() {
         .attr("stroke", "black")
 }
 
-
-
-updateWrapAroundLink();
-
-var radius = 10;
-
-// Create the lines
-var link = svg.selectAll(".link")
-    .data(links)
-    .enter().append("line")
-    .attr("class", "link")
-    .attr("x1", d => d.source.x)
-    .attr("y1", d => d.source.y)
-    .attr("x2", d => d.target.x)
-    .attr("y2", d => d.target.y)
-    .attr("stroke", "black");
-
-// Create the nodes
-var node = svg.selectAll(".node")
-    .data(nodes)
-    .enter().append("circle")
-    .attr("class", "node")
-    .attr("cx", d => d.x)
-    .attr("cy", d => d.y)
-    .attr("r", radius)
-    .attr("fill", "blue")
-    .call(d3.drag()
-        .on("start", dragstarted)
-        .on("drag", dragged)
-        .on("end", dragended));
-
-
-// Create a text element for the tooltip
-var tooltip = svg.append("text")
-    .style("opacity", 0)
-    .attr("text-anchor", "middle")
-    .attr("dy", "-1em");
-
-let selected = null
+refreshGraph()
 
 // Update the drag functions to show the tooltip
 function dragstarted(event, d) {
@@ -143,6 +255,9 @@ function dragstarted(event, d) {
         .attr("x", d.x)
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0)) // Position the tooltip above the node
         .text(timeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
+    
+    document.getElementById("percentage").value = Math.round(d.percentage) + "%"
+    document.getElementById("time").value = timeFormat(d.time).toString()
 }
 
 function dragged(event, d) {
@@ -201,6 +316,9 @@ function dragged(event, d) {
         .attr("x", d.x + (d.time > new Date().setHours(23, 30, 0, 0) ? -45 : 0) + (d.time < new Date().setHours(0, 50, 0, 0) ? 45 : 0))
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0))
         .text(timeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
+    
+        document.getElementById("percentage").value = Math.round(d.percentage) + "%"
+        document.getElementById("time").value = timeFormat(d.time).toString()
 
     updateWrapAroundLink();
 }
@@ -307,3 +425,25 @@ document.getElementById("form").addEventListener("submit", function(event) {
         }
     }
 });
+
+
+document.getElementById("new").addEventListener("click", function(){
+    placingNode = true
+})
+document.getElementById("delete").addEventListener("click", function(){
+    if (selected){
+        if (nodes.length == 1){
+            document.getElementById("error").textContent = "no.";
+            return
+        }
+        document.getElementById("error").textContent = "";
+        for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++){
+            if (nodes[nodeIndex].x == selected.x && nodes[nodeIndex].y == selected.y){
+                nodes.splice(nodeIndex, 1)
+                refreshGraph()
+                break
+            }
+        }
+        selected = null
+    }
+})
