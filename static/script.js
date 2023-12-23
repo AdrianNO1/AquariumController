@@ -66,7 +66,7 @@ var selected
 function refreshGraph(){
     svg.selectAll(".link").remove();
     svg.selectAll(".node").remove();
-    svg.selectAll("text").remove();
+    svg.selectAll(".tooltip").remove();
     // Define the links based on the nodes
     links = d3.range(nodes.length - 1).map(i => ({source: nodes[i], target: nodes[i + 1]}));
 
@@ -102,6 +102,7 @@ function refreshGraph(){
     tooltip = svg.append("text")
         .style("opacity", 0)
         .attr("text-anchor", "middle")
+        .attr("class", "tooltip")
         .attr("dy", "-1em");
 
     selected = null
@@ -256,8 +257,8 @@ function dragstarted(event, d) {
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0)) // Position the tooltip above the node
         .text(timeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
     
-    document.getElementById("percentage").value = Math.round(d.percentage) + "%"
-    document.getElementById("time").value = timeFormat(d.time).toString()
+    //document.getElementById("percentage").value = Math.round(d.percentage) + "%"
+    //document.getElementById("time").value = timeFormat(d.time).toString()
 }
 
 function dragged(event, d) {
