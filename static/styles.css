@@ -19,6 +19,35 @@
     margin-right: 5px; /* Optional: Adds some space between the button and the paragraph */
 }
 
+#graphContainer{
+    display: flex;
+    align-items: stretch;
+}
+
 #uploadStatus{
     color: blue;
 }
+
+#channelsTable {
+    flex: 1;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+th, td {
+    padding: 10px;
+    border: 1px solid #ddd;
+    text-align: left;
+}
+.selected {
+    background-color: blue;
+    color: white;
+}
+
+.checkbox-column {
+    width: 50px; /* Set a fixed width for the checkbox column */
+    max-width: 50px; /* This is optional since width is already fixed */
+    padding: 0; /* Optional: Remove padding if you want the checkbox to fit tightly */
+    text-align: center; /* Center the checkbox within the column */
+}
+

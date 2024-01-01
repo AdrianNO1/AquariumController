@@ -25,6 +25,6 @@ def message():
     
 
 if __name__ == '__main__':
-    app.run(debug=True, port=2389)
+    app.run(debug=True, port=2389, host="0.0.0.0")
 
 

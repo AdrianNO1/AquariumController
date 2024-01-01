@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Table with Selectable Rows</title>
+    <style>
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+        .selected {
+            background-color: blue;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+<table id="selectableTable">
+    <tr>
+        <td class="selectable" onclick="selectRow(this)">Item 1</td>
+        <td><input type="checkbox" onclick="checkboxChecked(this)"></td>
+    </tr>
+    <tr>
+        <td class="selectable" onclick="selectRow(this)">Item 2</td>
+        <td><input type="checkbox" onclick="checkboxChecked(this)"></td>
+    </tr>
+    <tr>
+        <td class="selectable" onclick="selectRow(this)">Item 3</td>
+        <td><input type="checkbox" onclick="checkboxChecked(this)"></td>
+    </tr>
+</table>
+
+<script>
+    function selectRow(row) {
+        var rows = document.querySelectorAll('.selectable');
+        rows.forEach(function(r) {
+            r.classList.remove('selected');
+        });
+
+        row.classList.add('selected');
+    }
+
+    function checkboxChecked(checkbox){
+        console.log(checkbox.parentElement.parentElement.querySelector(".selectable").innerText, checkbox.checked)
+    }
+
+    window.onload = function() {
+        selectRow(document.querySelector('.selectable'));
+    };
+</script>
+
+</body>
+</html>

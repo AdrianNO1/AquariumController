@@ -1,58 +1,58 @@
 [
     {
         "source": {
-            "time": 1703286000000,
-            "percentage": 25,
+            "time": 0,
+            "percentage": 57,
             "x": 0,
-            "y": 187.5
+            "y": 107
         },
         "target": {
-            "time": 1703318423225,
-            "percentage": 20,
-            "x": 349,
-            "y": 200
+            "time": 672,
+            "percentage": 77,
+            "x": 434,
+            "y": 57
         }
     },
     {
         "source": {
-            "time": 1703318400000,
-            "percentage": 20,
-            "x": 349,
-            "y": 200
+            "time": 672,
+            "percentage": 77,
+            "x": 434,
+            "y": 57
         },
         "target": {
-            "time": 1703329200000,
-            "percentage": 50,
-            "x": 465,
-            "y": 125
+            "time": 659,
+            "percentage": 53,
+            "x": 426,
+            "y": 118
         }
     },
     {
         "source": {
-            "time": 1703329200000,
-            "percentage": 50,
-            "x": 465,
-            "y": 125
+            "time": 659,
+            "percentage": 53,
+            "x": 426,
+            "y": 118
         },
         "target": {
-            "time": 1703340000000,
-            "percentage": 30,
-            "x": 581,
-            "y": 175
+            "time": 659,
+            "percentage": 34,
+            "x": 426,
+            "y": 165
         }
     },
     {
         "source": {
-            "time": 1703339976773,
-            "percentage": 30,
-            "x": 581,
-            "y": 175
+            "time": 659,
+            "percentage": 34,
+            "x": 426,
+            "y": 165
         },
         "target": {
-            "time": 1703372399999,
-            "percentage": 25,
+            "time": 1439,
+            "percentage": 57,
             "x": 930,
-            "y": 187.5
+            "y": 107
         }
     }
 ]
