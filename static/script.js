@@ -17,19 +17,34 @@ var yScale = d3.scaleLinear()
 .domain([0, 100])
 .range([height, 0]);
 
-var nodes = [
+var example_nodes = [
     {time: 540, percentage: 20},
     {time: 720, percentage: 50},
     {time: 900, percentage: 30}
 ];
 
-nodes.forEach(function(d) {
+example_nodes.forEach(function(d) {
     d.x = Math.round(xScale(d.time));
     d.y = Math.round(yScale(d.percentage));
 });
 
 var backgroundSvg = mainSvg.append("g").attr("transform", "translate(" + margin.left + "," + margin.top + ")");
 
+let tooltip = backgroundSvg.append("text")
+    .style("opacity", 0)
+    .attr("text-anchor", "middle")
+    .attr("class", "tooltip")
+    .attr("dy", "-1em");
+
+
+let links = {}
+let nodes = {}
+let selected_radius = 10
+let unselected_radius = 4
+let link
+let node
+let selected
+let svg_name
 
 let channels = {}
 let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
@@ -42,14 +57,26 @@ channels_names.forEach(e => {
     channelsTable.innerHTML += `<tr><td class="selectable" onclick="selectRow(this)">${e}</td><td class="checkbox-column"><input type="checkbox" checked onclick="checkboxChecked(this)"></td></tr>`
 
     channels[e] = mainSvg
-    .append("g")
-    .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
+        .append("g")
+        .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
     
-    initializeSvg(channels[e])
+    initializeSvg(channels[e], e)
     i++
 })
 
-var svg = channels["Uv"]
+function selectSvg(new_svg){
+    if (svg){
+        svg.selectAll(".node")
+            .attr("r", svg_name === new_svg ? selected_radius : unselected_radius)
+    }
+
+    svg_name = new_svg
+    svg = channels[new_svg]
+    svg.raise()
+    refreshGraph(svg)
+}
+
+var svg
 
 
 
@@ -93,41 +120,59 @@ var yAxis = backgroundSvg.append("g")
 
 
 
-var links
-var radius
-var link
-var node
-var tooltip
-var selected
 
-function refreshGraph(svg){
+
+function refreshGraph(svg, name=svg_name){
     svg.selectAll(".link").remove();
     svg.selectAll(".node").remove();
-    backgroundSvg.selectAll(".tooltip").remove();
-    // Define the links based on the nodes
-    links = d3.range(nodes.length - 1).map(i => ({source: nodes[i], target: nodes[i + 1]}));
 
-    radius = 10;
+    
+    //update wraparound links
 
+    var lastNode = nodes[name][nodes[name].length - 1];
+    var firstNode = nodes[name][0];
+    
+    var p1 = [lastNode.x, lastNode.y]
+    var p2 = [width + firstNode.x, firstNode.y]
+    
+    var m = (p2[1] - p1[1]) / (p2[0] - p1[0]);
+    
+    // Calculate the slope of the original line
+    var slope = (p2[1] - lastNode.y) / (p2[0] - lastNode.x);
+    
+    // Calculate the new y-coordinate for point B using the slope
+    var newY = Math.round(lastNode.y + slope * (width - lastNode.x));
+    
+    // Calculate the y-coordinate when x equals width
+    var yPoint = Math.round(m * (width - p1[0]) + p1[1]);
+    if (isNaN(yPoint)){
+        yPoint = lastNode.y
+        newY = lastNode.y
+    }
+    
+    let links_data = [{source: {x: 0, y: yPoint}, target: {x: firstNode.x, y: firstNode.y}}].concat(d3.range(nodes[name].length - 1).map(i => ({source: nodes[name][i], target: nodes[name][i + 1]}))).concat([{source: {x: lastNode.x, y: lastNode.y}, target: {x: width, y: newY}}])
+        
+
+        
     // Create the lines
     link = svg.selectAll(".link")
-        .data(links)
+        .data(links_data)
         .enter().append("line")
         .attr("class", "link")
         .attr("x1", d => d.source.x)
         .attr("y1", d => d.source.y)
         .attr("x2", d => d.target.x)
         .attr("y2", d => d.target.y)
-        .attr("stroke", "black");
+        .attr("stroke", channels_colors[Object.keys(channels).indexOf(Object.keys(channels).find(key => channels[key] === svg))])
 
     // Create the nodes
     node = svg.selectAll(".node")
-        .data(nodes)
+        .data(nodes[name])
         .enter().append("circle")
         .attr("class", "node")
         .attr("cx", d => d.x)
         .attr("cy", d => d.y)
-        .attr("r", radius)
+        .attr("r", name === svg_name ? selected_radius : unselected_radius)
         .attr("fill", channels_colors[Object.keys(channels).indexOf(Object.keys(channels).find(key => channels[key] === svg))])
         .call(d3.drag()
             .on("start", dragstarted)
@@ -136,20 +181,21 @@ function refreshGraph(svg){
 
 
     // Create a text element for the tooltip
-    tooltip = backgroundSvg.append("text")
-        .style("opacity", 0)
-        .attr("text-anchor", "middle")
-        .attr("class", "tooltip")
-        .attr("dy", "-1em");
-
-    selected = null
-    updateWrapAroundLink(svg)
+    //tooltip = backgroundSvg.append("text")
+    //    .style("opacity", 0)
+    //    .attr("text-anchor", "middle")
+    //    .attr("class", "tooltip")
+    //    .attr("dy", "-1em");
+//
+    //selected = null
 }
 
 
 var placingNode = false
 
-function initializeSvg(svg){
+function initializeSvg(svg, name){
+    nodes[name] = structuredClone(example_nodes)
+    
     // Add a transparent rect to capture mouse events over the entire SVG area
     svg.append("rect")
         .attr("width", "100%")
@@ -175,7 +221,7 @@ function initializeSvg(svg){
                     let time = Math.round(xScale.invert(mouseX))
                     let percentage = Math.round(yScale.invert(graphY))
                     let newNode = {time: time, percentage: percentage, x: Math.round(xScale(time)), y: Math.round(yScale(percentage))}
-                    nodes.splice(i, 0, newNode)
+                    nodes[svg_name].splice(i, 0, newNode)
                     refreshGraph(svg)
                     break
                 }
@@ -194,8 +240,6 @@ function initializeSvg(svg){
                 let link = links[i]
                 if (link.source.x <= mouseX && link.target.x >= mouseX){
                     graphY = link.source.y + ((mouseX - link.source.x)/(link.target.x - link.source.x)) * (link.target.y - link.source.y)
-                    //console.log(yScale.invert(graphY))
-                    //console.log(xScale.invert(mouseX))
                     break
                 }
             }
@@ -226,7 +270,7 @@ function initializeSvg(svg){
     });
 
 
-    refreshGraph(svg)
+    refreshGraph(svg, name)
 }
 
 
@@ -255,55 +299,6 @@ function getLinks(){
 }
 
 
-// Function to update or create the wrap-around link
-function updateWrapAroundLink(svg) {
-    var lastNode = nodes[nodes.length - 1];
-    var firstNode = nodes[0];
-    
-    var p1 = [lastNode.x, lastNode.y]
-    var p2 = [width + firstNode.x, firstNode.y]
-
-    var m = (p2[1] - p1[1]) / (p2[0] - p1[0]);
-
-    // Calculate the slope of the original line
-    var slope = (p2[1] - lastNode.y) / (p2[0] - lastNode.x);
-
-    // Calculate the new y-coordinate for point B using the slope
-    var newY = Math.round(lastNode.y + slope * (width - lastNode.x));
-
-    // Calculate the y-coordinate when x equals width
-    var yPoint = Math.round(m * (width - p1[0]) + p1[1]);
-    if (isNaN(yPoint)){
-        yPoint = lastNode.y
-        newY = lastNode.y
-    }
-
-
-
-    // Remove any existing wrap-around links
-    svg.selectAll(".wrap-around-link").remove();
-
-    // Line from the last node to the right boundary
-    svg.append("line")
-        .attr("class", "wrap-around-link")
-        .attr("x1", lastNode.x)
-        .attr("y1", lastNode.y)
-        .attr("x2", width)
-        .attr("y2", newY)
-        .attr("stroke", "black")
-
-    // Line from the left boundary to the first node
-    svg.append("line")
-        .attr("class", "wrap-around-link")
-        .attr("x1", 0)
-        .attr("y1", yPoint)
-        .attr("x2", firstNode.x)
-        .attr("y2", firstNode.y)
-        .attr("stroke", "black")
-}
-
-initializeSvg(svg)
-
 // Update the drag functions to show the tooltip
 function dragstarted(event, d) {
     selected = d
@@ -325,8 +320,8 @@ function dragged(event, d) {
     d.percentage = percentage;
     
     let nodeIndex
-    for (nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++){
-        if (nodes[nodeIndex].x == d.x && nodes[nodeIndex].y == d.y){
+    for (nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++){
+        if (nodes[svg_name][nodeIndex] == d){ //(nodes[svg_name][nodeIndex].x == d.x && nodes[svg_name][nodeIndex].y == d.y){ //(Math.abs(nodes[svg_name][nodeIndex].x - d.x) < 10 && Math.abs(nodes[svg_name][nodeIndex].y - d.y) < 10){
             break
         }
     }
@@ -336,17 +331,18 @@ function dragged(event, d) {
     if (nodeIndex == 0){
         lowerLimit = 0
     } else{
-        lowerLimit = nodes[nodeIndex-1].x
+        lowerLimit = nodes[svg_name][nodeIndex-1].x+1
     }
-    if (nodeIndex == nodes.length-1){
+    if (nodeIndex == nodes[svg_name].length-1){
         upperLimit = width
     } else{
-        upperLimit = nodes[nodeIndex+1].x
+        upperLimit = nodes[svg_name][nodeIndex+1].x-1
     }
     
     if (event.x <= upperLimit && event.x >= lowerLimit){
         d.x = event.x;
         d.time = Math.round(xScale.invert(event.x))
+        
     } else if (event.x > upperLimit){
         d.x = upperLimit;
         d.time = Math.round(xScale.invert(upperLimit))
@@ -356,8 +352,10 @@ function dragged(event, d) {
     }
     d.y = Math.round(yScale(percentage));
     
-    
-    //console.log(d.x, d.y, d.time)
+    nodes[svg_name][nodeIndex].x = d.x
+    nodes[svg_name][nodeIndex].y = d.y
+    nodes[svg_name][nodeIndex].time = d.time
+    nodes[svg_name][nodeIndex].percentage = d.percentage
 
     d3.select(this)
         .attr("cx", d.x)
@@ -378,7 +376,7 @@ function dragged(event, d) {
     document.getElementById("percentage").value = Math.round(d.percentage) + "%"
     document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
 
-    updateWrapAroundLink(svg);
+    refreshGraph(svg);
 }
 
 function dragended(event, d) {
@@ -415,8 +413,8 @@ document.getElementById("form").addEventListener("submit", function(event) {
 
 
         let nodeIndex
-        for (nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++){
-            if (nodes[nodeIndex].x == selected.x && nodes[nodeIndex].y == selected.y){
+        for (nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++){
+            if (nodes[svg_name][nodeIndex].x == selected.x && nodes[svg_name][nodeIndex].y == selected.y){
                 break
             }
         }
@@ -426,12 +424,12 @@ document.getElementById("form").addEventListener("submit", function(event) {
         if (nodeIndex == 0){
             lowerLimit = 0
         } else{
-            lowerLimit = nodes[nodeIndex-1].time
+            lowerLimit = nodes[svg_name][nodeIndex-1].time
         }
-        if (nodeIndex == nodes.length-1){
+        if (nodeIndex == nodes[svg_name].length-1){
             upperLimit = 1440
         } else{
-            upperLimit = nodes[nodeIndex+1].time
+            upperLimit = nodes[svg_name][nodeIndex+1].time
         }
 
         if (time > upperLimit || time < lowerLimit){
@@ -478,7 +476,7 @@ document.getElementById("form").addEventListener("submit", function(event) {
                 .attr("y", selected.y)
                 .text(minutesToTimeFormat(time) + ", " + Math.round(percentage) + "%");
             
-            updateWrapAroundLink(svg);
+            refreshGraph(svg);
         }
     }
 });
@@ -489,14 +487,14 @@ document.getElementById("new").addEventListener("click", function(){
 })
 document.getElementById("delete").addEventListener("click", function(){
     if (selected){
-        if (nodes.length == 1){
+        if (nodes[svg_name].length == 1){
             document.getElementById("error").textContent = "no.";
             return
         }
         document.getElementById("error").textContent = "";
-        for (let nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++){
-            if (nodes[nodeIndex].x == selected.x && nodes[nodeIndex].y == selected.y){
-                nodes.splice(nodeIndex, 1)
+        for (let nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++){
+            if (nodes[svg_name][nodeIndex].x == selected.x && nodes[svg_name][nodeIndex].y == selected.y){
+                nodes[svg_name].splice(nodeIndex, 1)
                 refreshGraph(svg)
                 break
             }
@@ -530,6 +528,8 @@ function selectRow(row) {
     rows.forEach(function(r) {
         r.classList.remove('selected');
     });
+
+    selectSvg(row.innerText)
 
     row.classList.add('selected');
 }
