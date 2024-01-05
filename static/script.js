@@ -7,7 +7,7 @@ var margin = {top: 20, right: 20, bottom: 30, left: 50},
 var mainSvg = d3.select("#graph")
   .attr("width", width + margin.left + margin.right)
   .attr("height", height + margin.top + margin.bottom)
-  
+
 // Define the scales for x and y
 var xScale = d3.scaleLinear()
 .domain([0, 1439])
@@ -20,7 +20,7 @@ var yScale = d3.scaleLinear()
 var example_nodes = [
     {time: 540, percentage: 20},
     {time: 720, percentage: 50},
-    {time: 900, percentage: 30}
+    {time: 901, percentage: 30}
 ];
 
 example_nodes.forEach(function(d) {
@@ -37,6 +37,8 @@ let tooltip = backgroundSvg.append("text")
     .attr("dy", "-1em");
 
 
+
+let overwriteNodesWithExample = false
 let links = {}
 let nodes = {}
 let selected_radius = 10
@@ -45,6 +47,7 @@ let link
 let node
 let selected
 let svg_name
+let svg
 
 let channels = {}
 let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
@@ -52,9 +55,31 @@ let channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
 
 let channelsTable = document.getElementById("channelsTable")
 
+if (overwriteNodesWithExample){
+    channels_names.forEach(e => {
+        nodes[e] = structuredClone(example_nodes)
+    })
+} else{
+    $.ajax({
+        url: '/load',
+        type: 'POST',
+        async: false,
+        contentType: 'application/json',
+        data: JSON.stringify({}),
+        success: function(response) {
+            nodes = JSON.parse(response.data);
+            
+        },
+        error: function(error) {
+            console.log(error);
+            document.getElementById("error").textContent = error.responseText
+        }
+    });
+}
+
 let i = 0
 channels_names.forEach(e => {
-    channelsTable.innerHTML += `<tr><td class="selectable" onclick="selectRow(this)">${e}</td><td class="checkbox-column"><input type="checkbox" checked onclick="checkboxChecked(this)"></td></tr>`
+    channelsTable.innerHTML += `<tr><td class="selectable" onclick="selectRow(this)">${e}</td></td></tr>`
 
     channels[e] = mainSvg
         .append("g")
@@ -69,15 +94,14 @@ function selectSvg(new_svg){
         svg.selectAll(".node")
             .attr("r", svg_name === new_svg ? selected_radius : unselected_radius)
     }
+    tooltip.style("opacity", 0);
+    selected = null
 
     svg_name = new_svg
     svg = channels[new_svg]
     svg.raise()
     refreshGraph(svg)
 }
-
-var svg
-
 
 
 // Define the time format for the x-axis
@@ -119,7 +143,27 @@ var yAxis = backgroundSvg.append("g")
     .call(g => g.selectAll(".tick line").attr("stroke-opacity", 0.2)); // Style the grid lines
 
 
-
+function verifyGraphIntegrity(){
+    let ok = true
+    channels_names.forEach(e => {
+        let first_link
+        let prev_link
+        getLinks(channels[e]).forEach(link => {
+            if (prev_link){
+                if (JSON.stringify(prev_link.target) != JSON.stringify(link.source)){
+                    ok = false
+                }
+            } else{
+                first_link = link
+            }
+            prev_link = link
+        })
+        if (first_link.source.y != prev_link.target.y || first_link.source.percentage != prev_link.target.percentage || first_link.source.time != 0 || prev_link.target.time != 1439){
+            ok = false
+        }
+    })
+    return ok
+}
 
 
 function refreshGraph(svg, name=svg_name){
@@ -128,7 +172,6 @@ function refreshGraph(svg, name=svg_name){
 
     
     //update wraparound links
-
     var lastNode = nodes[name][nodes[name].length - 1];
     var firstNode = nodes[name][0];
     
@@ -150,7 +193,7 @@ function refreshGraph(svg, name=svg_name){
         newY = lastNode.y
     }
     
-    let links_data = [{source: {x: 0, y: yPoint}, target: {x: firstNode.x, y: firstNode.y}}].concat(d3.range(nodes[name].length - 1).map(i => ({source: nodes[name][i], target: nodes[name][i + 1]}))).concat([{source: {x: lastNode.x, y: lastNode.y}, target: {x: width, y: newY}}])
+    let links_data = [{source: {time: Math.round(xScale.invert(0)), percentage: Math.round(yScale.invert(yPoint)), x: 0, y: yPoint}, target: {time: Math.round(xScale.invert(firstNode.x)), percentage: Math.round(yScale.invert(firstNode.y)), x: firstNode.x, y: firstNode.y}}].concat(d3.range(nodes[name].length - 1).map(i => ({source: nodes[name][i], target: nodes[name][i + 1]}))).concat([{source: {time: Math.round(xScale.invert(lastNode.x)), percentage: Math.round(yScale.invert(lastNode.y)), x: lastNode.x, y: lastNode.y}, target: {time: Math.round(xScale.invert(width)), percentage: Math.round(yScale.invert(newY)), x: width, y: newY}}])
         
 
         
@@ -194,7 +237,7 @@ function refreshGraph(svg, name=svg_name){
 var placingNode = false
 
 function initializeSvg(svg, name){
-    nodes[name] = structuredClone(example_nodes)
+    //nodes[name] = structuredClone(example_nodes)
     
     // Add a transparent rect to capture mouse events over the entire SVG area
     svg.append("rect")
@@ -213,7 +256,7 @@ function initializeSvg(svg, name){
             svg.selectAll(".selection-circle").remove();
             svg.selectAll(".vertical-selection-bar").remove();
         
-            let links = getLinks()
+            let links = getLinks(svg)
             for (let i=0; i < links.length; i++){
                 let link = links[i]
                 if (link.source.x <= mouseX && link.target.x >= mouseX){
@@ -235,7 +278,7 @@ function initializeSvg(svg, name){
             var mouseX = Math.min(Math.max(mouse[0], 0), width);
 
             let graphY
-            let links = getLinks()
+            let links = getLinks(svg)
             for (let i=0; i < links.length; i++){
                 let link = links[i]
                 if (link.source.x <= mouseX && link.target.x >= mouseX){
@@ -274,27 +317,27 @@ function initializeSvg(svg, name){
 }
 
 
-function getLinks(){
+function getLinks(svg){
     let links = []
     
     svg.selectAll(".link").each(e => {
         links.push(e)
     })
-    let i = 0
-    svg.selectAll("line.wrap-around-link").each(function() {
-        var line = d3.select(this);
-        var x1 = line.attr("x1");
-        var y1 = line.attr("y1");
-        var x2 = line.attr("x2");
-        var y2 = line.attr("y2");
-        let link = {source: {time: Math.round(xScale.invert(Number(x1))), percentage: Math.round(yScale.invert(Number(y1))), x: Number(x1), y: Number(y1)}, target: {time: Math.round(xScale.invert(Number(x2))), percentage: Math.round(yScale.invert(Number(y2))), x: Number(x2), y: Number(y2)}}
-        if (i == 0){
-            links.push(link)
-        } else{
-            links.unshift(link)
-        }
-        i++
-      });
+    //let i = 0
+    //svg.selectAll("line.wrap-around-link").each(function() {
+    //    var line = d3.select(this);
+    //    var x1 = line.attr("x1");
+    //    var y1 = line.attr("y1");
+    //    var x2 = line.attr("x2");
+    //    var y2 = line.attr("y2");
+    //    let link = {source: {time: Math.round(xScale.invert(Number(x1))), percentage: Math.round(yScale.invert(Number(y1))), x: Number(x1), y: Number(y1)}, target: {time: Math.round(xScale.invert(Number(x2))), percentage: Math.round(yScale.invert(Number(y2))), x: Number(x2), y: Number(y2)}}
+    //    if (i == 0){
+    //        links.push(link)
+    //    } else{
+    //        links.unshift(link)
+    //    }
+    //    i++
+    //  });
     return links
 }
 
@@ -309,8 +352,8 @@ function dragstarted(event, d) {
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0)) // Position the tooltip above the node
         .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
     
-    //document.getElementById("percentage").value = Math.round(d.percentage) + "%"
-    //document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
+    document.getElementById("percentage").value = Math.round(d.percentage) + "%"
+    document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
 }
 
 function dragged(event, d) {
@@ -352,10 +395,10 @@ function dragged(event, d) {
     }
     d.y = Math.round(yScale(percentage));
     
-    nodes[svg_name][nodeIndex].x = d.x
-    nodes[svg_name][nodeIndex].y = d.y
-    nodes[svg_name][nodeIndex].time = d.time
-    nodes[svg_name][nodeIndex].percentage = d.percentage
+    //nodes[svg_name][nodeIndex].x = d.x
+    //nodes[svg_name][nodeIndex].y = d.y
+    //nodes[svg_name][nodeIndex].time = d.time
+    //nodes[svg_name][nodeIndex].percentage = d.percentage
 
     d3.select(this)
         .attr("cx", d.x)
@@ -472,9 +515,9 @@ document.getElementById("form").addEventListener("submit", function(event) {
 
             // Update the tooltip
             tooltip
-                .attr("x", selected.x)
-                .attr("y", selected.y)
-                .text(minutesToTimeFormat(time) + ", " + Math.round(percentage) + "%");
+                .attr("x", selected.x + (selected.time > 1410 ? -45 : 0) + (selected.time < 50 ? 45 : 0))
+                .attr("y", selected.y + (selected.percentage > 95 ? 45 : 0))
+                .text(minutesToTimeFormat(selected.time) + ", " + Math.round(selected.percentage) + "%");
             
             refreshGraph(svg);
         }
@@ -483,7 +526,9 @@ document.getElementById("form").addEventListener("submit", function(event) {
 
 
 document.getElementById("new").addEventListener("click", function(){
-    placingNode = true
+    placingNode = !placingNode
+    svg.selectAll(".selection-circle").remove();
+    svg.selectAll(".vertical-selection-bar").remove();
 })
 document.getElementById("delete").addEventListener("click", function(){
     if (selected){
@@ -499,17 +544,27 @@ document.getElementById("delete").addEventListener("click", function(){
                 break
             }
         }
+        tooltip.style("opacity", 0);
         selected = null
     }
 })
 
 
 document.getElementById("upload").addEventListener("click", function(){
+    if (!verifyGraphIntegrity()){
+        document.getElementById("uploadStatus").textContent = "error: Links are somehow not connected"
+        return
+    }
+    document.getElementById("uploadStatus").textContent = "sending..."
+    let links_data = {}
+    channels_names.forEach(e => {
+        links_data[e] = getLinks(channels[e])
+    })
     $.ajax({
-        url: '/message',
+        url: '/upload',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({type: "upload", data: getLinks(), name: "blue" }),
+        data: JSON.stringify({links_data: links_data, throttle: 100 }),
         success: function(response) {
             console.log(response.message);
             document.getElementById("uploadStatus").textContent = response.message
@@ -534,9 +589,9 @@ function selectRow(row) {
     row.classList.add('selected');
 }
 
-function checkboxChecked(checkbox){
-    console.log(checkbox.parentElement.parentElement.querySelector(".selectable").innerText, checkbox.checked)
-}
+//function checkboxChecked(checkbox){
+//    console.log(checkbox.parentElement.parentElement.querySelector(".selectable").innerText, checkbox.checked)
+//}
 
 window.onload = function() {
     selectRow(document.querySelector('.selectable'));
