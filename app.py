@@ -1,7 +1,7 @@
 import json, os, sys
 from flask import Flask, request, jsonify, render_template
 from multiprocessing import Process
-from testmanager import main
+from manager import main
 app = Flask(__name__)
 
 links_path = os.path.join("data", "links.json")
@@ -13,7 +13,6 @@ def index():
 @app.route('/load', methods=['POST'])
 def load():
     data = request.json
-    print("DATA:", data)
     nodes = json.load(open(links_path, "r", encoding="utf-8"))
     for key in nodes.keys():
         i = 0
@@ -32,11 +31,16 @@ def upload():
     response = {'message': 'ok'}
     return jsonify(response)
 
+#@app.route('/getlog', methods=['POST'])
+#def getlog():
+#    data = request.json
+#    data["limit"]
+#    return jsonify(response)
 
-    
+
 
 if __name__ == '__main__':
     p = Process(target=main)
     p.start()
-    app.run(debug=True, port=2389)# host="0.0.0.0"
+    app.run(debug=True, port=2389, host="0.0.0.0")
     p.join()

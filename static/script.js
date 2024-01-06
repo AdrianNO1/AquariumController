@@ -1,3 +1,28 @@
+function setCurrentTime() {
+    const now = new Date();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    document.getElementById("time").innerHTML = `Current time: <b>${hours}:${minutes}</b> (UTC)`
+}
+
+function scheduleSetCurrentTime() {
+    setCurrentTime()
+    const now = new Date();
+    const timeToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
+
+    // Set a timeout to align with the next minute change
+    setTimeout(function() {
+        setCurrentTime(); // Print the time at the start of the next minute
+
+        // Then set an interval to print the time every minute thereafter
+        setInterval(setCurrentTime, 60 * 1000);
+    }, timeToNextMinute);
+}
+
+// Start the scheduling function
+scheduleSetCurrentTime();
+
+
 // Define the dimensions and margins of the graph
 var margin = {top: 20, right: 20, bottom: 30, left: 50},
     width = 1000 - margin.left - margin.right,
