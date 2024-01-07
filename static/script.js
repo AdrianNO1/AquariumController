@@ -1,28 +1,3 @@
-function setCurrentTime() {
-    const now = new Date();
-    const hours = now.getHours().toString().padStart(2, '0');
-    const minutes = now.getMinutes().toString().padStart(2, '0');
-    document.getElementById("time").innerHTML = `Current time: <b>${hours}:${minutes}</b> (UTC)`
-}
-
-function scheduleSetCurrentTime() {
-    setCurrentTime()
-    const now = new Date();
-    const timeToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds();
-
-    // Set a timeout to align with the next minute change
-    setTimeout(function() {
-        setCurrentTime(); // Print the time at the start of the next minute
-
-        // Then set an interval to print the time every minute thereafter
-        setInterval(setCurrentTime, 60 * 1000);
-    }, timeToNextMinute);
-}
-
-// Start the scheduling function
-scheduleSetCurrentTime();
-
-
 // Define the dimensions and margins of the graph
 var margin = {top: 20, right: 20, bottom: 30, left: 50},
     width = 1000 - margin.left - margin.right,
@@ -73,6 +48,7 @@ let node
 let selected
 let svg_name
 let svg
+let current_minutes
 
 let channels = {}
 let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
@@ -167,6 +143,42 @@ var yAxis = backgroundSvg.append("g")
     .call(g => g.select(".domain").remove()) // Remove the axis line
     .call(g => g.selectAll(".tick line").attr("stroke-opacity", 0.2)); // Style the grid lines
 
+function setCurrentTime() {
+    const now = new Date();
+    const hours = now.getUTCHours();
+    const minutes = now.getUTCMinutes();
+    document.getElementById("current-time").innerHTML = `Current time: <b>${hours}:${minutes}</b> (UTC)`
+
+    backgroundSvg.selectAll(".time-bar").remove();
+
+    current_minutes = hours*60 + minutes
+
+    backgroundSvg.append("line")
+        .attr("class", "time-bar")
+        .attr("x1", xScale(current_minutes))
+        .attr("y1", yScale(0))
+        .attr("x2", xScale(current_minutes))
+        .attr("y2", yScale(100))
+        .attr("stroke", `rgb(100, 100, 100)`)
+        .attr("stroke-width", "3");
+}
+
+function scheduleSetCurrentTime() {
+    setCurrentTime()
+    const now = new Date();
+    const timeToNextMinute = (60 - now.getUTCSeconds()) * 1000 - now.getUTCMilliseconds();
+
+    // Set a timeout to align with the next minute change
+    setTimeout(function() {
+        setCurrentTime(); // Print the time at the start of the next minute
+
+        // Then set an interval to print the time every minute thereafter
+        setInterval(setCurrentTime, 60 * 1000);
+    }, timeToNextMinute);
+}
+
+// Start the scheduling function
+scheduleSetCurrentTime();
 
 function verifyGraphIntegrity(){
     let ok = true
@@ -278,8 +290,8 @@ function initializeSvg(svg, name){
             var mouseX = Math.min(Math.max(mouse[0], 0), width);
             placingNode = false
 
-            svg.selectAll(".selection-circle").remove();
-            svg.selectAll(".vertical-selection-bar").remove();
+            backgroundSvg.selectAll(".selection-circle").remove();
+            backgroundSvg.selectAll(".vertical-selection-bar").remove();
         
             let links = getLinks(svg)
             for (let i=0; i < links.length; i++){
@@ -313,13 +325,13 @@ function initializeSvg(svg, name){
             }
 
             // Remove any existing circles
-            svg.selectAll(".selection-circle").remove();
+            backgroundSvg.selectAll(".selection-circle").remove();
             
             // Remove any existing wrap-around links
-            svg.selectAll(".vertical-selection-bar").remove();
+            backgroundSvg.selectAll(".vertical-selection-bar").remove();
             
             // Line from the last node to the right boundary
-            svg.append("line")
+            backgroundSvg.append("line")
             .attr("class", "vertical-selection-bar")
             .attr("x1", mouseX)
             .attr("y1", yScale(0))
@@ -328,7 +340,7 @@ function initializeSvg(svg, name){
             .attr("stroke", "black")
 
             // Draw a white circle at the specified location
-            svg.append("circle")
+            backgroundSvg.append("circle")
                 .attr("class", "selection-circle")
                 .attr("cx", mouseX) // Center x-coordinate of the circle
                 .attr("cy", graphY) // Center y-coordinate of the circle, assuming you want it centered vertically
@@ -552,8 +564,8 @@ document.getElementById("form").addEventListener("submit", function(event) {
 
 document.getElementById("new").addEventListener("click", function(){
     placingNode = !placingNode
-    svg.selectAll(".selection-circle").remove();
-    svg.selectAll(".vertical-selection-bar").remove();
+    backgroundSvg.selectAll(".selection-circle").remove();
+    backgroundSvg.selectAll(".vertical-selection-bar").remove();
 })
 document.getElementById("delete").addEventListener("click", function(){
     if (selected){
@@ -595,7 +607,7 @@ document.getElementById("upload").addEventListener("click", function(){
             document.getElementById("uploadStatus").textContent = response.message
         },
         error: function(error) {
-            console.log(error);
+            console.log(error);graphY
             document.getElementById("uploadStatus").textContent = error
         }
     });
@@ -610,6 +622,20 @@ function selectRow(row) {
     });
 
     selectSvg(row.innerText)
+
+    let graphY
+    let links = getLinks(svg)
+    for (let i=0; i < links.length; i++){
+        let link = links[i]
+        if (link.source.time <= current_minutes && link.target.time >= current_minutes){
+            graphY = link.source.y + ((current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+            break
+        }
+    }
+
+    
+    document.getElementById("percentage").value = Math.round(yScale.invert(graphY)) + "%"
+    document.getElementById("time").value = minutesToTimeFormat(current_minutes).toString()
 
     row.classList.add('selected');
 }
