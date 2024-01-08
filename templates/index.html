@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="/static/styles.css">
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
 </head>
 <body>
     <button id="upload">Upload</button>
@@ -25,7 +27,6 @@
         <p class="inputDesc">Time</p>
         <input type="text" value="06:00" id="time">
         <p id="error"></p>
-        <br>
         <input type="submit" value="Submit">
     </form>
 </body>

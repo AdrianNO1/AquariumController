@@ -1,9 +1,10 @@
-def main():
+def main(test=False):
     try:
         import serial, time, threading, multiprocessing, os, json, logging, math
-        from usb_listener import setup_usb_listener
-        from get_connected_arduinos import get_arduinos
         from datetime import datetime
+        if not test:
+            from usb_listener import setup_usb_listener
+            from get_connected_arduinos import get_arduinos
 
         # Create a custom logger
         logger = logging.getLogger(__name__)
@@ -46,9 +47,22 @@ def main():
 
         serial_devices = []
 
-        for device in get_arduinos():
-            logger.info(f"found already connected USB device: {device}")
-            start_initialization_timer(device)
+        if test:
+            class fakeserial:
+                def __init__(self):
+                    self.written = ""
+
+                def write(self, bytes):
+                    self.written = bytes
+
+                def readline(self):
+                    return self.written
+
+            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "ch1"})
+        else:
+            for device in get_arduinos():
+                logger.info(f"found already connected USB device: {device}")
+                start_initialization_timer(device)
 
         def on_connect(device):
             logger.info(f"USB device connected: {device.device_node}")
@@ -63,7 +77,8 @@ def main():
 
         #usb_listener_process = multiprocessing.Process(target=setup_usb_listener, args=(on_connect, on_disconnect))
 
-        setup_usb_listener(on_connect, on_disconnect)
+        if not test:
+            setup_usb_listener(on_connect, on_disconnect)
 
         light_pins = {
             "ch1": [{"color": "White", "pin": 9}, {"color": "Blue", "pin": 10}]
@@ -128,4 +143,4 @@ def main():
         logger.fatal(e)
 
 if __name__ == "__main__":
-    main()
+    main(test=True)
