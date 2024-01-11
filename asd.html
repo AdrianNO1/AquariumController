@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Ace Editor Python Example</title>
+    <!-- Include the main Ace Editor script -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
+    <!-- Include the Python mode for Ace Editor -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/mode-python.js"></script>
+    <!-- Include the Ace Editor extension for static analysis and annotations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.js"></script>
+    
+    <style>
+        #editor {
+            width: 600px;
+            height: 400px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="editor">import this</div>
+
+<script>
+    // Initialize the Ace Editor
+    var editor = ace.edit("editor");
+    // Set the theme
+    editor.setTheme("ace/theme/monokai");
+    // Set the mode to Python
+    //editor.session.setMode("ace/mode/python");
+
+    // Enable basic autocompletion and error annotations
+    ace.require("ace/ext/language_tools");
+    editor.setOptions({
+        enableBasicAutocompletion: true,
+        enableLiveAutocompletion: false,
+        enableSnippets: false
+    });
+
+    ace.define('ace/mode/my_custom_mode', ['require', 'exports', 'module', 'ace/lib/oop', 'ace/mode/text', 'ace/mode/text_highlight_rules'], function(require, exports, module) {
+    var oop = require('ace/lib/oop');
+    var TextMode = require('ace/mode/text').Mode;
+    var TextHighlightRules = require('ace/mode/text_highlight_rules').TextHighlightRules;
+
+    // Define custom highlight rules
+    var MyCustomHighlightRules = function() {
+        var customKeywords = 'setPin|getValue'; // Add your custom function names here
+
+        var keywordMapper = this.createKeywordMapper({
+            'keyword': 'if|else|while|return', // Add your custom keywords here
+            'support.function': customKeywords,
+            // ... other token categories like 'constant', 'variable', etc.
+        }, 'identifier');
+
+        this.$rules = {
+            'start': [
+                {
+                    token: 'comment', // Apply comment style
+                    regex: '#.*$'
+                },
+                {
+                    token: 'paren.lparen', // Apply style for (
+                    regex: '[\\(]'
+                },
+                {
+                    token: 'paren.rparen', // Apply style for )
+                    regex: '[\\)]'
+                },
+                {
+                    token: 'brace.lbrace', // Apply style for {
+                    regex: '[\\{]'
+                },
+                {
+                    token: 'brace.rbrace', // Apply style for }
+                    regex: '[\\}]'
+                },
+                {
+                    token: keywordMapper,
+                    regex: '[a-zA-Z_$][a-zA-Z0-9_$]*\\b'
+                },
+                // ... other rules like strings, numbers, etc.
+            ]
+        };
+    };
+    oop.inherits(MyCustomHighlightRules, TextHighlightRules);
+
+    // Define the mode
+    var Mode = function() {
+        this.HighlightRules = MyCustomHighlightRules;
+        // ... other mode settings like folding rules, behaviors, etc.
+    };
+    oop.inherits(Mode, TextMode);
+
+    // Exports the mode
+    exports.Mode = Mode;
+    });
+
+    // Then, to use your custom mode in the editor:
+    var editor = ace.edit("editor");
+    editor.session.setMode('ace/mode/my_custom_mode');
+
+
+    // Example of adding a custom error annotation
+    //editor.session.setAnnotations([{
+    //    row: 0, // The row (line number, starting at 0)
+    //    column: 0, // The column (character index, starting at 0)
+    //    text: "Example error", // The error message
+    //    type: "error" // The annotation type ('error', 'warning', or 'info')
+    //}]);
+    //
+    // Function to send the code to the Flask app for linting
+    //function lintCode() {
+    //    var pythonCode = editor.getValue();
+    //    fetch('/lint', {
+    //        method: 'POST',
+    //        body: pythonCode,
+    //        headers: {
+    //            'Content-Type': 'text/plain'
+    //        }
+    //    })
+    //    .then(response => response.json())
+    //    .then(annotations => {
+    //        // Update the editor with the linting annotations
+    //        editor.session.setAnnotations(annotations);
+    //    })
+    //    .catch(error => console.error('Error linting code:', error));
+    //}
+    //
+    //// Listen for changes and update annotations
+    //editor.session.on('change', function() {
+    //    // Debounce the linting to avoid excessive requests
+    //    clearTimeout(window.lintingTimeout);
+    //    window.lintingTimeout = setTimeout(lintCode, 1000);
+    //});
+</script>
+
+</body>
+</html>

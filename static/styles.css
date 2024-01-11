@@ -51,3 +51,35 @@ th, td {
     text-align: center; /* Center the checkbox within the column */
 }
 
+#verify{
+    margin-top: 20px;
+}
+
+#editor {
+    width: 600px;
+    height: 400px;
+}
+
+.ace_keyword {
+    color: #FF0000;
+}
+
+.ace_paren{
+    color: rgb(249, 129, 255);
+}
+
+.ace_brace{
+    color: rgb(97, 97, 255);
+}
+
+.ace_function{
+    color: rgb(255, 255, 75);
+}
+
+.ace_string{
+    color: #bb800966;
+}
+
+.ace_constant{
+    color: #26d7b1;
+}

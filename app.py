@@ -1,11 +1,16 @@
-import json, os, sys
+import json, os, sys, re
 from flask import Flask, request, jsonify, render_template, url_for
 from multiprocessing import Process
+from datetime import datetime
 from manager import main
 app = Flask(__name__)
 
-
 links_path = os.path.join("data", "links.json")
+
+from custom_syntax import parse_code
+
+
+
 
 @app.route('/')
 def index():
@@ -32,6 +37,17 @@ def upload():
     response = {'message': 'ok'}
     return jsonify(response)
 
+@app.route('/verify', methods=['POST'])
+def verify():
+    data = request.json
+    code = data["code"]
+    evaluation = parse_code(code)
+    
+    response = {'message': str(evaluation)}
+    return jsonify(response)
+
+
+
 #@app.route('/getlog', methods=['POST'])
 #def getlog():
 #    data = request.json
@@ -41,7 +57,7 @@ def upload():
 
 
 if __name__ == '__main__':
-    p = Process(target=main, args=(True,))
+    #p = Process(target=main, args=(True,))
     #p.start()
     app.run(debug=True, port=2389)#, host="0.0.0.0")
-    p.join()
+    #p.join()

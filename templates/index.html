@@ -9,6 +9,10 @@
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
     <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/mode-python.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.js"></script>
 </head>
 <body>
     <button id="upload">Upload</button>
@@ -29,6 +33,13 @@
         <p id="error"></p>
         <input type="submit" value="Submit">
     </form>
+    <button id="verify">Verify</button>
+    <div id="editor">if Time "19:00" to "18:00" or Arduino1.isOn():
+    print("yes")
+elif Time "19:00" to "14:00":
+    print("here")
+else:
+    print("no")</div>
 </body>
 <script src="/static/script.js"></script>
 </html>
