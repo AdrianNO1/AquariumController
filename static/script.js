@@ -782,8 +782,14 @@ editor.session.setMode('ace/mode/my_custom_mode');
 //    window.lintingTimeout = setTimeout(lintCode, 1000);
 //});
 
+function setCodeButtonsDisabled(disabled){
+    document.getElementById("runonce").disabled = disabled
+    document.getElementById("verify").disabled = disabled
+}
+
 
 document.getElementById("verify").addEventListener("click", function(){
+    setCodeButtonsDisabled(true)
     $.ajax({
         url: '/verify',
         type: 'POST',
@@ -791,9 +797,49 @@ document.getElementById("verify").addEventListener("click", function(){
         data: JSON.stringify({code: editor.getValue()}),
         success: function(response) {
             console.log(response);
+            if (response.error){
+                document.getElementById("codeStatus").innerText = response.error
+                document.getElementById("codeStatus").style.color = "red"
+            } else{
+                document.getElementById("codeStatus").innerText = "OK"
+                document.getElementById("codeStatus").style.color = "green"
+            }
+
+            setCodeButtonsDisabled(false)
         },
         error: function(error) {
             console.log(error);
+            document.getElementById("codeStatus").innerText = error
+            document.getElementById("codeStatus").style.color = "red"
+            setCodeButtonsDisabled(false)
+        }
+    });
+})
+
+document.getElementById("runonce").addEventListener("click", function(){
+    setCodeButtonsDisabled(true)
+    $.ajax({
+        url: '/run once',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({code: editor.getValue()}),
+        success: function(response) {
+            console.log(response);
+            if (response.error){
+                document.getElementById("codeStatus").innerText = response.error
+                document.getElementById("codeStatus").style.color = "red"
+            } else{
+                document.getElementById("codeStatus").innerText = "OK"
+                document.getElementById("codeStatus").style.color = "green"
+            }
+
+            setCodeButtonsDisabled(false)
+        },
+        error: function(error) {
+            console.log(error);
+            document.getElementById("codeStatus").innerText = error
+            document.getElementById("codeStatus").style.color = "red"
+            setCodeButtonsDisabled(false)
         }
     });
 })

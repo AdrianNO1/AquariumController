@@ -23,7 +23,7 @@ def checkTime(time1, time2):
             return False
 
 
-def replace_time_with_function(input_string, return_non_time_conditions=False):
+def replace_time_with_function(input_string):
     # Define the regex pattern to match "Time "HH:MM" to "HH:MM""
     time_pattern = r'Time "(\d{1,2}:\d{2})" to "(\d{1,2}:\d{2})"'
 
@@ -40,26 +40,23 @@ def replace_time_with_function(input_string, return_non_time_conditions=False):
     # Use re.sub() to replace all occurrences of the pattern with the output of the replacement function
     result = re.sub(time_pattern, replacement, input_string)
 
-    if return_non_time_conditions:
-        # Replace the time conditions with a placeholder that is unlikely to occur in the input
-        placeholder = "TIME_CONDITION_PLACEHOLDER_THINGY91rkdfmin3inasdj"
-        placeholderresult = re.sub(time_pattern, placeholder, input_string)
+    # Replace the time conditions with a placeholder that is unlikely to occur in the input
+    placeholder = "TIME_CONDITION_PLACEHOLDER_THINGY91rkdfmin3inasdj"
+    placeholderresult = re.sub(time_pattern, placeholder, input_string)
 
 
-        # Split the result string by logical operators "and" and "or", and strip whitespace
-        parts = re.split(r'\s+(and|or)\s+', placeholderresult)
+    # Split the result string by logical operators "and" and "or", and strip whitespace
+    parts = re.split(r'\s+(and|or)\s+', placeholderresult)
 
-        # Filter out the placeholders and empty strings
-        non_time_conditions = [part for part in parts if placeholder not in part and part.strip()]
+    # Filter out the placeholders and empty strings
+    non_time_conditions = [part for part in parts if placeholder not in part and part.strip()]
 
-        # Remove any remaining parentheses
-        non_time_conditions = list(set([x for x in [re.sub(r'^\(.*\)$', '', cond) for cond in non_time_conditions] if x not in ["and", "or"]]))
+    # Remove any remaining parentheses
+    non_time_conditions = list(set([x for x in [re.sub(r'^\(.*\)$', '', cond) for cond in non_time_conditions] if x not in ["and", "or"]]))
 
-        return result, non_time_conditions
-    return result, None
+    return result, non_time_conditions
 
 def checkFunctionParameterValidity(func, parameters):
-    print("here")
     if func == "isOn":
         if len(parameters) == 0:
             return False
@@ -120,31 +117,32 @@ def process_command(c, verify=False):
             pattern = r'\((.*?)\)'
             func = re.sub(pattern, '', c.split(".")[1])
             parameters = re.findall(pattern, c.split(".")[1])
-            if hasattr(globals()[obj], func):
-                if len(parameters) > 1:
-                    return f"Error on line {i+1}: Unexpected amount of parenthesis when parsing {c.split('.')[0]}"
-                elif len(parameters) == 0:
-                    return f"Error on line {i+1}: No parenthesis while parsing function {obj}.{c.split('.')[0]}"
-                
-                response = checkFunctionParameterValidity(func, [x.strip() for x in parameters[0].split(",") if x])
-                if response:
-                    return f"Error on line {i+1} while testing function {obj}.{c.split('.')[1]}: {response}"
-                
-                if verify:
-                    fixed_string = fixed_string.replace(c, "True")
-                else:
-                    fixed_string = fixed_string.replace(c, eval(c))
-                
+            #if hasattr(globals()[obj], func):
+            if len(parameters) > 1:
+                return f"Error on line {i+1}: Unexpected amount of parenthesis when parsing {c.split('.')[0]}"
+            elif len(parameters) == 0:
+                return f"Error on line {i+1}: No parenthesis while parsing function {obj}.{c.split('.')[0]}"
+            
+            response = checkFunctionParameterValidity(func, [x.strip() for x in parameters[0].split(",") if x])
+            if response:
+                return f"Error on line {i+1} while testing function {obj}.{c.split('.')[1]}: {response}"
+            
+            if verify:
+                fixed_string = fixed_string.replace(c, "True")
             else:
-                #print(non_time_conditions)
-                return f"Error on line {i+1}: {obj} has no attribute {func}"
+                try:
+                    fixed_string = fixed_string.replace(c, eval(c))
+                except Exception as e:
+                    return f"Error while evaluating on line {i+1}: {e}"
+            #elif len(c.split(".")) != 0:
+            #    #print(non_time_conditions)
+            #    return f"Error on line {i+1}: {obj} has no attribute {func}"
         else:
             return f"Error on line {i+1}: something something too many dots"
     else:
         return f"Error on line {i+1}: {obj} does not exist"
 
 class Arduino1:
-    pass
     def isOn(self):
         pass
 
@@ -159,11 +157,13 @@ def parse_code(code, verify=True):
     expected_indent = 0
     i = 0
     for line in code.split("\n"):
+        if not line.strip():
+            continue
         indent = len(line) - len(line.lstrip())
         if indent <= expected_indent or increase_indent or verify:
             increase_indent = False
             expected_indent = int(indent)/4
-            if line.lstrip().startswith("if ") or (not evaluation and line.lstrip().startswith("elif ")):
+            if line.lstrip().startswith("if ") or (not evaluation and line.lstrip().startswith("elif ") or (line.lstrip().startswith("elif ") and verify)):
                 #print("evaluating if")
                 if line.endswith(":"):
                     if line.lstrip().startswith("if "):
@@ -171,28 +171,27 @@ def parse_code(code, verify=True):
                     else:
                         args = line[5:-1]
                     #print(args)
-                    fixed_string, non_time_conditions = replace_time_with_function(args, return_non_time_conditions=verify)
+                    fixed_string, non_time_conditions = replace_time_with_function(args)
                     fixed_string = fixed_string.replace("==", "=").replace("=", "==")
                     
                     if "anErrorHasOccured" in fixed_string:
                         return f"Error on line {i+1}: Invalid time"
                     
-                    if verify:
-                        for c in non_time_conditions:
-                            response = process_command(c, verify=verify)
-                            if response:
-                                return response
+                    for c in non_time_conditions:
+                        response = process_command(c, verify=verify)
+                        if response:
+                            return response
                             
                     try:
-                        print("EVALUATING:", fixed_string)
+                        #print("EVALUATING:", fixed_string)
                         evaluation = eval(fixed_string)
                     except Exception as e:
-                        return f"Error on line {i+1}: {e}"
+                        return f"Error while evaluating on line {i+1}: {e}"
                     #print(evaluation)
                     if evaluation:
                         increase_indent = True
                 else:
-                    return f"Error on line {i+1}: colon expected at end of if statement"
+                    return f"Error on line {i+1}: colon expected at end of if statement '{line}'"
             elif line.lstrip().startswith("else:"):
                 #print("else")
                 if not evaluation:
@@ -201,21 +200,25 @@ def parse_code(code, verify=True):
                 #else:
                 #    print("not going into else")
             elif line.lstrip().startswith("print"):
-                returned += line.lstrip() + "\n"
+                returned += line.lstrip()[7:-2] + "\n"
             elif not line.lstrip().startswith("elif "):
-                print(f"unknown command: {line}")
+                return f"Error on line {i+1}: unknown command: {line}"
             else:
-                process_command(line)
+                process_command(line, verify=verify)
+            # TODO add variable assignment and reading from pins. Can be managed with a dictionary.
 
         #print()
         i += 1
     return returned
 
 if __name__ == "__main__":
-    code = """if (Time "19:00" to "18:00") or Arduino1.isOn():
+    code = """
+
+    
+if Time "17:00" to "18:00" or Arduino1.isOn(1):
     print("yes")
 elif Time "19:00" to "14:00":
-	print("here")
+    print("here")
 else:
-	print("no")"""
+    print("no")"""
     print("RETURNED:", parse_code(code))

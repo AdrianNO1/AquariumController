@@ -1,6 +1,6 @@
-def main(test=False):
+def main(task_queue, response_queue, test=False):
     try:
-        import serial, time, threading, multiprocessing, os, json, logging, math
+        import serial, time, threading, multiprocessing, os, json, logging, math, queue
         from datetime import datetime
         if not test:
             from usb_listener import setup_usb_listener
@@ -14,7 +14,7 @@ def main(test=False):
             logger.setLevel(logging.INFO)
 
             # Create handlers
-            current_log_path = os.path.join("logs", datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
+            current_log_path = os.path.join("logs\\manager", datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
             open(current_log_path, "w")
             handler = logging.FileHandler(current_log_path, encoding="utf-8")  # Log to a file
             handler.setLevel(logging.INFO)
@@ -106,7 +106,7 @@ def main(test=False):
 
         update_frequency = 5
 
-
+        task = None
         while True:
             start = time.time()
             for serial_device in serial_devices:
@@ -131,16 +131,31 @@ def main(test=False):
                         logger.error(f'Arduino did not echo. got "{recieved}". Expected "{command}"')
                 else:
                     print(f"{name} not found in light_pins dict")
-                    logger.warn(f"{name} not found in light_pins dict")
-            
+                    logger.error(f"{name} not found in light_pins dict")
+
             seconds = update_frequency-(time.time()-start)
-            if seconds > 0:
-                time.sleep(seconds)
-            else:
+            if seconds < 0:
                 logger.warn(f"spent {-seconds} overtime on serial communication")
+                try:
+                    task = task_queue.get(timeout=0.2)
+                except queue.Empty:
+                    pass
+                if task:
+                    response_queue.put(str(task) + "HELLO")
+            else:
+                while update_frequency-(time.time()-start) > 0:
+                    try:
+                        task = task_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        pass
+                    if task:
+                        response_queue.put(str(task) + "HELLO")
+
 
     except Exception as e:
+        print("FATAL ERROR:", e)
         logger.fatal(e)
 
 if __name__ == "__main__":
     main(test=True)
+
