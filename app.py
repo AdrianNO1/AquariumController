@@ -26,6 +26,7 @@ app.logger.setLevel(logging.INFO)
 
 
 links_path = os.path.join("data", "links.json")
+code_path = os.path.join("data", "code.json")
 
 @app.errorhandler(500)
 def handle_internal_server_error(e):
@@ -47,7 +48,10 @@ def load():
             nodes[key][i] = link["source"]
             i += 1
         nodes[key] = nodes[key][1:]
-    return jsonify({"data": json.dumps(nodes)})
+
+    code = json.load(open(code_path, "r", encoding="utf-8"))
+
+    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "arduinoConstants": json.dumps(code["arduinoConstants"])})
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -86,21 +90,39 @@ def run_once():
     app.logger.info("run once request")
     data = request.json
     code = data["code"]
-    evaluation = parse_code(code, verify=False)
 
-    #task_queue.put(("func_name, args, kwargs",))
-    #start = time.time()
-    #while time.time() - start < 5:
-    #    try:
-    #        thing = response_queue.get(timeout=0.1)
-    #    except queue.Empty:
-    #        thing = None
-    #
-    #print(thing)
+    verify_evaluation = parse_code(code, verify=True)
+    if verify_evaluation.startswith("Error"):
+        response = {'error': verify_evaluation}
+        return jsonify(response)
+    
+    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue)
     if evaluation.startswith("Error"):
         response = {'error': evaluation}
     else:
         response = {'message': evaluation.strip()}
+
+    return jsonify(response)
+
+@app.route('/uploadandrun', methods=['POST'])
+def upload_and_run():
+    app.logger.info("upload and run request")
+    data = request.json
+    code = data["code"]
+
+    verify_evaluation = parse_code(code, verify=True)
+    if verify_evaluation.startswith("Error"):
+        response = {'error': verify_evaluation}
+        return jsonify(response)
+    
+    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue)
+    if evaluation.startswith("Error"):
+        response = {'error': evaluation}
+    else:
+        response = {'message': evaluation.strip()}
+        with open(code_path, "w", encoding="utf-8") as f:
+            json.dump({"code": code}, f, indent=4)
+
     return jsonify(response)
 
 
@@ -118,6 +140,7 @@ if __name__ == '__main__':
     task_queue = queue.Queue()
     response_queue = queue.Queue()
 
+
     # Function to run in the thread
     def thread_function():
         main(task_queue, response_queue, test=True)
@@ -126,9 +149,5 @@ if __name__ == '__main__':
     thread = threading.Thread(target=thread_function)
     thread.start()
 
-
-    #p = Process(target=main, args=(True,))
-    #p.start()
     app.logger.info("starting app")
     app.run(debug=False, port=2389)#, host="0.0.0.0")
-    #p.join()

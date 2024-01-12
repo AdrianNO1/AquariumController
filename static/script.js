@@ -49,6 +49,8 @@ let selected
 let svg_name
 let svg
 let current_minutes
+let codeText
+let arduinoConstants
 
 let channels = {}
 let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
@@ -69,6 +71,8 @@ if (overwriteNodesWithExample){
         data: JSON.stringify({}),
         success: function(response) {
             nodes = JSON.parse(response.data);
+            codeText = JSON.parse(response.code);
+            arduinoConstants = JSON.parse(response.arduinoConstants);
             
         },
         error: function(error) {
@@ -504,12 +508,12 @@ document.getElementById("form").addEventListener("submit", function(event) {
         if (nodeIndex == 0){
             lowerLimit = 0
         } else{
-            lowerLimit = nodes[svg_name][nodeIndex-1].time
+            lowerLimit = nodes[svg_name][nodeIndex-1].time+1
         }
         if (nodeIndex == nodes[svg_name].length-1){
             upperLimit = 1440
         } else{
-            upperLimit = nodes[svg_name][nodeIndex+1].time
+            upperLimit = nodes[svg_name][nodeIndex+1].time-1
         }
 
         if (time > upperLimit || time < lowerLimit){
@@ -672,10 +676,9 @@ var TextHighlightRules = require('ace/mode/text_highlight_rules').TextHighlightR
 var MyCustomHighlightRules = function() {
 
     var keywordMapper = this.createKeywordMapper({
-        'keyword': 'if|elif|else|to|or|and|not', // Add your custom keywords here
-        'function': 'setPin|getValue',
-        'constant': 'Time|Date|Ph|Temp|Arduino1',
-        // ... other token categories like 'constant', 'variable', etc.
+        'keyword': 'if|elif|else|to|or|and|not',
+        'function': 'analogWrite|isOn|isOff|print',
+        'constant': 'Time' + arduinoConstants ? "|" : "" + arduinoConstants.join("|"),
     }, 'identifier');
 
     this.$rules = {
@@ -748,6 +751,8 @@ exports.Mode = Mode;
 var editor = ace.edit("editor");
 editor.session.setMode('ace/mode/my_custom_mode');
 
+editor.session.setValue(codeText)
+
 
 // Example of adding a custom error annotation
 //editor.session.setAnnotations([{
@@ -785,6 +790,7 @@ editor.session.setMode('ace/mode/my_custom_mode');
 function setCodeButtonsDisabled(disabled){
     document.getElementById("runonce").disabled = disabled
     document.getElementById("verify").disabled = disabled
+    document.getElementById("uploadandrun").disabled = disabled
 }
 
 
@@ -829,7 +835,35 @@ document.getElementById("runonce").addEventListener("click", function(){
                 document.getElementById("codeStatus").innerText = response.error
                 document.getElementById("codeStatus").style.color = "red"
             } else{
-                document.getElementById("codeStatus").innerText = "OK"
+                document.getElementById("codeStatus").innerText = "OK\n" + response.message
+                document.getElementById("codeStatus").style.color = "green"
+            }
+
+            setCodeButtonsDisabled(false)
+        },
+        error: function(error) {
+            console.log(error);
+            document.getElementById("codeStatus").innerText = error
+            document.getElementById("codeStatus").style.color = "red"
+            setCodeButtonsDisabled(false)
+        }
+    });
+})
+
+document.getElementById("uploadandrun").addEventListener("click", function(){
+    setCodeButtonsDisabled(true)
+    $.ajax({
+        url: '/uploadandrun',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({code: editor.getValue()}),
+        success: function(response) {
+            console.log(response);
+            if (response.error){
+                document.getElementById("codeStatus").innerText = response.error
+                document.getElementById("codeStatus").style.color = "red"
+            } else{
+                document.getElementById("codeStatus").innerText = "OK\n" + response.message
                 document.getElementById("codeStatus").style.color = "green"
             }
 
