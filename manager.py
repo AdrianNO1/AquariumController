@@ -120,6 +120,9 @@ def main(task_queue, response_queue, test=False):
                             if len(mtches) > 1:
                                 response = f"Error: got {len(mtches)} matches when only 1 or 0 are expected."
                                 break
+                            elif len(mtches) == 0:
+                                response = f"Error: something went wrong AQGF7"
+                                break
                             parameters = [x.strip() for x in mtches[0].split(",")]
                             response = str(run_command(device, func, parameters))
                     else:
@@ -195,20 +198,17 @@ def main(task_queue, response_queue, test=False):
 
         update_frequency = 5
 
-        task = None
         while True:
             start = time.time()
 
-            if 0:
+            if 1:
                 with open(os.path.join("data", "code.json"), "r", encoding="utf-8") as f:
                     code = json.load(f)["code"]
 
                 response = parse_code(code, verify=False, run_cmd_func=read_queue)
                 if response.startswith("Error"):
                     logger.error(response)
-                    print(response)
-                else:
-                    print(response)
+                print(response)
                 
                 print("\n"*2)
 
