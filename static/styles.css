@@ -96,12 +96,21 @@ th, td {
     max-width: 300px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     margin: 5px;
+    position: relative;
 }
     
 .title {
     font-size: 30px;
     font-weight: bold;
     margin-bottom: 5px;
+    display: inline-block;
+}
+
+.edit-button {
+    padding: 5px 10px;
+    font-size: 16px;
+    margin-left: 10px;
+    cursor: pointer;
 }
 
 .subtitle {
@@ -126,5 +135,5 @@ th, td {
 
 
 #runonce{
-    margin-right: 30px;
+    margin-right: 50px;
 }

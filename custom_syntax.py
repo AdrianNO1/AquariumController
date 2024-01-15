@@ -195,12 +195,12 @@ def checkFunctionParameterValidity(func, parameters):
     #    else:
     #        return f"Unexpected amount of parameters: {parameters}. Expected {1}. Got {len(parameters)}"
 
-def process_command(c, verify=False, task_queue=None, response_queue=None, run_cmd_func=None):
+def process_command(c, verify=False, task_queue=None, response_queue=None, run_cmd_func=None, arduinos=[]):
     global fixed_string, i
     obj = c.split(".")[0]
     #if obj and obj[0] == '"' and obj[-1] == '"':
     #    pass
-    if obj and obj in globals(): # TODO replace globals with proper checking from manager
+    if obj and obj in arduinos:
         if len(c.split(".")) == 2:
             pattern = r'\((.*?)\)'
             func = re.sub(pattern, '', c.split(".")[1])
@@ -276,7 +276,7 @@ class Arduino1:
 fixed_string = ""
 i = 0
 
-def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_func=None):
+def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_func=None, arduinos=[]):
     global fixed_string, i
     returned = ""
     evaluation = False
@@ -309,7 +309,7 @@ def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_
 
                     for key in non_time_conditions:
                         #print(key, non_time_conditions[key])
-                        response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
+                        response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func, arduinos=arduinos)
                         if response.lower().startswith("error"):
                             return response
                         fixed_string = fixed_string.replace(key, response)
@@ -347,7 +347,7 @@ def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_
 
                 for key in non_time_conditions:
                     #print(key, non_time_conditions[key])
-                    response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
+                    response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func, arduinos=arduinos)
                     if response.lower().startswith("error"):
                         return response
                     fixed_string = fixed_string.replace(key, response)
@@ -372,7 +372,7 @@ def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_
 
                 for key in non_time_conditions:
                     #print(key, non_time_conditions[key])
-                    response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
+                    response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func, arduinos=arduinos)
                     if response.lower().startswith("error"):
                         return response
                     fixed_string = fixed_string.replace(key, response)

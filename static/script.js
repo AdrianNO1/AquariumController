@@ -803,7 +803,7 @@ document.getElementById("verify").addEventListener("click", function(){
         url: '/verify',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue()}),
+        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
         success: function(response) {
             console.log(response);
             if (response.error){
@@ -831,7 +831,7 @@ document.getElementById("runonce").addEventListener("click", function(){
         url: '/run once',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue()}),
+        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
         success: function(response) {
             console.log(response);
             if (response.error){
@@ -859,7 +859,7 @@ document.getElementById("uploadandrun").addEventListener("click", function(){
         url: '/uploadandrun',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue()}),
+        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
         success: function(response) {
             console.log(response);
             if (response.error){
@@ -907,6 +907,45 @@ function timeSinceEpochToString(epochSeconds) {
     }
 }
 
+function editTitle(buttonElement) {
+    // Find the title element by navigating the DOM relative to the button
+    var titleElement = buttonElement.previousElementSibling;
+
+    if (buttonElement.textContent === 'Edit') {
+        // Make the title editable
+        titleElement.contentEditable = true;
+        titleElement.focus();
+        buttonElement.textContent = 'Submit';
+    } else {
+        // Save the changes and make the title no longer editable
+        titleElement.contentEditable = false;
+        
+        // Here you would also handle saving the new title to your data or server
+        var newTitle = titleElement.textContent;
+        // Save newTitle to your data or server
+
+        buttonElement.disabed = true
+        $.ajax({
+            url: '/rename',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({"device": buttonElement.id, "newname": newTitle}),
+            success: function(response) {
+                buttonElement.disabed = false
+                buttonElement.textContent = 'Edit';
+                if (!response.data){
+                    console.log(response)
+                    document.getElementById("cards status").textContent = response.error
+                }
+            },
+            error: function(error) {
+                buttonElement.disabled = false
+                console.log(error);
+                document.getElementById("cards status").textContent = "Error: Unable to connect"
+            }
+        });
+    }
+}
 
 document.getElementById("refresh cards").addEventListener("click", function(){
     document.getElementById("refresh cards").disabed = true
@@ -926,6 +965,7 @@ document.getElementById("refresh cards").addEventListener("click", function(){
                     arduino = arduinos[arduino]
                     totalText += `<div class="card ${arduino.error ? 'error-background' : ''}">
                     <div class="title">${arduino.name}</div>
+                    <button class="edit-button" id=${arduino.device} onclick="editTitle(this)">Edit</button>
                     <div class="subtitle">USB: ${arduino.device}</div>
                     <div class="content error">${arduino.error}</div>       
                     <div class="lastused">Last used: ${timeSinceEpochToString(arduino.lastused)}</div>
