@@ -1,4 +1,4 @@
-import re, os, sys, queue
+import re, os, sys, queue, json
 from datetime import datetime, timedelta
 
 def checkTime(time1, time2):
@@ -59,7 +59,7 @@ def replace_time_with_function(input_string):
     def recursively_get_inner_function(original_text, depth=1):
         def replace_innermost_functions(text, depth, arg_dict):
             # Regular expression to find innermost function calls
-            inner_func_pattern = re.compile(r'([a-zA-Z0-9_.]+)\(([^()]+)\)')
+            inner_func_pattern = re.compile(r'([a-zA-Z0-9_.]+)\(([^()]*)\)')
             
             # Find all innermost function calls
             matches = inner_func_pattern.findall(text)
@@ -112,25 +112,48 @@ def replace_time_with_function(input_string):
     
     depth = 1
     non_time_conditions_dict = {}
+    i = 0
     for cond in non_time_conditions:
         new, depth = recursively_get_inner_function(cond, depth)
         non_time_conditions_dict = non_time_conditions_dict | new
+        non_time_conditions[i] = list(new.keys())[-1]
+        result = result.replace(cond, non_time_conditions[i])
+        i += 1
 
-    print(non_time_conditions_dict)
-    return result, non_time_conditions
+    #print(non_time_conditions_dict, result)
+    return result, non_time_conditions_dict
+
+def get_current_strength(color):
+    with open(os.path.join("data", "links.json"), "r", encoding="utf-8") as f:
+        links = json.load(f)
+        if color in links:
+            now = datetime.now()
+            minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
+
+            for link in links[color]:
+                if link["source"]["time"] <= minutes_of_day and link["target"]["time"] >= minutes_of_day:
+                    total_duration = link["target"]["time"] - link["source"]["time"]
+                    if total_duration == 0:
+                        return "Error in get_current_strength: division by zero. Two nodes have the same time"
+                    else:
+                        percentage = link["source"]["percentage"] + (1 - (link["target"]["time"] - minutes_of_day) / total_duration) * (link["target"]["percentage"] - link["source"]["percentage"])
+                        return max(min(round(percentage/100*255), 255), 0)
+                    
+        else:
+            return f"Error in get_current_strength: Unable to find {color} in link"
 
 def checkFunctionParameterValidity(func, parameters):
     if func == "isOn":
         if len(parameters) == 0:
             return False
         else:
-            return f"Unpexpected amount . Got of parameters: {parameters}. Expected {0}. Got {len(parameters)}"
+            return f"Unexpected amount of parameters: {parameters}. Expected {0}. Got {len(parameters)}"
     
     elif func == "isOff":
         if len(parameters) == 0:
             return False
         else:
-            return f"Unpexpected amount . Got of parameters: {parameters}. Expected {0}. Got {len(parameters)}"
+            return f"Unexpected amount of parameters: {parameters}. Expected {0}. Got {len(parameters)}"
     
     elif func == "analogWrite":
         if len(parameters) == 2:
@@ -148,12 +171,12 @@ def checkFunctionParameterValidity(func, parameters):
             if pin not in [3, 5, 6, 9, 10, 11]:
                 return f"Pin: {pin} is not a valid PWM pin. PWM capable pins are: 3, 5, 6, 9, 10, and 11"
             
-            if value > 100 or value < 0:
-                return f"Value: {value} is not a number between 0 and 100"
+            if value > 255 or value < 0:
+                return f"Value: {value} is not a number between 0 and 255 (inclusive)"
 
             return False
         else:
-            return f"Unpexpected amount . Got of parameters: {parameters}. Expected {2}. Got {len(parameters)}"
+            return f"Unexpected amount of parameters: {parameters}. Expected {2}. Got {len(parameters)}"
     else:
         return f"Invalid function: {func}"
     
@@ -170,14 +193,14 @@ def checkFunctionParameterValidity(func, parameters):
 #
     #        return False
     #    else:
-    #        return f"Unpexpected amount . Got of parameters: {parameters}. Expected {1}. Got {len(parameters)}"
+    #        return f"Unexpected amount of parameters: {parameters}. Expected {1}. Got {len(parameters)}"
 
 def process_command(c, verify=False, task_queue=None, response_queue=None, run_cmd_func=None):
     global fixed_string, i
     obj = c.split(".")[0]
-    if obj and obj[0] == '"' and obj[-1] == '"':
-        pass
-    elif obj and obj in globals():
+    #if obj and obj[0] == '"' and obj[-1] == '"':
+    #    pass
+    if obj and obj in globals(): # TODO replace globals with proper checking from manager
         if len(c.split(".")) == 2:
             pattern = r'\((.*?)\)'
             func = re.sub(pattern, '', c.split(".")[1])
@@ -193,6 +216,7 @@ def process_command(c, verify=False, task_queue=None, response_queue=None, run_c
                 return f"Error on line {i+1} while testing function {obj}.{c.split('.')[1]}: {response}"
             
             if verify:
+                return "True"
                 fixed_string = fixed_string.replace(c, "True")
             else:
                 try:
@@ -212,6 +236,7 @@ def process_command(c, verify=False, task_queue=None, response_queue=None, run_c
                     if "error" in str(task).lower():
                         raise ValueError("See response from manager")
                     
+                    return task
                     fixed_string = fixed_string.replace(c, str(task))
                     print(fixed_string)
                 except Exception as e:
@@ -221,12 +246,28 @@ def process_command(c, verify=False, task_queue=None, response_queue=None, run_c
             #    #print(non_time_conditions)
             #    return f"Error on line {i+1}: {obj} has no attribute {func}"
         elif len(c.split(".")) == 1:
+            return "True"
             fixed_string = fixed_string.replace(c, "True")
 
         else:
-            return f"Error on line {i+1}: something something too many dots"
+            return f"Error on line {i+1}: Unexpected amount of dots"
+    elif c in colors:
+        return str(get_current_strength(colors[c]))
     else:
-        return f"Error on line {i+1}: {obj} does not exist"
+        try:
+            return str(eval(c))
+        except:
+            return f"Error on line {i+1}: {obj} does not exist"
+    print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
+colors = {
+    "Uv": "Uv",
+    "Violet": "Violet",
+    "Royal_Blue": "Royal Blue",
+    "Blue": "Blue",
+    "White": "White",
+    "Red": "Red",
+}
 
 class Arduino1:
     def isOn(self):
@@ -263,12 +304,19 @@ def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_
                     if "anErrorHasOccured" in fixed_string:
                         return f"Error on line {i+1}: Invalid time"
                     
-                    for c in non_time_conditions:
-                        response = process_command(c, verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
-                        if response:
+                    #print("FIEXEDASSETINGR:", fixed_string)
+                    #print("NONTIMEOCNRFNIENFITNIA:", non_time_conditions)
+
+                    for key in non_time_conditions:
+                        #print(key, non_time_conditions[key])
+                        response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
+                        if response.lower().startswith("error"):
                             return response
+                        fixed_string = fixed_string.replace(key, response)
+                        for k2 in non_time_conditions:
+                            non_time_conditions[k2] = non_time_conditions[k2].replace(key, response)
                             
-                    try:
+                    try: # isn't it already evaluated?
                         #print("EVALUATING:", fixed_string)
                         evaluation = eval(fixed_string)
                     except Exception as e:
@@ -291,24 +339,51 @@ def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_
                 fixed_string, non_time_conditions = replace_time_with_function(inside)
                 fixed_string = fixed_string.replace("==", "=").replace("=", "==")
 
-                print("FIEXEDASSETINGR:", fixed_string)
-                print("NONTIMEOCNRFNIENFITNIA:", non_time_conditions)
+                if "anErrorHasOccured" in fixed_string:
+                    return f"Error on line {i+1}: Invalid time"
 
-                for c in non_time_conditions:
-                    response = process_command(c, verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
-                    if response:
+                #print("FIEXEDASSETINGR:", fixed_string)
+                #print("NONTIMEOCNRFNIENFITNIA:", non_time_conditions)
+
+                for key in non_time_conditions:
+                    #print(key, non_time_conditions[key])
+                    response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
+                    if response.lower().startswith("error"):
                         return response
-
-                try:
-                    returned += str(eval(fixed_string)) + "\n"
-                except Exception as e:
-                    return f"Error while evaluating on line {i+1}: {e}"
+                    fixed_string = fixed_string.replace(key, response)
+                    for k2 in non_time_conditions:
+                        non_time_conditions[k2] = non_time_conditions[k2].replace(key, response)
+                returned += fixed_string + "\n"
+                #try:
+                #    returned += str(eval(fixed_string)) + "\n"
+                #except Exception as e:
+                #    return f"Error while evaluating on line {i+1}: {e}"
                 
 
             elif not line.lstrip().startswith("elif "):
-                response = process_command(line, verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
-                if response:
-                    return response
+                fixed_string, non_time_conditions = replace_time_with_function(line.lstrip())
+                fixed_string = fixed_string.replace("==", "=").replace("=", "==")
+
+                if "anErrorHasOccured" in fixed_string:
+                    return f"Error on line {i+1}: Invalid time"
+
+                #print("FIEXEDASSETINGR:", fixed_string)
+                #print("NONTIMEOCNRFNIENFITNIA:", non_time_conditions)
+
+                for key in non_time_conditions:
+                    #print(key, non_time_conditions[key])
+                    response = process_command(non_time_conditions[key], verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
+                    if response.lower().startswith("error"):
+                        return response
+                    fixed_string = fixed_string.replace(key, response)
+                    for k2 in non_time_conditions:
+                        non_time_conditions[k2] = non_time_conditions[k2].replace(key, response)
+                    #print("NONTIMEOCNRFNIENFITNIA:", non_time_conditions)
+
+                #for c in non_time_conditions:
+                #    response = process_command(c, verify=verify, task_queue=task_queue, response_queue=response_queue, run_cmd_func=run_cmd_func)
+                #    if response:
+                #        return response
                 
             # TODO add variable assignment and reading from pins. Can be managed with a dictionary.
 
@@ -318,15 +393,14 @@ def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_
 
 if __name__ == "__main__":
     code = """
-
-    
 if Time "17:00" to "18:00" or Arduino1.isOn():
     print("yess")
 elif Time "19:00" to "14:00":
     print("here")
 else:
     print("no")"""
+    #code = 'print(Royal_Blue)'
     print("RETURNED:", parse_code(code))
 
-    print("\n"*100)
-    print(replace_time_with_function('Time "17:00" to "18:00" or Arduino1.analogWrite(Arduino2.getPin(True), Red)'))
+    #print("\n"*100)
+    #print(replace_time_with_function('Time "17:00" to "18:00" or Arduino1.analogWrite(Arduino2.getPin(True), Red)'))

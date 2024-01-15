@@ -1,3 +1,3 @@
 {
-    "code": "if Time \"19:00\" to \"18:00\" or Arduino1.isOn():\n    print(\"yes\")\nelif Time \"19:00\" to \"14:00\":\n    print(\"here\")\nelse:\n    print(\"no\")"
+    "code": "Arduino2.analogWrite(9, 255)"
 }

@@ -5,13 +5,13 @@ from datetime import datetime
 from manager import main
 from custom_syntax import parse_code
 import threading
-import queue, time, logging
+import queue, time, logging, glob
 
 app = Flask(__name__)
 
 
 # Create handlers
-current_log_path = os.path.join("logs\\app", datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
+current_log_path = os.path.join(os.path.join("logs", "app"), datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
 handler = logging.FileHandler(current_log_path, encoding="utf-8")  # Log to a file
 
 # Create formatters and add it to handlers
@@ -51,7 +51,35 @@ def load():
 
     code = json.load(open(code_path, "r", encoding="utf-8"))
 
-    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "arduinoConstants": json.dumps(code["arduinoConstants"])})
+    limit = 10
+    x = 0
+    error_lines = ""
+    #with open(max(glob.glob(os.path.join("logs", "manager")), key=os.path.getctime), "r") as f:
+    #    lines = f.readlines()
+    #    for line in reversed(lines):
+    #        record = logging.makeLogRecord(eval(line))
+    #        if record.levelname != "INFO":
+    #            error_lines += line + "\n"
+    #            x += 1
+    #            if x >= limit:
+    #                break
+
+
+    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "error_lines": error_lines}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
+
+@app.route('/load arduino info', methods=['POST'])
+def load_arduino_info():
+    app.logger.info("load_arduino_info request")
+    data = request.json
+    
+    task_queue.put("get_arduinos")
+    try:
+        response = response_queue.get(timeout=30)
+    except queue.Empty:
+        return jsonify({"error": "Unable to fetch arduino data. The manager is not responding. It may have crashed and may not be updating the arduinos."})
+
+
+    return jsonify({"data": json.dumps(response)}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
 
 @app.route('/upload', methods=['POST'])
 def upload():

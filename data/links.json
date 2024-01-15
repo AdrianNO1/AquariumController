@@ -3,9 +3,9 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 65,
+                "percentage": 41,
                 "x": 0,
-                "y": 88
+                "y": 147
             },
             "target": {
                 "time": 178,
@@ -50,24 +50,38 @@
                 "y": 155
             },
             "target": {
-                "time": 689,
-                "percentage": 60,
-                "x": 445,
-                "y": 100
+                "time": 611,
+                "percentage": 0,
+                "x": 395,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 689,
-                "percentage": 60,
-                "x": 445,
-                "y": 100
+                "time": 611,
+                "percentage": 0,
+                "x": 395,
+                "y": 250
+            },
+            "target": {
+                "time": 1162,
+                "percentage": 3,
+                "x": 751,
+                "y": 243
+            }
+        },
+        {
+            "source": {
+                "time": 1162,
+                "percentage": 3,
+                "x": 751,
+                "y": 243
             },
             "target": {
                 "time": 1439,
-                "percentage": 65,
+                "percentage": 41,
                 "x": 930,
-                "y": 88
+                "y": 147
             }
         }
     ],
