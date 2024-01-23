@@ -16,7 +16,7 @@ def main(task_queue, response_queue, test=False):
             logger.setLevel(logging.INFO)
 
             # Create handlers
-            current_log_path = os.path.join("logs\\manager", datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
+            current_log_path = os.path.join(os.path.join("logs", "manager"), datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
             open(current_log_path, "w")
             handler = logging.FileHandler(current_log_path, encoding="utf-8")  # Log to a file
             handler.setLevel(logging.INFO)
@@ -37,6 +37,14 @@ def main(task_queue, response_queue, test=False):
                 name = serial_device["serial"].readline().decode().strip().strip(";")
                 if not name:
                     logger.error("serial_device did not recieve a name. Possible timeout")
+                    name = "Not responding"
+                    serial_device["status"] = "No response"
+                    serial_device["error"] = "Error: Device is not responding"
+                else:
+                    serial_device["status"] = "Responded"
+                    serial_device["error"] = ""
+                
+                serial_device["lastused"] = int(time.time())
                 serial_device["name"] = name
             except serial.serialutil.SerialException:
                 logger.warn("Device disconnected when initializing")
@@ -58,10 +66,10 @@ def main(task_queue, response_queue, test=False):
                     logger.info(f"USB device disconnected: {device.device_node}")
                     break
         
-        def run_command(device, cmd, *args):
+        def run_command(device, cmd, args):
             logger.info(f"Executing function {cmd} with args {args} on {device['name']}")
             if cmd == "isOn" or cmd == "isOff":
-                command = "p"
+                command = "p\n"
                 logger.info(f"Sending: {command}")
                 try:
                     device["serial"].write(bytes(command, encoding="utf-8"))
@@ -69,16 +77,29 @@ def main(task_queue, response_queue, test=False):
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return cmd == "isOff"
+                
                 print("Received: " + recieved)
+                device["lastused"] = int(time.time())
+
                 if recieved != "o":
-                    logger.warn(f"usb device {device['name']} did not respond with 'o', responded with '{recieved}' instead")
+                    wrn = f"usb device {device['name']} did not respond with 'o', responded with '{recieved}' instead"
+                    logger.warn(wrn)
+                    device["error"] = "Error: " + wrn
+                    device["status"] = "Unexpected response"
+                    if not recieved:
+                        logger.warn(f"usb device {device['name']} did not respond")
+                        device["error"] = "Error: Device is not responding"
+                        device["status"] = "No response"
                     return cmd == "isOff"
+
+                device["status"] = "Responded"
+                device["error"] = ""
                 return cmd == "isOn"
             
             elif cmd == "analogWrite":
                 if len(args) != 2:
                     logger.error(f"Length of args is {len(args)} not 2.")
-                command = f"s {args[0]} {args[1]}"
+                command = f"s {args[0]} {args[1]}\n"
                 logger.info(f"Sending: {command}")
                 try:
                     device["serial"].write(bytes(command, encoding="utf-8"))
@@ -86,10 +107,53 @@ def main(task_queue, response_queue, test=False):
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return cmd == "isOff"
+                
                 print("Received: " + recieved)
+                device["lastused"] = int(time.time())
+
                 if recieved != command:
-                    logger.error(f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"')
+                    wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
+                    logger.warn(wrn)
+                    device["error"] = "Error: " + wrn
+                    device["status"] = "Unexpected response"
+                    if not recieved:
+                        logger.warn(f"usb device {device['name']} did not respond")
+                        device["error"] = "Error: Device is not responding"
+                        device["status"] = "No response"
                     return False
+                
+                device["status"] = "Responded"
+                device["error"] = ""
+                return True
+            
+            elif cmd == "rename":
+                if len(args) != 1:
+                    logger.error(f"Length of args is {len(args)} not 1.")
+                command = f"e {args[0]}\n"
+                logger.info(f"Sending: {command}")
+                try:
+                    device["serial"].write(bytes(command, encoding="utf-8"))
+                    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";")
+                except serial.serialutil.SerialException:
+                    logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
+                    return False
+                
+                print("Received: " + recieved)
+                device["lastused"] = int(time.time())
+
+                if recieved != args[0]:
+                    wrn = f'{device["name"]} did not respond as expected. got "{recieved}". Expected "{args[0]}"'
+                    logger.warn(wrn)
+                    device["error"] = "Error: " + wrn
+                    device["status"] = "Unexpected response"
+                    if not recieved:
+                        logger.warn(f"usb device {device['name']} did not respond")
+                        device["error"] = "Error: Device is not responding"
+                        device["status"] = "No response"
+                    return False
+                device["name"] = recieved
+                device["status"] = "Responded"
+                device["error"] = ""
                 return True
         
         def read_queue(timeout=1, task=None):
@@ -102,9 +166,19 @@ def main(task_queue, response_queue, test=False):
             else:
                 manual_mode = True
             if task:
-                response = "Error: unable to pass any tests. This must be some edgecase."
                 logger.info(f"Recieved message from queue: {task}.")
-                if len(task.split(".")) == 0:
+                response = "Error: no error info given"
+                if task == "get_arduinos":
+                    response_queue.put([{x: device[x] for x in device if x not in "serial"} for device in serial_devices])
+                    return
+                
+                elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
+                    matches = [device for device in serial_devices if device["device"] == task[1]]
+                    if matches:
+                        for device in matches:
+                            run_command(device, "rename", [task[2]])
+
+                elif len(task.split(".")) == 0:
                     response = "Error: unable to split task at '.'"
                 elif len(task.split(".")) == 1:
                     response = str(task.split(".")[0] in [x["name"] for x in serial_devices])
@@ -121,6 +195,7 @@ def main(task_queue, response_queue, test=False):
                                 response = f"Error: got {len(mtches)} matches when only 1 or 0 are expected."
                                 break
                             elif len(mtches) == 0:
+                                logger.error(f"Error: something went wrong AQGF7:\n" + "\n".join([str(mtches), str(func), str(pattern), str(matches), str(task)]))
                                 response = f"Error: something went wrong AQGF7"
                                 break
                             parameters = [x.strip() for x in mtches[0].split(",")]
@@ -141,25 +216,6 @@ def main(task_queue, response_queue, test=False):
 
                 task = None
 
-        def get_current_strength(color):
-            with open(os.path.join("data", "links.json"), "r", encoding="utf-8") as f:
-                links = json.load(f)
-                if color in links:
-                    now = datetime.now()
-                    minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
-
-                    for link in links[color]:
-                        if link["source"]["time"] <= minutes_of_day and link["target"]["time"] >= minutes_of_day:
-                            total_duration = link["target"]["time"] - link["source"]["time"]
-                            if total_duration == 0:
-                                logger.warn("division by zero. Two nodes have the same time")
-                            else:
-                                percentage = link["source"]["percentage"] + (1 - (link["target"]["time"] - minutes_of_day) / total_duration) * (link["target"]["percentage"] - link["source"]["percentage"])
-                                return percentage/100*255
-                            
-                else:
-                    logger.warn(f"Unable to find {color} in link")
-
         serial_devices = []
 
         if test:
@@ -179,7 +235,7 @@ def main(task_queue, response_queue, test=False):
                     print(self.written)
                     return bytes(self.written, encoding="utf-8")
 
-            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "Arduino1"})
+            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "Arduino1", "status": "Responded", "lastused": int(time.time()), "error": ""})
         else:
             for device in get_arduinos():
                 logger.info(f"found already connected USB device: {device}")
@@ -197,7 +253,8 @@ def main(task_queue, response_queue, test=False):
 
 
         update_frequency = 5
-
+        
+        time.sleep(update_frequency)
         while True:
             start = time.time()
 
@@ -205,7 +262,7 @@ def main(task_queue, response_queue, test=False):
                 with open(os.path.join("data", "code.json"), "r", encoding="utf-8") as f:
                     code = json.load(f)["code"]
 
-                response = parse_code(code, verify=False, run_cmd_func=read_queue)
+                response = parse_code(code, verify=False, run_cmd_func=read_queue, arduinos=[x["name"] for x in serial_devices])
                 if response.startswith("Error"):
                     logger.error(response)
                 print(response)

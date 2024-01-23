@@ -5,13 +5,13 @@ from datetime import datetime
 from manager import main
 from custom_syntax import parse_code
 import threading
-import queue, time, logging
+import queue, time, logging, glob
 
 app = Flask(__name__)
 
 
 # Create handlers
-current_log_path = os.path.join("logs\\app", datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
+current_log_path = os.path.join(os.path.join("logs", "app"), datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
 handler = logging.FileHandler(current_log_path, encoding="utf-8")  # Log to a file
 
 # Create formatters and add it to handlers
@@ -51,7 +51,35 @@ def load():
 
     code = json.load(open(code_path, "r", encoding="utf-8"))
 
-    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "arduinoConstants": json.dumps(code["arduinoConstants"])})
+    limit = 10
+    x = 0
+    error_lines = ""
+    #with open(max(glob.glob(os.path.join("logs", "manager")), key=os.path.getctime), "r") as f:
+    #    lines = f.readlines()
+    #    for line in reversed(lines):
+    #        record = logging.makeLogRecord(eval(line))
+    #        if record.levelname != "INFO":
+    #            error_lines += line + "\n"
+    #            x += 1
+    #            if x >= limit:
+    #                break
+
+
+    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "error_lines": error_lines}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
+
+@app.route('/load arduino info', methods=['POST'])
+def load_arduino_info():
+    app.logger.info("load_arduino_info request")
+    data = request.json
+    
+    task_queue.put("get_arduinos")
+    try:
+        response = response_queue.get(timeout=30)
+    except queue.Empty:
+        return jsonify({"error": "Unable to fetch arduino data. The manager is not responding. It may have crashed and may not be updating the arduinos."})
+
+
+    return jsonify({"data": json.dumps(response)}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -68,7 +96,9 @@ def verify():
     app.logger.info("verify request")
     data = request.json
     code = data["code"]
-    evaluation = parse_code(code, verify=True)
+    arduinos = data["arduinos"]
+
+    evaluation = parse_code(code, verify=True, arduinos=arduinos)
 
     #task_queue.put(("func_name, args, kwargs",))
     #start = time.time()
@@ -90,13 +120,14 @@ def run_once():
     app.logger.info("run once request")
     data = request.json
     code = data["code"]
+    arduinos = data["arduinos"]
 
-    verify_evaluation = parse_code(code, verify=True)
+    verify_evaluation = parse_code(code, verify=True, arduinos=arduinos)
     if verify_evaluation.startswith("Error"):
         response = {'error': verify_evaluation}
         return jsonify(response)
     
-    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue)
+    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue, arduinos=arduinos)
     if evaluation.startswith("Error"):
         response = {'error': evaluation}
     else:
@@ -109,19 +140,33 @@ def upload_and_run():
     app.logger.info("upload and run request")
     data = request.json
     code = data["code"]
+    arduinos = data["arduinos"]
 
-    verify_evaluation = parse_code(code, verify=True)
+    verify_evaluation = parse_code(code, verify=True, arduinos=arduinos)
     if verify_evaluation.startswith("Error"):
         response = {'error': verify_evaluation}
         return jsonify(response)
     
-    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue)
+    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue, arduinos=arduinos)
     if evaluation.startswith("Error"):
         response = {'error': evaluation}
     else:
         response = {'message': evaluation.strip()}
         with open(code_path, "w", encoding="utf-8") as f:
             json.dump({"code": code}, f, indent=4)
+
+    return jsonify(response)
+
+@app.route('/rename', methods=['POST'])
+def rename():
+    app.logger.info("upload and run request")
+    data = request.json
+
+    task_queue.put(("rename", data["device"], data["newname"]))
+    try:
+        response = {"data": response_queue.get(timeout=10)}
+    except:
+        response = {'error': "timeout when waiting for response from manager"}
 
     return jsonify(response)
 
@@ -143,11 +188,11 @@ if __name__ == '__main__':
 
     # Function to run in the thread
     def thread_function():
-        main(task_queue, response_queue, test=True)
+        main(task_queue, response_queue, test=False)
 
     # Start the thread
     thread = threading.Thread(target=thread_function)
     thread.start()
 
     app.logger.info("starting app")
-    app.run(debug=False, port=2389)#, host="0.0.0.0")
+    app.run(debug=False, port=2389, host="0.0.0.0")

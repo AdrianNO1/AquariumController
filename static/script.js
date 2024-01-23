@@ -50,7 +50,7 @@ let svg_name
 let svg
 let current_minutes
 let codeText
-let arduinoConstants
+let arduinos
 
 let channels = {}
 let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
@@ -72,7 +72,7 @@ if (overwriteNodesWithExample){
         success: function(response) {
             nodes = JSON.parse(response.data);
             codeText = JSON.parse(response.code);
-            arduinoConstants = JSON.parse(response.arduinoConstants);
+            //arduinoConstants = JSON.parse(response.arduinoConstants);
             
         },
         error: function(error) {
@@ -81,6 +81,8 @@ if (overwriteNodesWithExample){
         }
     });
 }
+
+
 
 let i = 0
 channels_names.forEach(e => {
@@ -672,13 +674,14 @@ var oop = require('ace/lib/oop');
 var TextMode = require('ace/mode/text').Mode;
 var TextHighlightRules = require('ace/mode/text_highlight_rules').TextHighlightRules;
 
+
 // Define custom highlight rules
 var MyCustomHighlightRules = function() {
 
     var keywordMapper = this.createKeywordMapper({
         'keyword': 'if|elif|else|to|or|and|not',
         'function': 'analogWrite|isOn|isOff|print',
-        'constant': 'Time' + arduinoConstants ? "|" : "" + arduinoConstants.join("|"),
+        'constant': 'Time|Uv|Violet|Royal_Blue|Blue|White|Red'
     }, 'identifier');
 
     this.$rules = {
@@ -800,7 +803,7 @@ document.getElementById("verify").addEventListener("click", function(){
         url: '/verify',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue()}),
+        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
         success: function(response) {
             console.log(response);
             if (response.error){
@@ -828,7 +831,7 @@ document.getElementById("runonce").addEventListener("click", function(){
         url: '/run once',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue()}),
+        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
         success: function(response) {
             console.log(response);
             if (response.error){
@@ -856,7 +859,7 @@ document.getElementById("uploadandrun").addEventListener("click", function(){
         url: '/uploadandrun',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue()}),
+        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
         success: function(response) {
             console.log(response);
             if (response.error){
@@ -877,3 +880,112 @@ document.getElementById("uploadandrun").addEventListener("click", function(){
         }
     });
 })
+
+
+
+function timeSinceEpochToString(epochSeconds) {
+    const secondsPerMinute = 60;
+    const secondsPerHour = 3600;
+    const secondsPerDay = 86400;
+
+    const now = Math.floor(Date.now() / 1000); // Current time in seconds since epoch
+    let elapsed = now - epochSeconds; // Calculate elapsed time in seconds
+
+    if (elapsed < secondsPerMinute) {
+        return `${elapsed} seconds ago`;
+    } else if (elapsed < secondsPerHour) {
+        const minutes = Math.floor(elapsed / secondsPerMinute);
+        const seconds = elapsed % secondsPerMinute;
+        return `${minutes} minute${minutes > 1 ? 's' : ''} ${seconds} second${seconds > 1 ? 's' : ''} ago`;
+    } else if (elapsed < secondsPerDay) {
+        const hours = Math.floor(elapsed / secondsPerHour);
+        const minutes = Math.floor((elapsed % secondsPerHour) / secondsPerMinute);
+        return `${hours} hour${hours > 1 ? 's' : ''} ${minutes} minute${minutes > 1 ? 's' : ''} ago`;
+    } else {
+        const days = Math.floor(elapsed / secondsPerDay);
+        return `${days} day${days > 1 ? 's' : ''} ago`;
+    }
+}
+
+function editTitle(buttonElement) {
+    // Find the title element by navigating the DOM relative to the button
+    var titleElement = buttonElement.previousElementSibling;
+
+    if (buttonElement.textContent === 'Edit') {
+        // Make the title editable
+        titleElement.contentEditable = true;
+        titleElement.focus();
+        buttonElement.textContent = 'Submit';
+    } else {
+        // Save the changes and make the title no longer editable
+        titleElement.contentEditable = false;
+        
+        // Here you would also handle saving the new title to your data or server
+        var newTitle = titleElement.textContent;
+        // Save newTitle to your data or server
+
+        buttonElement.disabed = true
+        $.ajax({
+            url: '/rename',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({"device": buttonElement.id, "newname": newTitle}),
+            success: function(response) {
+                buttonElement.disabed = false
+                buttonElement.textContent = 'Edit';
+                if (!response.data){
+                    console.log(response)
+                    document.getElementById("cards status").textContent = response.error
+                }
+            },
+            error: function(error) {
+                buttonElement.disabled = false
+                console.log(error);
+                document.getElementById("cards status").textContent = "Error: Unable to connect"
+            }
+        });
+    }
+}
+
+document.getElementById("refresh cards").addEventListener("click", function(){
+    document.getElementById("refresh cards").disabed = true
+    $.ajax({
+        url: '/load arduino info',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({}),
+        success: function(response) {
+            document.getElementById("refresh cards").disabed = false
+            if (response.data){
+                console.log(JSON.parse(response.data))
+                arduinos = JSON.parse(response.data);
+                
+                totalText = ""
+                for (arduino in arduinos){
+                    arduino = arduinos[arduino]
+                    totalText += `<div class="card ${arduino.error ? 'error-background' : ''}">
+                    <div class="title">${arduino.name}</div>
+                    <button class="edit-button" id=${arduino.device} onclick="editTitle(this)">Edit</button>
+                    <div class="subtitle">USB: ${arduino.device}</div>
+                    <div class="content error">${arduino.error}</div>       
+                    <div class="lastused">Last used: ${timeSinceEpochToString(arduino.lastused)}</div>
+                    <div class="status">Status: ${arduino.status}</div>
+                    </div>`
+                }
+                document.getElementById("arduino_cards").innerHTML = totalText
+                document.getElementById("cards status").textContent = "OK"
+            }
+            else{
+                console.log(response)
+                document.getElementById("cards status").textContent = response.error
+            }
+        },
+        error: function(error) {
+            document.getElementById("refresh cards").disabed = false
+            console.log(error);
+            document.getElementById("cards status").textContent = "Error: Unable to connect"
+        }
+    });
+})
+
+document.getElementById("refresh cards").click()

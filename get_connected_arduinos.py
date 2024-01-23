@@ -6,7 +6,7 @@ def get_arduinos():
     ports = list(serial.tools.list_ports.comports())
     for port in ports:
         # Check if 'Arduino' is in the description of the device
-        if "Arduino" in port.description or "ttyACM" in port.device:
+        if "Arduino" in port.description or "ttyACM" in port.device or "ttyUSB" in port.device:
             arduinos.append(port.device)
     return arduinos
 
