@@ -188,7 +188,7 @@ if __name__ == '__main__':
 
     # Function to run in the thread
     def thread_function():
-        main(task_queue, response_queue, test=False)
+        main(task_queue, response_queue, test=True)
 
     # Start the thread
     thread = threading.Thread(target=thread_function)

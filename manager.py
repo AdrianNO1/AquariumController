@@ -2,7 +2,7 @@ def main(task_queue, response_queue, test=False):
     try:
         import serial, time, threading, multiprocessing, os, json, logging, math, queue, re
         from datetime import datetime
-        from custom_syntax import parse_code
+        from custom_syntax import parse_code, get_current_strength
 
         if not test:
             from usb_listener import setup_usb_listener
@@ -78,7 +78,7 @@ def main(task_queue, response_queue, test=False):
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return cmd == "isOff"
                 
-                print("Received: " + recieved)
+                #print("Received: " + recieved)
                 device["lastused"] = int(time.time())
 
                 if recieved != "o":
@@ -106,9 +106,9 @@ def main(task_queue, response_queue, test=False):
                     recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
-                    return cmd == "isOff"
+                    return False
                 
-                print("Received: " + recieved)
+                #print("Received: " + recieved)
                 device["lastused"] = int(time.time())
 
                 if recieved != command:
@@ -132,13 +132,14 @@ def main(task_queue, response_queue, test=False):
                 command = f"e {args[0]}\n"
                 logger.info(f"Sending: {command}")
                 try:
+                    old_name = device["name"]
                     device["serial"].write(bytes(command, encoding="utf-8"))
                     recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";")
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return False
                 
-                print("Received: " + recieved)
+                #print("Received: " + recieved)
                 device["lastused"] = int(time.time())
 
                 if recieved != args[0]:
@@ -151,6 +152,15 @@ def main(task_queue, response_queue, test=False):
                         device["error"] = "Error: Device is not responding"
                         device["status"] = "No response"
                     return False
+                
+                with open(os.path.join("data", "hcars.json"), "r", encoding="utf-8") as f:
+                    hcars = json.load(f)
+                
+                hcars[list(hcars.keys())[list(hcars.values()).index(old_name)]] = recieved
+
+                with open(os.path.join("data", "hcars.json"), "w", encoding="utf-8") as f:
+                    json.dump(hcars, f)
+
                 device["name"] = recieved
                 device["status"] = "Responded"
                 device["error"] = ""
@@ -232,7 +242,7 @@ def main(task_queue, response_queue, test=False):
                             return bytes(self.written, encoding="utf-8")
                         elif self.written[0] == "p":
                             return bytes("o", encoding="utf-8")
-                    print(self.written)
+                    #print(self.written)
                     return bytes(self.written, encoding="utf-8")
 
             serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "Arduino1", "status": "Responded", "lastused": int(time.time()), "error": ""})
@@ -247,52 +257,55 @@ def main(task_queue, response_queue, test=False):
         if not test:
             setup_usb_listener(on_connect, on_disconnect)
 
-        light_pins = {
-            "ch1": [{"color": "White", "pin": 9}, {"color": "Blue", "pin": 10}]
+        hardcoded_light_pins = {
+            "hcar1": [
+                {"color": "Uv", "pin": 11},
+                {"color": "Violet", "pin": 6},
+                {"color": "Royal Blue", "pin": 10},
+                {"color": "Blue", "pin": 5},
+                {"color": "White", "pin": 9},
+                {"color": "Red", "pin": 3},
+            ]
         }
 
 
-        update_frequency = 5
+        update_frequency = 1
         
         time.sleep(update_frequency)
         while True:
             start = time.time()
 
-            if 1:
+            if 0:
                 with open(os.path.join("data", "code.json"), "r", encoding="utf-8") as f:
                     code = json.load(f)["code"]
 
                 response = parse_code(code, verify=False, run_cmd_func=read_queue, arduinos=[x["name"] for x in serial_devices])
                 if response.startswith("Error"):
                     logger.error(response)
-                print(response)
-                
-                print("\n"*2)
 
 
-            #for serial_device in serial_devices:
-            #    ser = serial_device["serial"]
-            #    name = serial_device["name"]
-            #    if name in light_pins:
-            #        command = ""
-            #        for v in light_pins[name]:
-            #            command += f";s {v['pin']} {round(get_current_strength(v['color']))}"
-            #        command = command.strip(";") + "\n"
-            #
-            #        print("Sending:  " + command)
-            #        logger.info("Sending:  " + command)
-            #        try:
-            #            ser.write(bytes(command, encoding="utf-8"))
-            #            recieved = ser.readline().decode(encoding="utf-8").strip().strip(";") + "\n"
-            #        except serial.serialutil.SerialException:
-            #            logger.warn(f"usb device {device['name']} may have disconnected")
-            #        print("Received: " + recieved)
-            #        logger.info("Received: " + recieved)
-            #        if recieved != command:
-            #            logger.error(f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"')
-            #    else:
-            #        print(f"{name} not found in light_pins dict")
-            #        logger.error(f"{name} not found in light_pins dict")
+
+
+
+
+            with open(os.path.join("data", "hcars.json"), "r", encoding="utf-8") as  f:
+                hcars = json.load(f)
+
+            for v in hardcoded_light_pins:
+                name = hcars[v]
+                matches = list(filter(lambda x: x["name"] == name, serial_devices))
+                if matches:
+                    for device in matches:
+                        for color in hardcoded_light_pins[v]:
+                            run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"])])
+                            print(device["name"], "analogWrite", [color["pin"], get_current_strength(color["color"])])
+                else:
+                    logger.warn(f'Unable to find arduino: "{name}" from hardcoded thing')
+
+
+
+
+
 
             seconds = update_frequency-(time.time()-start)
             if seconds < 0:
@@ -304,7 +317,7 @@ def main(task_queue, response_queue, test=False):
 
 
     except Exception as e:
-        import sys, traceback
+        import sys, traceback, os
         exc_type, exc_obj, exc_tb = sys.exc_info()[:]
         fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]
         basic_err_info = f"\nException: {e}\nError: {exc_type}\nFile: {fname}\nLine: {exc_tb.tb_lineno}\Trace: {traceback.format_exc()}"
