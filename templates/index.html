@@ -22,17 +22,30 @@
         <svg id="graph" width="1000" height="300"></svg>
         <table id="channelsTable"></table>
     </div>
-    <p id="current-time">Current time: Loading...</p>
-    <button id="new">New node</button>
-    <button id="delete">Delete selected node</button>
-    <form id="form">
-        <p class="inputDesc">Percentage</p>
-        <input type="text" value="50%" id="percentage">
-        <p class="inputDesc">Time</p>
-        <input type="text" value="06:00" id="time">
-        <p id="error"></p>
-        <input type="submit" value="Submit">
-    </form>
+    <div id="graphSettingsContainer">
+        <p id="current-time">Current time: Loading...</p>
+        <button id="new">New node</button>
+        <button id="delete">Delete selected node</button>
+        <br>
+        <br>
+        <br>
+        <button id="preview">Preview (uploads) (1 minute)</button>
+        <form id="form">
+            <p class="inputDesc">Percentage</p>
+            <input type="text" value="50%" id="percentage">
+            <p class="inputDesc">Time</p>
+            <input type="text" value="06:00" id="time">
+            <p id="error"></p>
+            <input type="submit" value="Submit">
+        </form>
+    </div>
+    <br>
+    <div id="sliderContainer">
+        <form id="throttle-form">
+            <input id="slider-value" type="text" value="50%">
+        </form>
+        <input type="range" min="0" max="100" value="50" class="slider" id="throttle" orient="vertical">
+    </div>
     <br>
     <button id="verify">Verify</button>
     <button id="runonce">Run Once</button>
@@ -45,7 +58,7 @@
     <p id="cards status"></p>
     <button id="refresh cards">Refresh</button>
     <div id="arduino_cards"></div>
-
+    
 </body>
 <script src="/static/script.js"></script>
 </html>

@@ -22,6 +22,7 @@
 #graphContainer{
     display: flex;
     align-items: stretch;
+    height: 300px
 }
 
 #uploadStatus{
@@ -136,4 +137,30 @@ th, td {
 
 #runonce{
     margin-right: 50px;
+}
+
+
+#sliderContainer {
+    display: flex;
+    align-items: center;
+}
+
+#slider-value {
+    margin-right: 20px;
+    font-size: 20px;
+    width: 3em;
+}
+
+#throttle{
+    writing-mode: bt-lr; /* IE */
+    appearance: slider-vertical;
+    width: 8px;
+    height: 200px;
+    outline: none;
+    margin-top: 20px;
+}
+
+#graphSettingsContainer{
+    float: left;
+    margin-right: 40px;
 }

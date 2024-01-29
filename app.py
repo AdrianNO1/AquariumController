@@ -27,6 +27,7 @@ app.logger.setLevel(logging.INFO)
 
 links_path = os.path.join("data", "links.json")
 code_path = os.path.join("data", "code.json")
+throttle_path = os.path.join("data", "throttle.json")
 
 @app.errorhandler(500)
 def handle_internal_server_error(e):
@@ -50,7 +51,8 @@ def load():
         nodes[key] = nodes[key][1:]
 
     code = json.load(open(code_path, "r", encoding="utf-8"))
-
+    throttle = json.load(open(throttle_path, "r", encoding="utf-8"))["throttle"]
+    
     limit = 10
     x = 0
     error_lines = ""
@@ -65,7 +67,7 @@ def load():
     #                break
 
 
-    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "error_lines": error_lines}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
+    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines})
 
 @app.route('/load arduino info', methods=['POST'])
 def load_arduino_info():
@@ -88,6 +90,10 @@ def upload():
     
     with open(links_path, "w", encoding="utf-8") as f:
         json.dump(data["links_data"], f, indent=4)
+
+    with open(throttle_path, "w", encoding="utf-8") as f:
+        json.dump({"throttle": data["throttle"]}, f, indent=4)
+
     response = {'message': 'ok'}
     return jsonify(response)
 
@@ -170,6 +176,34 @@ def rename():
 
     return jsonify(response)
 
+@app.route('/preview', methods=['POST'])
+def preview():
+    app.logger.info("preview request")
+    data = request.json
+
+    with open(links_path, "w", encoding="utf-8") as f:
+        json.dump(data["links_data"], f, indent=4)
+
+    task_queue.put("preview")
+    try:
+        response = {"data": response_queue.get(timeout=10)}
+    except:
+        response = {'error': "timeout when waiting for response from manager"}
+
+    return jsonify(response)
+
+@app.route('/cancelpreview', methods=['POST'])
+def cancelpreview():
+    app.logger.info("cancelpreview request")
+
+    task_queue.put("cancelpreview")
+    try:
+        response = {"data": response_queue.get(timeout=10)}
+    except:
+        response = {'error': "timeout when waiting for response from manager"}
+
+    return jsonify(response)
+
 
 
 #@app.route('/getlog', methods=['POST'])
@@ -195,4 +229,4 @@ if __name__ == '__main__':
     thread.start()
 
     app.logger.info("starting app")
-    app.run(debug=False, port=2389, host="0.0.0.0")
+    app.run(debug=False, port=2389)#, host="0.0.0.0")

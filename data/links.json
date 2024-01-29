@@ -3,9 +3,9 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 41,
+                "percentage": 56,
                 "x": 0,
-                "y": 147
+                "y": 110
             },
             "target": {
                 "time": 178,
@@ -50,38 +50,38 @@
                 "y": 155
             },
             "target": {
-                "time": 611,
-                "percentage": 0,
-                "x": 395,
-                "y": 250
+                "time": 723,
+                "percentage": 35,
+                "x": 467,
+                "y": 163
             }
         },
         {
             "source": {
-                "time": 611,
-                "percentage": 0,
-                "x": 395,
-                "y": 250
+                "time": 723,
+                "percentage": 35,
+                "x": 467,
+                "y": 163
             },
             "target": {
-                "time": 1162,
-                "percentage": 3,
-                "x": 751,
-                "y": 243
+                "time": 1128,
+                "percentage": 39,
+                "x": 729,
+                "y": 153
             }
         },
         {
             "source": {
-                "time": 1162,
-                "percentage": 3,
-                "x": 751,
-                "y": 243
+                "time": 1128,
+                "percentage": 39,
+                "x": 729,
+                "y": 153
             },
             "target": {
                 "time": 1439,
-                "percentage": 41,
+                "percentage": 56,
                 "x": 930,
-                "y": 147
+                "y": 110
             }
         }
     ],
@@ -89,57 +89,57 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 49,
+                "percentage": 65,
                 "x": 0,
-                "y": 128
+                "y": 88
             },
             "target": {
-                "time": 166,
-                "percentage": 67,
-                "x": 107,
-                "y": 82
+                "time": 354,
+                "percentage": 94,
+                "x": 229,
+                "y": 15
             }
         },
         {
             "source": {
-                "time": 166,
-                "percentage": 67,
-                "x": 107,
-                "y": 82
+                "time": 354,
+                "percentage": 94,
+                "x": 229,
+                "y": 15
             },
             "target": {
-                "time": 330,
-                "percentage": 70,
-                "x": 213,
-                "y": 75
+                "time": 504,
+                "percentage": 46,
+                "x": 326,
+                "y": 135
             }
         },
         {
             "source": {
-                "time": 330,
-                "percentage": 70,
-                "x": 213,
-                "y": 75
+                "time": 504,
+                "percentage": 46,
+                "x": 326,
+                "y": 135
             },
             "target": {
-                "time": 1088,
-                "percentage": 10,
-                "x": 703,
-                "y": 225
+                "time": 1040,
+                "percentage": 32,
+                "x": 672,
+                "y": 170
             }
         },
         {
             "source": {
-                "time": 1088,
-                "percentage": 10,
-                "x": 703,
-                "y": 225
+                "time": 1040,
+                "percentage": 32,
+                "x": 672,
+                "y": 170
             },
             "target": {
                 "time": 1439,
-                "percentage": 49,
+                "percentage": 65,
                 "x": 930,
-                "y": 128
+                "y": 88
             }
         }
     ],
@@ -219,23 +219,23 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 85,
+                "percentage": 28,
                 "x": 0,
-                "y": 37
+                "y": 181
             },
             "target": {
-                "time": 483,
-                "percentage": 57,
-                "x": 312,
-                "y": 108
+                "time": 387,
+                "percentage": 18,
+                "x": 250,
+                "y": 205
             }
         },
         {
             "source": {
-                "time": 483,
-                "percentage": 57,
-                "x": 312,
-                "y": 108
+                "time": 387,
+                "percentage": 18,
+                "x": 250,
+                "y": 205
             },
             "target": {
                 "time": 925,
@@ -252,24 +252,24 @@
                 "y": 245
             },
             "target": {
-                "time": 1328,
-                "percentage": 92,
-                "x": 858,
-                "y": 20
+                "time": 1215,
+                "percentage": 33,
+                "x": 785,
+                "y": 167
             }
         },
         {
             "source": {
-                "time": 1328,
-                "percentage": 92,
-                "x": 858,
-                "y": 20
+                "time": 1215,
+                "percentage": 33,
+                "x": 785,
+                "y": 167
             },
             "target": {
                 "time": 1439,
-                "percentage": 85,
+                "percentage": 28,
                 "x": 930,
-                "y": 37
+                "y": 181
             }
         }
     ],
@@ -335,29 +335,43 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 90,
+                "percentage": 66,
                 "x": 0,
-                "y": 25
+                "y": 86
             },
             "target": {
-                "time": 390,
-                "percentage": 90,
-                "x": 252,
-                "y": 25
+                "time": 141,
+                "percentage": 87,
+                "x": 91,
+                "y": 33
             }
         },
         {
             "source": {
-                "time": 390,
-                "percentage": 90,
-                "x": 252,
-                "y": 25
+                "time": 141,
+                "percentage": 87,
+                "x": 91,
+                "y": 33
+            },
+            "target": {
+                "time": 1099,
+                "percentage": 14,
+                "x": 710,
+                "y": 215
+            }
+        },
+        {
+            "source": {
+                "time": 1099,
+                "percentage": 14,
+                "x": 710,
+                "y": 215
             },
             "target": {
                 "time": 1439,
-                "percentage": 90,
+                "percentage": 66,
                 "x": 930,
-                "y": 25
+                "y": 86
             }
         }
     ]

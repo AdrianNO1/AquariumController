@@ -51,12 +51,29 @@ let svg
 let current_minutes
 let codeText
 let arduinos
+let preview_start = 0
+let preview_interval_id
+let preview_duration = 60 // seconds
 
 let channels = {}
 let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
 let channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
 
 let channelsTable = document.getElementById("channelsTable")
+let slider = document.getElementById('throttle');
+let output = document.getElementById('slider-value');
+
+
+// Update the current slider value (each time you drag the slider handle)
+slider.oninput = function() {
+    output.value = this.value + '%';
+}
+
+document.getElementById("throttle-form").addEventListener("submit", function(event) {
+    event.preventDefault();
+    slider.value = Math.max(Math.min(output.value.slice(0, -1), 100), 0)
+    output.value = Math.max(Math.min(output.value.slice(0, -1), 100), 0) + "%"
+})
 
 if (overwriteNodesWithExample){
     channels_names.forEach(e => {
@@ -70,8 +87,11 @@ if (overwriteNodesWithExample){
         contentType: 'application/json',
         data: JSON.stringify({}),
         success: function(response) {
-            nodes = JSON.parse(response.data);
-            codeText = JSON.parse(response.code);
+            nodes = JSON.parse(response.data)
+            codeText = JSON.parse(response.code)
+            console.log(response.throttle)
+            slider.value = JSON.parse(response.throttle)
+            output.value = JSON.parse(response.throttle) + "%"
             //arduinoConstants = JSON.parse(response.arduinoConstants);
             
         },
@@ -167,6 +187,40 @@ function setCurrentTime() {
         .attr("y2", yScale(100))
         .attr("stroke", `rgb(100, 100, 100)`)
         .attr("stroke-width", "3");
+    
+    if (preview_start === 0){
+        updateTablePercentages()
+    }
+}
+
+function updatePreviewTime() {
+    // Remove any existing wrap-around links
+    backgroundSvg.selectAll(".vertical-preview-bar").remove();
+    if (preview_start !== 0) {
+        if (Date.now() / 1000 - preview_start >= preview_duration) {
+            preview_start = 0
+            clearInterval(preview_interval_id)
+            preview_interval_id = null
+            document.getElementById("preview").innerText = "Preview (uploads) (1 minute)"
+            return
+        }
+        // Convert milliseconds to minutes and then scale to the minutes of the day
+        // based on the preview duration.
+        var minutes_of_day = Math.max(Math.floor((Date.now() / 1000 - preview_start) * 60 * (24 / preview_duration)), 0);
+    } else{
+        return
+    }
+    
+    // Line from the last node to the right boundary
+    backgroundSvg.append("line")
+        .attr("class", "vertical-preview-bar")
+        .attr("x1", xScale(minutes_of_day))
+        .attr("y1", yScale(0))
+        .attr("x2", xScale(minutes_of_day))
+        .attr("y2", yScale(100))
+        .attr("stroke", "black")
+    
+    updateTablePercentages()
 }
 
 function scheduleSetCurrentTime() {
@@ -396,18 +450,8 @@ function dragstarted(event, d) {
         .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
     
 
-    let graphY
-    let links = getLinks(svg)
-    for (let i=0; i < links.length; i++){
-        let link = links[i]
-        if (link.source.time <= current_minutes && link.target.time >= current_minutes){
-            graphY = link.source.y + ((current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
-            break
-        }
-    }
 
-    document.getElementById(svg_name.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
-
+    updateTablePercentages()
 
     document.getElementById("percentage").value = Math.round(d.percentage) + "%"
     document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
@@ -474,18 +518,7 @@ function dragged(event, d) {
         .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
 
 
-    let graphY
-    let links = getLinks(svg)
-    for (let i=0; i < links.length; i++){
-        let link = links[i]
-        if (link.source.time <= current_minutes && link.target.time >= current_minutes){
-            graphY = link.source.y + ((current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
-            break
-        }
-    }
-
-    document.getElementById(svg_name.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
-
+    updateTablePercentages()
     
     document.getElementById("percentage").value = Math.round(d.percentage) + "%"
     document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
@@ -591,7 +624,7 @@ document.getElementById("form").addEventListener("submit", function(event) {
                 .text(minutesToTimeFormat(selected.time) + ", " + Math.round(selected.percentage) + "%");
             
             refreshGraph(svg);
-            document.getElementById(svg_name.replace(" ", "_") + "per").innerText = document.getElementById("percentage").value
+            updateTablePercentages()
         }
     }
 });
@@ -636,7 +669,7 @@ document.getElementById("upload").addEventListener("click", function(){
         url: '/upload',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({links_data: links_data, throttle: 100 }),
+        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1))}),
         success: function(response) {
             console.log(response.message);
             document.getElementById("uploadStatus").textContent = response.message
@@ -668,8 +701,8 @@ function selectRow(row) {
         }
     }
 
+    updateTablePercentages()
     document.getElementById("percentage").value = Math.round(yScale.invert(graphY)) + "%"
-    document.getElementById(row.innerText.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
     document.getElementById("time").value = minutesToTimeFormat(current_minutes).toString()
 
     row.classList.add('selected');
@@ -679,10 +712,30 @@ function selectRow(row) {
 //    console.log(checkbox.parentElement.parentElement.querySelector(".selectable").innerText, checkbox.checked)
 //}
 
-window.onload = function() {
+function updateTablePercentages(){
     document.querySelectorAll('.selectable').forEach(elem => {
-        selectRow(elem)
+        let graphY
+        let links = getLinks(channels[elem.innerText])
+        let local_current_minutes = current_minutes
+        if (preview_start !== 0){
+            local_current_minutes = Math.max(Math.floor((Date.now() / 1000 - preview_start) * 60 * (24 / preview_duration)), 0);
+        }
+        
+        for (let i=0; i < links.length; i++){
+            let link = links[i]
+            if (link.source.time <= local_current_minutes && link.target.time >= local_current_minutes){
+                graphY = link.source.y + ((local_current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+                break
+            }
+        }
+
+        document.getElementById(elem.innerText.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
     })
+}
+
+window.onload = function() {
+    updateTablePercentages()
+    selectRow(document.querySelector('.selectable'))
 };
 
 // Initialize the Ace Editor
@@ -1020,3 +1073,64 @@ document.getElementById("refresh cards").addEventListener("click", function(){
 })
 
 document.getElementById("refresh cards").click()
+
+
+
+document.getElementById("preview").addEventListener("click", function(){
+    if (preview_start != 0){
+        document.getElementById("preview").innerText = "Preview (uploads) (1 minute)"
+        document.getElementById("uploadStatus").textContent = "sending..."
+        $.ajax({
+            url: '/cancelpreview',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({}),
+            success: function(response) {
+                console.log(response.data);
+                if (response.data == "ok"){
+                    preview_start = 0
+                    clearInterval(preview_interval_id)
+                    preview_interval_id = null
+                    document.getElementById("preview").innerText = "Preview (uploads) (1 minute)"
+                }
+                document.getElementById("uploadStatus").textContent = response.data
+            },
+            error: function(error) {
+                console.log(error);
+                document.getElementById("uploadStatus").textContent = error
+            }
+        });
+        return
+    }
+    if (!verifyGraphIntegrity()){
+        document.getElementById("uploadStatus").textContent = "error: Links are somehow not connected"
+        return
+    }
+    
+    
+    document.getElementById("uploadStatus").textContent = "sending..."
+    let links_data = {}
+    channels_names.forEach(e => {
+        links_data[e] = getLinks(channels[e])
+    })
+    document.getElementById("uploadStatus").textContent = "sending..."
+    $.ajax({
+        url: '/preview',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1))}),
+        success: function(response) {
+            console.log(response.data);
+            if (response.data == "ok"){
+                document.getElementById("preview").innerText = "Cancel Preview"
+                preview_start = new Date().getTime() / 1000
+                preview_interval_id = setInterval(updatePreviewTime, 500)
+            }
+            document.getElementById("uploadStatus").textContent = response.data
+        },
+        error: function(error) {
+            console.log(error);
+            document.getElementById("uploadStatus").textContent = error
+        }
+    });
+})

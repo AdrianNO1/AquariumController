@@ -11,6 +11,8 @@ def main(task_queue, response_queue, test=False):
         # Create a custom logger
         logger = logging.getLogger(__name__)
 
+        preview_start = 0
+
         if not logger.handlers:
             # Set level of logger
             logger.setLevel(logging.INFO)
@@ -166,6 +168,18 @@ def main(task_queue, response_queue, test=False):
                 device["error"] = ""
                 return True
         
+        def preview():
+            nonlocal preview_start, update_frequency
+            update_frequency = 0.5
+            preview_start = time.time()
+            response_queue.put("ok")
+            
+        def cancelpreview():
+            nonlocal preview_start, update_frequency
+            preview_start = 0
+            update_frequency = default_update_frequency
+            response_queue.put("ok")
+
         def read_queue(timeout=1, task=None):
             manual_mode = False
             if not task:
@@ -180,6 +194,12 @@ def main(task_queue, response_queue, test=False):
                 response = "Error: no error info given"
                 if task == "get_arduinos":
                     response_queue.put([{x: device[x] for x in device if x not in "serial"} for device in serial_devices])
+                    return
+                elif task == "preview":
+                    preview()
+                    return
+                elif task == "cancelpreview":
+                    cancelpreview()
                     return
                 
                 elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
@@ -268,14 +288,17 @@ def main(task_queue, response_queue, test=False):
             ]
         }
 
+        # also change in script.js
+        preview_duration = 60 # seconds
 
-        update_frequency = 1
+        default_update_frequency = 5
+        update_frequency = default_update_frequency
         
         time.sleep(update_frequency)
         while True:
             start = time.time()
 
-            if 0:
+            if not preview_start:
                 with open(os.path.join("data", "code.json"), "r", encoding="utf-8") as f:
                     code = json.load(f)["code"]
 
@@ -297,8 +320,17 @@ def main(task_queue, response_queue, test=False):
                 if matches:
                     for device in matches:
                         for color in hardcoded_light_pins[v]:
-                            run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"])])
-                            print(device["name"], "analogWrite", [color["pin"], get_current_strength(color["color"])])
+                            if preview_start != 0:
+                                if time.time() - preview_start >= preview_duration:
+                                    preview_start = 0
+                                    update_frequency = default_update_frequency
+                                    minutes_of_day = None
+                                else:
+                                    minutes_of_day = max(int((time.time() - preview_start)*60*(24/preview_duration)), 0)
+                            else:
+                                minutes_of_day = None
+                                
+                            run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"], minutes_of_day=minutes_of_day)])
                 else:
                     logger.warn(f'Unable to find arduino: "{name}" from hardcoded thing')
 

@@ -1,4 +1,4 @@
-import re, os, sys, queue, json
+import re, os, sys, queue, json, time
 from datetime import datetime, timedelta
 
 def checkTime(time1, time2):
@@ -123,12 +123,14 @@ def replace_time_with_function(input_string):
     #print(non_time_conditions_dict, result)
     return result, non_time_conditions_dict
 
-def get_current_strength(color):
+def get_current_strength(color, minutes_of_day=None):
     with open(os.path.join("data", "links.json"), "r", encoding="utf-8") as f:
         links = json.load(f)
+        throttle = json.load(open(os.path.join("data", "throttle.json"), "r", encoding="utf-8"))["throttle"]
         if color in links:
-            now = datetime.now()
-            minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
+            if minutes_of_day == None:
+                now = datetime.now()
+                minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
 
             for link in links[color]:
                 if link["source"]["time"] <= minutes_of_day and link["target"]["time"] >= minutes_of_day:
@@ -137,7 +139,7 @@ def get_current_strength(color):
                         return "Error in get_current_strength: division by zero. Two nodes have the same time"
                     else:
                         percentage = link["source"]["percentage"] + (1 - (link["target"]["time"] - minutes_of_day) / total_duration) * (link["target"]["percentage"] - link["source"]["percentage"])
-                        return max(min(round(percentage/100*255), 255), 0)
+                        return max(min(round(percentage/100*255*(throttle/100)), 255), 0)
                     
         else:
             return f"Error in get_current_strength: Unable to find {color} in link"
