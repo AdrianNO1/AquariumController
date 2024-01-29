@@ -232,7 +232,7 @@ def process_command(c, verify=False, task_queue=None, response_queue=None, run_c
                         except queue.Empty:
                             return f"Error on line {i+1}: Internal error. Arduino manager did not respond within 30 seconds. It may be off."
 
-                    print("GOT RESPONSE FROM MANAGER:", str(task))
+                    #print("GOT RESPONSE FROM MANAGER:", str(task))
                     if "error" in str(task).lower():
                         raise ValueError("See response from manager")
                     
@@ -269,16 +269,16 @@ colors = {
     "Red": "Red",
 }
 
-class Arduino1:
-    def isOn(self):
-        pass
+#class Arduino1:
+#    def isOn(self):
+#        pass
 
-fixed_string = ""
-i = 0
+
 
 def parse_code(code, verify=True, task_queue=None, response_queue=None, run_cmd_func=None, arduinos=[]):
     global fixed_string, i
     returned = ""
+    fixed_string = ""
     evaluation = False
     increase_indent = False
     expected_indent = 0
