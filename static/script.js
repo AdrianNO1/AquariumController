@@ -86,7 +86,7 @@ if (overwriteNodesWithExample){
 
 let i = 0
 channels_names.forEach(e => {
-    channelsTable.innerHTML += `<tr><td class="selectable" onclick="selectRow(this)">${e}</td></td></tr>`
+    channelsTable.innerHTML += `<tr><td class="selectable" onclick="selectRow(this)">${e}</td><td><p id=${e.replace(" ", "_")}per>${e}%</p></td></tr>`
 
     channels[e] = mainSvg
         .append("g")
@@ -395,6 +395,20 @@ function dragstarted(event, d) {
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0)) // Position the tooltip above the node
         .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
     
+
+    let graphY
+    let links = getLinks(svg)
+    for (let i=0; i < links.length; i++){
+        let link = links[i]
+        if (link.source.time <= current_minutes && link.target.time >= current_minutes){
+            graphY = link.source.y + ((current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+            break
+        }
+    }
+
+    document.getElementById(svg_name.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
+
+
     document.getElementById("percentage").value = Math.round(d.percentage) + "%"
     document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
 }
@@ -458,6 +472,20 @@ function dragged(event, d) {
         .attr("x", d.x + (d.time > 1410 ? -45 : 0) + (d.time < 50 ? 45 : 0))
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0))
         .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
+
+
+    let graphY
+    let links = getLinks(svg)
+    for (let i=0; i < links.length; i++){
+        let link = links[i]
+        if (link.source.time <= current_minutes && link.target.time >= current_minutes){
+            graphY = link.source.y + ((current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+            break
+        }
+    }
+
+    document.getElementById(svg_name.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
+
     
     document.getElementById("percentage").value = Math.round(d.percentage) + "%"
     document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
@@ -563,6 +591,7 @@ document.getElementById("form").addEventListener("submit", function(event) {
                 .text(minutesToTimeFormat(selected.time) + ", " + Math.round(selected.percentage) + "%");
             
             refreshGraph(svg);
+            document.getElementById(svg_name.replace(" ", "_") + "per").innerText = document.getElementById("percentage").value
         }
     }
 });
@@ -639,8 +668,8 @@ function selectRow(row) {
         }
     }
 
-    
     document.getElementById("percentage").value = Math.round(yScale.invert(graphY)) + "%"
+    document.getElementById(row.innerText.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
     document.getElementById("time").value = minutesToTimeFormat(current_minutes).toString()
 
     row.classList.add('selected');
@@ -651,7 +680,9 @@ function selectRow(row) {
 //}
 
 window.onload = function() {
-    selectRow(document.querySelector('.selectable'));
+    document.querySelectorAll('.selectable').forEach(elem => {
+        selectRow(elem)
+    })
 };
 
 // Initialize the Ace Editor

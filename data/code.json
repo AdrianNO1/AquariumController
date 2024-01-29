@@ -1,3 +1,3 @@
 {
-    "code": "Lys1.analogWrite(3, Violet)"
+    "code": "Arduino1.analogWrite(3, Violet)"
 }

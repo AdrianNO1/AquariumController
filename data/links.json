@@ -147,43 +147,71 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 45,
+                "percentage": 0,
                 "x": 0,
-                "y": 138
+                "y": 250
             },
             "target": {
-                "time": 439,
-                "percentage": 7,
-                "x": 284,
-                "y": 232
+                "time": 195,
+                "percentage": 0,
+                "x": 126.00000071525574,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 439,
-                "percentage": 7,
-                "x": 284,
-                "y": 232
+                "time": 195,
+                "percentage": 0,
+                "x": 126.00000071525574,
+                "y": 250
             },
             "target": {
-                "time": 794,
+                "time": 552,
                 "percentage": 100,
-                "x": 513,
+                "x": 357,
                 "y": 0
             }
         },
         {
             "source": {
-                "time": 794,
+                "time": 552,
                 "percentage": 100,
-                "x": 513,
+                "x": 357,
                 "y": 0
+            },
+            "target": {
+                "time": 842,
+                "percentage": 100,
+                "x": 544,
+                "y": 0
+            }
+        },
+        {
+            "source": {
+                "time": 842,
+                "percentage": 100,
+                "x": 544,
+                "y": 0
+            },
+            "target": {
+                "time": 1212,
+                "percentage": 0,
+                "x": 783,
+                "y": 250
+            }
+        },
+        {
+            "source": {
+                "time": 1212,
+                "percentage": 0,
+                "x": 783,
+                "y": 250
             },
             "target": {
                 "time": 1439,
-                "percentage": 45,
+                "percentage": 0,
                 "x": 930,
-                "y": 138
+                "y": 250
             }
         }
     ],
