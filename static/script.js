@@ -1086,6 +1086,7 @@ document.getElementById("preview").addEventListener("click", function(){
             contentType: 'application/json',
             data: JSON.stringify({}),
             success: function(response) {
+                backgroundSvg.selectAll(".vertical-preview-bar").remove()
                 console.log(response.data);
                 if (response.data == "ok"){
                     preview_start = 0

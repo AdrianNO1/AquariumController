@@ -222,11 +222,11 @@ if __name__ == '__main__':
 
     # Function to run in the thread
     def thread_function():
-        main(task_queue, response_queue, test=True)
+        main(task_queue, response_queue, test=False)
 
     # Start the thread
     thread = threading.Thread(target=thread_function)
     thread.start()
 
     app.logger.info("starting app")
-    app.run(debug=False, port=2389)#, host="0.0.0.0")
+    app.run(debug=False, port=2389, host="0.0.0.0")

@@ -147,9 +147,9 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 0,
+                "percentage": 41,
                 "x": 0,
-                "y": 250
+                "y": 147
             },
             "target": {
                 "time": 195,
@@ -180,38 +180,38 @@
                 "y": 0
             },
             "target": {
-                "time": 842,
-                "percentage": 100,
-                "x": 544,
-                "y": 0
+                "time": 1128,
+                "percentage": 87,
+                "x": 729,
+                "y": 33
             }
         },
         {
             "source": {
-                "time": 842,
-                "percentage": 100,
-                "x": 544,
-                "y": 0
+                "time": 1128,
+                "percentage": 87,
+                "x": 729,
+                "y": 33
             },
             "target": {
-                "time": 1212,
-                "percentage": 0,
-                "x": 783,
-                "y": 250
+                "time": 1337,
+                "percentage": 63,
+                "x": 864,
+                "y": 93
             }
         },
         {
             "source": {
-                "time": 1212,
-                "percentage": 0,
-                "x": 783,
-                "y": 250
+                "time": 1337,
+                "percentage": 63,
+                "x": 864,
+                "y": 93
             },
             "target": {
                 "time": 1439,
-                "percentage": 0,
+                "percentage": 41,
                 "x": 930,
-                "y": 250
+                "y": 147
             }
         }
     ],
