@@ -1,6 +1,9 @@
 def main(task_queue, response_queue, test=False):
     try:
-        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re
+        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys
+        
+        sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+
         from datetime import datetime
         from custom_syntax import parse_code, get_current_strength
 

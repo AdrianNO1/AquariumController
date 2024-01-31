@@ -1,4 +1,7 @@
 import json, os, sys, re
+
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+
 from flask import Flask, request, jsonify, render_template, url_for
 from multiprocessing import Process
 from datetime import datetime

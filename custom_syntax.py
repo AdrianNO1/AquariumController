@@ -1,6 +1,8 @@
 import re, os, sys, queue, json, time
 from datetime import datetime, timedelta
 
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+
 def checkTime(time1, time2):
     current_time = datetime.utcnow().time()
     start_time = datetime.strptime(time1, "%H:%M").time()
@@ -125,11 +127,19 @@ def replace_time_with_function(input_string):
 
 def get_current_strength(color, minutes_of_day=None):
     with open(os.path.join("data", "links.json"), "r", encoding="utf-8") as f:
-        links = json.load(f)
+        for _ in range(10):
+            try:
+                links = json.load(f)
+                break
+            except Exception as e:
+                time.sleep(1)
+                #logger.warn(str(e))
+        else:
+            raise ValueError(str(e))
         throttle = json.load(open(os.path.join("data", "throttle.json"), "r", encoding="utf-8"))["throttle"]
         if color in links:
             if minutes_of_day == None:
-                now = datetime.now()
+                now = datetime.utcnow()
                 minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
 
             for link in links[color]:

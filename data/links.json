@@ -3,85 +3,85 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 56,
+                "percentage": 0,
                 "x": 0,
-                "y": 110
+                "y": 250
             },
             "target": {
-                "time": 178,
-                "percentage": 66,
-                "x": 115,
-                "y": 85
+                "time": 43,
+                "percentage": 0,
+                "x": 28,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 178,
-                "percentage": 66,
-                "x": 115,
-                "y": 85
+                "time": 43,
+                "percentage": 0,
+                "x": 28,
+                "y": 250
             },
             "target": {
-                "time": 294,
-                "percentage": 54,
-                "x": 190,
-                "y": 115
+                "time": 311,
+                "percentage": 0,
+                "x": 201,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 294,
-                "percentage": 54,
-                "x": 190,
-                "y": 115
+                "time": 311,
+                "percentage": 0,
+                "x": 201,
+                "y": 250
             },
             "target": {
-                "time": 458,
-                "percentage": 38,
-                "x": 296,
-                "y": 155
+                "time": 473,
+                "percentage": 0,
+                "x": 306,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 458,
-                "percentage": 38,
-                "x": 296,
-                "y": 155
+                "time": 473,
+                "percentage": 0,
+                "x": 306,
+                "y": 250
             },
             "target": {
-                "time": 723,
-                "percentage": 35,
-                "x": 467,
-                "y": 163
+                "time": 738,
+                "percentage": 0,
+                "x": 477,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 723,
-                "percentage": 35,
-                "x": 467,
-                "y": 163
+                "time": 738,
+                "percentage": 0,
+                "x": 477,
+                "y": 250
             },
             "target": {
-                "time": 1128,
-                "percentage": 39,
-                "x": 729,
-                "y": 153
+                "time": 1216,
+                "percentage": 0,
+                "x": 786,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 1128,
-                "percentage": 39,
-                "x": 729,
-                "y": 153
+                "time": 1216,
+                "percentage": 0,
+                "x": 786,
+                "y": 250
             },
             "target": {
                 "time": 1439,
-                "percentage": 56,
+                "percentage": 0,
                 "x": 930,
-                "y": 110
+                "y": 250
             }
         }
     ],
@@ -89,57 +89,57 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 65,
+                "percentage": 0,
                 "x": 0,
-                "y": 88
+                "y": 250
             },
             "target": {
-                "time": 354,
-                "percentage": 94,
-                "x": 229,
-                "y": 15
+                "time": 73,
+                "percentage": 0,
+                "x": 47,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 354,
-                "percentage": 94,
-                "x": 229,
-                "y": 15
+                "time": 73,
+                "percentage": 0,
+                "x": 47,
+                "y": 250
             },
             "target": {
-                "time": 504,
-                "percentage": 46,
-                "x": 326,
-                "y": 135
+                "time": 419,
+                "percentage": 0,
+                "x": 271,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 504,
-                "percentage": 46,
-                "x": 326,
-                "y": 135
+                "time": 419,
+                "percentage": 0,
+                "x": 271,
+                "y": 250
             },
             "target": {
-                "time": 1040,
-                "percentage": 32,
-                "x": 672,
-                "y": 170
+                "time": 1027,
+                "percentage": 0,
+                "x": 664,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 1040,
-                "percentage": 32,
-                "x": 672,
-                "y": 170
+                "time": 1027,
+                "percentage": 0,
+                "x": 664,
+                "y": 250
             },
             "target": {
                 "time": 1439,
-                "percentage": 65,
+                "percentage": 0,
                 "x": 930,
-                "y": 88
+                "y": 250
             }
         }
     ],
@@ -147,71 +147,113 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 41,
+                "percentage": 6,
                 "x": 0,
-                "y": 147
+                "y": 235
             },
             "target": {
-                "time": 195,
+                "time": 60,
                 "percentage": 0,
-                "x": 126.00000071525574,
+                "x": 38.55385684503126,
                 "y": 250
             }
         },
         {
             "source": {
-                "time": 195,
+                "time": 60,
                 "percentage": 0,
-                "x": 126.00000071525574,
+                "x": 38.55385684503126,
                 "y": 250
             },
             "target": {
-                "time": 552,
+                "time": 540,
+                "percentage": 0,
+                "x": 348.99235580264076,
+                "y": 250
+            }
+        },
+        {
+            "source": {
+                "time": 540,
+                "percentage": 0,
+                "x": 348.99235580264076,
+                "y": 250
+            },
+            "target": {
+                "time": 660,
+                "percentage": 10,
+                "x": 426.546212647672,
+                "y": 225
+            }
+        },
+        {
+            "source": {
+                "time": 660,
+                "percentage": 10,
+                "x": 426.546212647672,
+                "y": 225
+            },
+            "target": {
+                "time": 780,
                 "percentage": 100,
-                "x": 357,
+                "x": 504.10006949270326,
                 "y": 0
             }
         },
         {
             "source": {
-                "time": 552,
+                "time": 780,
                 "percentage": 100,
-                "x": 357,
+                "x": 504.10006949270326,
                 "y": 0
             },
             "target": {
-                "time": 1128,
-                "percentage": 87,
-                "x": 729,
-                "y": 33
+                "time": 1201,
+                "percentage": 100,
+                "x": 776,
+                "y": 0
             }
         },
         {
             "source": {
-                "time": 1128,
-                "percentage": 87,
-                "x": 729,
-                "y": 33
+                "time": 1201,
+                "percentage": 100,
+                "x": 776,
+                "y": 0
             },
             "target": {
-                "time": 1337,
-                "percentage": 63,
-                "x": 864,
-                "y": 93
+                "time": 1320,
+                "percentage": 10,
+                "x": 853,
+                "y": 225
             }
         },
         {
             "source": {
-                "time": 1337,
-                "percentage": 63,
-                "x": 864,
-                "y": 93
+                "time": 1320,
+                "percentage": 10,
+                "x": 853,
+                "y": 225
             },
             "target": {
                 "time": 1439,
-                "percentage": 41,
+                "percentage": 6,
                 "x": 930,
-                "y": 147
+                "y": 235
+            }
+        },
+        {
+            "source": {
+                "time": 1439,
+                "percentage": 6,
+                "x": 930,
+                "y": 235
+            },
+            "target": {
+                "time": 1439,
+                "percentage": 6,
+                "x": 930,
+                "y": 235
             }
         }
     ],
@@ -219,57 +261,57 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 28,
+                "percentage": 0,
                 "x": 0,
-                "y": 181
+                "y": 250
             },
             "target": {
-                "time": 387,
-                "percentage": 18,
-                "x": 250,
-                "y": 205
+                "time": 354,
+                "percentage": 0,
+                "x": 229,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 387,
-                "percentage": 18,
-                "x": 250,
-                "y": 205
+                "time": 354,
+                "percentage": 0,
+                "x": 229,
+                "y": 250
             },
             "target": {
-                "time": 925,
-                "percentage": 2,
-                "x": 598,
-                "y": 245
+                "time": 922,
+                "percentage": 0,
+                "x": 596,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 925,
-                "percentage": 2,
-                "x": 598,
-                "y": 245
+                "time": 922,
+                "percentage": 0,
+                "x": 596,
+                "y": 250
             },
             "target": {
-                "time": 1215,
-                "percentage": 33,
-                "x": 785,
-                "y": 167
+                "time": 1326,
+                "percentage": 0,
+                "x": 857,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 1215,
-                "percentage": 33,
-                "x": 785,
-                "y": 167
+                "time": 1326,
+                "percentage": 0,
+                "x": 857,
+                "y": 250
             },
             "target": {
                 "time": 1439,
-                "percentage": 28,
+                "percentage": 0,
                 "x": 930,
-                "y": 181
+                "y": 250
             }
         }
     ],
@@ -277,57 +319,99 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 13,
-                "x": 0,
-                "y": 217
-            },
-            "target": {
-                "time": 34,
-                "percentage": 14,
-                "x": 22,
-                "y": 215
-            }
-        },
-        {
-            "source": {
-                "time": 34,
-                "percentage": 14,
-                "x": 22,
-                "y": 215
-            },
-            "target": {
-                "time": 241,
-                "percentage": 16,
-                "x": 156,
-                "y": 210
-            }
-        },
-        {
-            "source": {
-                "time": 241,
-                "percentage": 16,
-                "x": 156,
-                "y": 210
-            },
-            "target": {
-                "time": 953,
                 "percentage": 0,
-                "x": 616,
+                "x": 0,
+                "y": 250
+            },
+            "target": {
+                "time": 585,
+                "percentage": 0,
+                "x": 378.07505211952747,
                 "y": 250
             }
         },
         {
             "source": {
-                "time": 953,
+                "time": 585,
                 "percentage": 0,
-                "x": 616,
+                "x": 378.07505211952747,
+                "y": 250
+            },
+            "target": {
+                "time": 750,
+                "percentage": 10,
+                "x": 484.6289089645587,
+                "y": 225
+            }
+        },
+        {
+            "source": {
+                "time": 750,
+                "percentage": 10,
+                "x": 484.6289089645587,
+                "y": 225
+            },
+            "target": {
+                "time": 870,
+                "percentage": 100,
+                "x": 562.2654621264767,
+                "y": 0
+            }
+        },
+        {
+            "source": {
+                "time": 870,
+                "percentage": 100,
+                "x": 562.2654621264767,
+                "y": 0
+            },
+            "target": {
+                "time": 1110,
+                "percentage": 100,
+                "x": 717.3731758165393,
+                "y": 0
+            }
+        },
+        {
+            "source": {
+                "time": 1110,
+                "percentage": 100,
+                "x": 717.3731758165393,
+                "y": 0
+            },
+            "target": {
+                "time": 1230,
+                "percentage": 10,
+                "x": 795.0097289784574,
+                "y": 225
+            }
+        },
+        {
+            "source": {
+                "time": 1230,
+                "percentage": 10,
+                "x": 795.0097289784574,
+                "y": 225
+            },
+            "target": {
+                "time": 1439,
+                "percentage": 0,
+                "x": 930,
+                "y": 250
+            }
+        },
+        {
+            "source": {
+                "time": 1439,
+                "percentage": 0,
+                "x": 930,
                 "y": 250
             },
             "target": {
                 "time": 1439,
-                "percentage": 13,
+                "percentage": 0,
                 "x": 930,
-                "y": 217
+                "y": 250
             }
         }
     ],
@@ -335,43 +419,43 @@
         {
             "source": {
                 "time": 0,
-                "percentage": 66,
+                "percentage": 0,
                 "x": 0,
-                "y": 86
+                "y": 250
             },
             "target": {
-                "time": 141,
-                "percentage": 87,
-                "x": 91,
-                "y": 33
+                "time": 122,
+                "percentage": 0,
+                "x": 79,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 141,
-                "percentage": 87,
-                "x": 91,
-                "y": 33
+                "time": 122,
+                "percentage": 0,
+                "x": 79,
+                "y": 250
             },
             "target": {
-                "time": 1099,
-                "percentage": 14,
-                "x": 710,
-                "y": 215
+                "time": 1100,
+                "percentage": 0,
+                "x": 711,
+                "y": 250
             }
         },
         {
             "source": {
-                "time": 1099,
-                "percentage": 14,
-                "x": 710,
-                "y": 215
+                "time": 1100,
+                "percentage": 0,
+                "x": 711,
+                "y": 250
             },
             "target": {
                 "time": 1439,
-                "percentage": 66,
+                "percentage": 0,
                 "x": 930,
-                "y": 86
+                "y": 250
             }
         }
     ]
