@@ -665,6 +665,7 @@ document.getElementById("upload").addEventListener("click", function(){
     channels_names.forEach(e => {
         links_data[e] = getLinks(channels[e])
     })
+    document.getElementById("upload").setAttribute("disabled","disabled")
     $.ajax({
         url: '/upload',
         type: 'POST',
@@ -673,10 +674,12 @@ document.getElementById("upload").addEventListener("click", function(){
         success: function(response) {
             console.log(response.message);
             document.getElementById("uploadStatus").textContent = response.message
+            document.getElementById("upload").removeAttribute("disabled");
         },
         error: function(error) {
             console.log(error);
             document.getElementById("uploadStatus").textContent = error
+            document.getElementById("upload").removeAttribute("disabled");
         }
     });
 })
@@ -738,232 +741,232 @@ window.onload = function() {
     selectRow(document.querySelector('.selectable'))
 };
 
-// Initialize the Ace Editor
-var editor = ace.edit("editor");
-// Set the theme
-editor.setTheme("ace/theme/monokai");
-// Set the mode to Python
-//editor.session.setMode("ace/mode/python");
-
-// Enable basic autocompletion and error annotations
-ace.require("ace/ext/language_tools");
-editor.setOptions({
-    enableBasicAutocompletion: true,
-    enableLiveAutocompletion: false,
-    enableSnippets: false
-});
-
-ace.define('ace/mode/my_custom_mode', ['require', 'exports', 'module', 'ace/lib/oop', 'ace/mode/text', 'ace/mode/text_highlight_rules'], function(require, exports, module) {
-var oop = require('ace/lib/oop');
-var TextMode = require('ace/mode/text').Mode;
-var TextHighlightRules = require('ace/mode/text_highlight_rules').TextHighlightRules;
-
-
-// Define custom highlight rules
-var MyCustomHighlightRules = function() {
-
-    var keywordMapper = this.createKeywordMapper({
-        'keyword': 'if|elif|else|to|or|and|not',
-        'function': 'analogWrite|isOn|isOff|print',
-        'constant': 'Time|Uv|Violet|Royal_Blue|Blue|White|Red'
-    }, 'identifier');
-
-    this.$rules = {
-        'start': [
-            {
-                token: 'comment', // Apply comment style
-                regex: '#.*$'
-            },
-            {
-                token: 'paren', // Apply style for (
-                regex: '[\\(]'
-            },
-            {
-                token: 'paren', // Apply style for )
-                regex: '[\\)]'
-            },
-            {
-                token: 'brace', // Apply style for {
-                regex: '[\\{]'
-            },
-            {
-                token: 'brace', // Apply style for }
-                regex: '[\\}]'
-            },
-            {
-                token: 'string', // Apply style for strings
-                regex: '"(?:[^"\\\\]|\\\\.)*"'
-            },
-            {
-                token: keywordMapper,
-                regex: '[a-zA-Z_$][a-zA-Z0-9_$]*\\b'
-            },
-            // ... other rules like strings, numbers, etc.
-        ]
-    };
-};
-oop.inherits(MyCustomHighlightRules, TextHighlightRules);
-
-// Define the mode
-var Mode = function() {
-    this.HighlightRules = MyCustomHighlightRules;
-    // ... other mode settings like folding rules, behaviors, etc.
-    
-    // Define custom behaviors
-    this.$behaviour = new (require("ace/mode/behaviour").Behaviour)();
-    this.$behaviour.add(":", "insertion", function (state, action, editor, session, text) {
-        if (text === '\n') {
-            var cursor = editor.getCursorPosition();
-            var line = session.doc.getLine(cursor.row);
-            if (/:\s*$/.test(line)) { // Check if 'then' is at the end of the line
-                // Calculate current indentation
-                var indentation = line.match(/^\s*/)[0];
-                // Add an extra tab for the new indentation level
-                var extraIndent = '\t';
-                return {
-                    text: '\n' + indentation + extraIndent, // Add a newline and the current indentation plus an extra tab
-                    selection: [1, indentation.length + extraIndent.length]
-                };
-            }
-        }
-    });
-};
-oop.inherits(Mode, TextMode);
-
-// Exports the mode
-exports.Mode = Mode;
-});
-
-// Then, to use your custom mode in the editor:
-var editor = ace.edit("editor");
-editor.session.setMode('ace/mode/my_custom_mode');
-
-editor.session.setValue(codeText)
-
-
-// Example of adding a custom error annotation
-//editor.session.setAnnotations([{
-//    row: 0, // The row (line number, starting at 0)
-//    column: 0, // The column (character index, starting at 0)
-//    text: "Example error", // The error message
-//    type: "error" // The annotation type ('error', 'warning', or 'info')
-//}]);
+//// Initialize the Ace Editor
+//var editor = ace.edit("editor");
+//// Set the theme
+//editor.setTheme("ace/theme/monokai");
+//// Set the mode to Python
+////editor.session.setMode("ace/mode/python");
 //
-// Function to send the code to the Flask app for linting
-//function lintCode() {
-//    var pythonCode = editor.getValue();
-//    fetch('/lint', {
-//        method: 'POST',
-//        body: pythonCode,
-//        headers: {
-//            'Content-Type': 'text/plain'
-//        }
-//    })
-//    .then(response => response.json())
-//    .then(annotations => {
-//        // Update the editor with the linting annotations
-//        editor.session.setAnnotations(annotations);
-//    })
-//    .catch(error => console.error('Error linting code:', error));
-//}
-//
-//// Listen for changes and update annotations
-//editor.session.on('change', function() {
-//    // Debounce the linting to avoid excessive requests
-//    clearTimeout(window.lintingTimeout);
-//    window.lintingTimeout = setTimeout(lintCode, 1000);
+//// Enable basic autocompletion and error annotations
+//ace.require("ace/ext/language_tools");
+//editor.setOptions({
+//    enableBasicAutocompletion: true,
+//    enableLiveAutocompletion: false,
+//    enableSnippets: false
 //});
+//
+//ace.define('ace/mode/my_custom_mode', ['require', 'exports', 'module', 'ace/lib/oop', 'ace/mode/text', 'ace/mode/text_highlight_rules'], function(require, exports, module) {
+//var oop = require('ace/lib/oop');
+//var TextMode = require('ace/mode/text').Mode;
+//var TextHighlightRules = require('ace/mode/text_highlight_rules').TextHighlightRules;
+//
+//
+//// Define custom highlight rules
+//var MyCustomHighlightRules = function() {
+//
+//    var keywordMapper = this.createKeywordMapper({
+//        'keyword': 'if|elif|else|to|or|and|not',
+//        'function': 'analogWrite|isOn|isOff|print',
+//        'constant': 'Time|Uv|Violet|Royal_Blue|Blue|White|Red'
+//    }, 'identifier');
+//
+//    this.$rules = {
+//        'start': [
+//            {
+//                token: 'comment', // Apply comment style
+//                regex: '#.*$'
+//            },
+//            {
+//                token: 'paren', // Apply style for (
+//                regex: '[\\(]'
+//            },
+//            {
+//                token: 'paren', // Apply style for )
+//                regex: '[\\)]'
+//            },
+//            {
+//                token: 'brace', // Apply style for {
+//                regex: '[\\{]'
+//            },
+//            {
+//                token: 'brace', // Apply style for }
+//                regex: '[\\}]'
+//            },
+//            {
+//                token: 'string', // Apply style for strings
+//                regex: '"(?:[^"\\\\]|\\\\.)*"'
+//            },
+//            {
+//                token: keywordMapper,
+//                regex: '[a-zA-Z_$][a-zA-Z0-9_$]*\\b'
+//            },
+//            // ... other rules like strings, numbers, etc.
+//        ]
+//    };
+//};
+//oop.inherits(MyCustomHighlightRules, TextHighlightRules);
+//
+//// Define the mode
+//var Mode = function() {
+//    this.HighlightRules = MyCustomHighlightRules;
+//    // ... other mode settings like folding rules, behaviors, etc.
+//    
+//    // Define custom behaviors
+//    this.$behaviour = new (require("ace/mode/behaviour").Behaviour)();
+//    this.$behaviour.add(":", "insertion", function (state, action, editor, session, text) {
+//        if (text === '\n') {
+//            var cursor = editor.getCursorPosition();
+//            var line = session.doc.getLine(cursor.row);
+//            if (/:\s*$/.test(line)) { // Check if 'then' is at the end of the line
+//                // Calculate current indentation
+//                var indentation = line.match(/^\s*/)[0];
+//                // Add an extra tab for the new indentation level
+//                var extraIndent = '\t';
+//                return {
+//                    text: '\n' + indentation + extraIndent, // Add a newline and the current indentation plus an extra tab
+//                    selection: [1, indentation.length + extraIndent.length]
+//                };
+//            }
+//        }
+//    });
+//};
+//oop.inherits(Mode, TextMode);
+//
+//// Exports the mode
+//exports.Mode = Mode;
+//});
+//
+//// Then, to use your custom mode in the editor:
+//var editor = ace.edit("editor");
+//editor.session.setMode('ace/mode/my_custom_mode');
+//
+//editor.session.setValue(codeText)
+//
+//
+//// Example of adding a custom error annotation
+////editor.session.setAnnotations([{
+////    row: 0, // The row (line number, starting at 0)
+////    column: 0, // The column (character index, starting at 0)
+////    text: "Example error", // The error message
+////    type: "error" // The annotation type ('error', 'warning', or 'info')
+////}]);
+////
+//// Function to send the code to the Flask app for linting
+////function lintCode() {
+////    var pythonCode = editor.getValue();
+////    fetch('/lint', {
+////        method: 'POST',
+////        body: pythonCode,
+////        headers: {
+////            'Content-Type': 'text/plain'
+////        }
+////    })
+////    .then(response => response.json())
+////    .then(annotations => {
+////        // Update the editor with the linting annotations
+////        editor.session.setAnnotations(annotations);
+////    })
+////    .catch(error => console.error('Error linting code:', error));
+////}
+////
+////// Listen for changes and update annotations
+////editor.session.on('change', function() {
+////    // Debounce the linting to avoid excessive requests
+////    clearTimeout(window.lintingTimeout);
+////    window.lintingTimeout = setTimeout(lintCode, 1000);
+////});
+//
+//function setCodeButtonsDisabled(disabled){
+//    document.getElementById("runonce").disabled = disabled
+//    document.getElementById("verify").disabled = disabled
+//    document.getElementById("uploadandrun").disabled = disabled
+//}
 
-function setCodeButtonsDisabled(disabled){
-    document.getElementById("runonce").disabled = disabled
-    document.getElementById("verify").disabled = disabled
-    document.getElementById("uploadandrun").disabled = disabled
-}
 
+//document.getElementById("verify").addEventListener("click", function(){
+//    setCodeButtonsDisabled(true)
+//    $.ajax({
+//        url: '/verify',
+//        type: 'POST',
+//        contentType: 'application/json',
+//        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
+//        success: function(response) {
+//            console.log(response);
+//            if (response.error){
+//                document.getElementById("codeStatus").innerText = response.error
+//                document.getElementById("codeStatus").style.color = "red"
+//            } else{
+//                document.getElementById("codeStatus").innerText = "OK"
+//                document.getElementById("codeStatus").style.color = "green"
+//            }
+//
+//            setCodeButtonsDisabled(false)
+//        },
+//        error: function(error) {
+//            console.log(error);
+//            document.getElementById("codeStatus").innerText = error
+//            document.getElementById("codeStatus").style.color = "red"
+//            setCodeButtonsDisabled(false)
+//        }
+//    });
+//})
 
-document.getElementById("verify").addEventListener("click", function(){
-    setCodeButtonsDisabled(true)
-    $.ajax({
-        url: '/verify',
-        type: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
-        success: function(response) {
-            console.log(response);
-            if (response.error){
-                document.getElementById("codeStatus").innerText = response.error
-                document.getElementById("codeStatus").style.color = "red"
-            } else{
-                document.getElementById("codeStatus").innerText = "OK"
-                document.getElementById("codeStatus").style.color = "green"
-            }
+//document.getElementById("runonce").addEventListener("click", function(){
+//    setCodeButtonsDisabled(true)
+//    $.ajax({
+//        url: '/run once',
+//        type: 'POST',
+//        contentType: 'application/json',
+//        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
+//        success: function(response) {
+//            console.log(response);
+//            if (response.error){
+//                document.getElementById("codeStatus").innerText = response.error
+//                document.getElementById("codeStatus").style.color = "red"
+//            } else{
+//                document.getElementById("codeStatus").innerText = "OK\n" + response.message
+//                document.getElementById("codeStatus").style.color = "green"
+//            }
+//
+//            setCodeButtonsDisabled(false)
+//        },
+//        error: function(error) {
+//            console.log(error);
+//            document.getElementById("codeStatus").innerText = error
+//            document.getElementById("codeStatus").style.color = "red"
+//            setCodeButtonsDisabled(false)
+//        }
+//    });
+//})
 
-            setCodeButtonsDisabled(false)
-        },
-        error: function(error) {
-            console.log(error);
-            document.getElementById("codeStatus").innerText = error
-            document.getElementById("codeStatus").style.color = "red"
-            setCodeButtonsDisabled(false)
-        }
-    });
-})
-
-document.getElementById("runonce").addEventListener("click", function(){
-    setCodeButtonsDisabled(true)
-    $.ajax({
-        url: '/run once',
-        type: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
-        success: function(response) {
-            console.log(response);
-            if (response.error){
-                document.getElementById("codeStatus").innerText = response.error
-                document.getElementById("codeStatus").style.color = "red"
-            } else{
-                document.getElementById("codeStatus").innerText = "OK\n" + response.message
-                document.getElementById("codeStatus").style.color = "green"
-            }
-
-            setCodeButtonsDisabled(false)
-        },
-        error: function(error) {
-            console.log(error);
-            document.getElementById("codeStatus").innerText = error
-            document.getElementById("codeStatus").style.color = "red"
-            setCodeButtonsDisabled(false)
-        }
-    });
-})
-
-document.getElementById("uploadandrun").addEventListener("click", function(){
-    setCodeButtonsDisabled(true)
-    $.ajax({
-        url: '/uploadandrun',
-        type: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
-        success: function(response) {
-            console.log(response);
-            if (response.error){
-                document.getElementById("codeStatus").innerText = response.error
-                document.getElementById("codeStatus").style.color = "red"
-            } else{
-                document.getElementById("codeStatus").innerText = "OK\n" + response.message
-                document.getElementById("codeStatus").style.color = "green"
-            }
-
-            setCodeButtonsDisabled(false)
-        },
-        error: function(error) {
-            console.log(error);
-            document.getElementById("codeStatus").innerText = error
-            document.getElementById("codeStatus").style.color = "red"
-            setCodeButtonsDisabled(false)
-        }
-    });
-})
+//document.getElementById("uploadandrun").addEventListener("click", function(){
+//    setCodeButtonsDisabled(true)
+//    $.ajax({
+//        url: '/uploadandrun',
+//        type: 'POST',
+//        contentType: 'application/json',
+//        data: JSON.stringify({code: editor.getValue(), arduinos: arduinos.map(x => x.name)}),
+//        success: function(response) {
+//            console.log(response);
+//            if (response.error){
+//                document.getElementById("codeStatus").innerText = response.error
+//                document.getElementById("codeStatus").style.color = "red"
+//            } else{
+//                document.getElementById("codeStatus").innerText = "OK\n" + response.message
+//                document.getElementById("codeStatus").style.color = "green"
+//            }
+//
+//            setCodeButtonsDisabled(false)
+//        },
+//        error: function(error) {
+//            console.log(error);
+//            document.getElementById("codeStatus").innerText = error
+//            document.getElementById("codeStatus").style.color = "red"
+//            setCodeButtonsDisabled(false)
+//        }
+//    });
+//})
 
 
 
@@ -1008,14 +1011,14 @@ function editTitle(buttonElement) {
         var newTitle = titleElement.textContent;
         // Save newTitle to your data or server
 
-        buttonElement.disabed = true
+        buttonElement.setAttribute("disabled","disabled")
         $.ajax({
             url: '/rename',
             type: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({"device": buttonElement.id, "newname": newTitle}),
             success: function(response) {
-                buttonElement.disabed = false
+                buttonElement.removeAttribute("disabled")
                 buttonElement.textContent = 'Edit';
                 if (!response.data){
                     console.log(response)
@@ -1032,14 +1035,14 @@ function editTitle(buttonElement) {
 }
 
 document.getElementById("refresh cards").addEventListener("click", function(){
-    document.getElementById("refresh cards").disabed = true
+    document.getElementById("refresh cards").setAttribute("disabled","disabled")
     $.ajax({
         url: '/load arduino info',
         type: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({}),
         success: function(response) {
-            document.getElementById("refresh cards").disabed = false
+            document.getElementById("refresh cards").removeAttribute("disabled")
             if (response.data){
                 console.log(JSON.parse(response.data))
                 arduinos = JSON.parse(response.data);
@@ -1065,7 +1068,7 @@ document.getElementById("refresh cards").addEventListener("click", function(){
             }
         },
         error: function(error) {
-            document.getElementById("refresh cards").disabed = false
+            document.getElementById("refresh cards").removeAttribute("disabled")
             console.log(error);
             document.getElementById("cards status").textContent = "Error: Unable to connect"
         }

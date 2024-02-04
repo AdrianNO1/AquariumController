@@ -203,13 +203,6 @@ def main(task_queue, response_queue, test=False):
                         device["status"] = "No response"
                     return False
                 
-                with open(os.path.join("data", "hcars.json"), "r", encoding="utf-8") as f:
-                    hcars = json.load(f)
-                
-                hcars[list(hcars.keys())[list(hcars.values()).index(old_name)]] = recieved
-
-                with open(os.path.join("data", "hcars.json"), "w", encoding="utf-8") as f:
-                    json.dump(hcars, f)
 
                 device["name"] = recieved
                 device["status"] = "Responded"
@@ -326,7 +319,7 @@ def main(task_queue, response_queue, test=False):
             setup_usb_listener(on_connect, on_disconnect)
 
         hardcoded_light_pins = {
-            "hcar1": [
+            "mainLys": [
                 {"color": "Uv", "pin": 11},
                 {"color": "Violet", "pin": 6},
                 {"color": "Royal Blue", "pin": 10},
@@ -359,15 +352,12 @@ def main(task_queue, response_queue, test=False):
 
 
 
-            with open(os.path.join("data", "hcars.json"), "r", encoding="utf-8") as  f:
-                hcars = json.load(f)
 
-            for v in hardcoded_light_pins:
-                name = hcars[v]
-                matches = list(filter(lambda x: x["name"] == name, serial_devices))
+            for name in hardcoded_light_pins:
+                matches = list(filter(lambda x: x["name"].startswith(name), serial_devices))
                 if matches:
                     for device in matches:
-                        for color in hardcoded_light_pins[v]:
+                        for color in hardcoded_light_pins[name]:
                             if preview_start != 0:
                                 if time.time() - preview_start >= preview_duration:
                                     preview_start = 0
@@ -379,9 +369,9 @@ def main(task_queue, response_queue, test=False):
                                 minutes_of_day = None
                                 
                             run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"], minutes_of_day=minutes_of_day)])
-                            time.sleep(0.2)
+                            time.sleep(0.05)
                 else:
-                    logger.warn(f'Unable to find arduino: "{name}" from hardcoded thing')
+                    logger.warn(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
 
 
             
