@@ -158,6 +158,8 @@ def main(task_queue, response_queue, test=False):
                 if recieved != command:
                     wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
                     logger.warn(wrn)
+                    if device["error"]:
+                        raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
                     device["error"] = "Error: " + wrn
                     device["status"] = "Unexpected response"
                     if not recieved.strip("\n"):

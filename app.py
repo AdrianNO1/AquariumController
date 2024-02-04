@@ -225,7 +225,17 @@ if __name__ == '__main__':
 
     # Function to run in the thread
     def thread_function():
-        main(task_queue, response_queue, test=False)
+        def start_thread():
+            thread = threading.Thread(target=main, args=(task_queue, response_queue, False))
+            thread.start()
+            return thread
+        thread = start_thread()
+        while True:
+            if not thread.is_alive():
+                app.logger.warn("It seems the manager has taken an unexpected coffee break... permanently. R.I.P. Initiating resurrection sequence.")
+                thread = start_thread()
+            time.sleep(10)
+        
 
     # Start the thread
     thread = threading.Thread(target=thread_function)
