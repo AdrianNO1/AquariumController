@@ -1,11 +1,12 @@
 def main(task_queue, response_queue, test=False):
     try:
-        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys
+        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys, zipfile, dropbox
         
         sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
         from datetime import datetime
         from custom_syntax import parse_code, get_current_strength
+        from logging.handlers import TimedRotatingFileHandler
 
         if not test:
             from usb_listener import setup_usb_listener
@@ -16,6 +17,30 @@ def main(task_queue, response_queue, test=False):
 
         preview_start = 0
 
+        ACCESS_TOKEN = os.getenv("DROPBOX_API_KEY")
+
+        def upload_file_to_dropbox(local_path):
+            dbx = dropbox.Dropbox(ACCESS_TOKEN)
+            dropbox_path = "/AquariumControllerLogs/" + os.path.basename(local_path)
+            with open(local_path, 'rb') as f:
+                dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+
+
+        class CompressingTimedRotatingFileHandler(TimedRotatingFileHandler):
+            def doRollover(self):
+                super().doRollover()
+
+                log_files = self.getFilesToDelete()
+                if log_files:
+                    oldest_log = log_files[-1]
+
+                    zip_filename = f"{oldest_log}.zip"
+                    with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                        zipf.write(oldest_log, os.path.basename(oldest_log))
+                    upload_file_to_dropbox(zip_filename)
+                    os.remove(oldest_log)
+                    return zip_filename
+
         if not logger.handlers:
             # Set level of logger
             logger.setLevel(logging.INFO)
@@ -23,8 +48,18 @@ def main(task_queue, response_queue, test=False):
             # Create handlers
             current_log_path = os.path.join(os.path.join("logs", "manager"), datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
             open(current_log_path, "w")
-            handler = logging.FileHandler(current_log_path, encoding="utf-8")  # Log to a file
+            #handler = logging.FileHandler(current_log_path, encoding="utf-8")  # Log to a file
+            handler = CompressingTimedRotatingFileHandler(
+                current_log_path,              # Base file name
+                when='H',              # Rotate the logs every Hour
+                interval=2,            # Interval is 2 (combined with 'when' this means every hour)
+                #backupCount=24,        # Keep 24 backup files (24 hours)
+                encoding='utf-8',      # Use utf-8 encoding for the log files
+                delay=False,           # Do not delay the creation of the file
+                utc=False              # Use local time for the timestamp in the file name
+            )
             handler.setLevel(logging.INFO)
+            handler.namer = lambda name: name.replace(".log", "") + ".log"
 
             # Create formatters and add it to handlers
             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -39,6 +74,7 @@ def main(task_queue, response_queue, test=False):
             logger.info("initializing", serial_device)
             try:
                 serial_device["serial"].write(bytes("whodis\n", encoding="utf-8"))
+                time.sleep(0.05)
                 name = serial_device["serial"].readline().decode().strip().strip(";")
                 if not name:
                     logger.error("serial_device did not recieve a name. Possible timeout")
@@ -72,7 +108,7 @@ def main(task_queue, response_queue, test=False):
                     break
         
         def run_command(device, cmd, args):
-            logger.info(f"Executing function {cmd} with args {args} on {device['name']}")
+            logger.info(f"Executing function {cmd} with args {args} on {device['name']} ({device['device']})")
             if cmd == "isOn" or cmd == "isOff":
                 command = "p\n"
                 logger.info(f"Sending: {command}")
@@ -108,10 +144,13 @@ def main(task_queue, response_queue, test=False):
                 logger.info(f"Sending: {command}")
                 try:
                     device["serial"].write(bytes(command, encoding="utf-8"))
+                    time.sleep(0.05)
                     recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return False
+                
+                
                 
                 #print("Received: " + recieved)
                 device["lastused"] = int(time.time())
@@ -121,10 +160,16 @@ def main(task_queue, response_queue, test=False):
                     logger.warn(wrn)
                     device["error"] = "Error: " + wrn
                     device["status"] = "Unexpected response"
-                    if not recieved:
-                        logger.warn(f"usb device {device['name']} did not respond")
+                    if not recieved.strip("\n"):
+                        logger.warn(f"usb device {device['name']} did not respond. Attempting restart")
                         device["error"] = "Error: Device is not responding"
                         device["status"] = "No response"
+                        device["serial"].setDTR(False)
+                        time.sleep(1)
+                        device["serial"].setDTR(True)
+                        time.sleep(2)
+
+                        logger.info("restarted device " + str(device["device"]))
                     return False
                 
                 device["status"] = "Responded"
@@ -334,11 +379,12 @@ def main(task_queue, response_queue, test=False):
                                 minutes_of_day = None
                                 
                             run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"], minutes_of_day=minutes_of_day)])
+                            time.sleep(0.2)
                 else:
                     logger.warn(f'Unable to find arduino: "{name}" from hardcoded thing')
 
 
-
+            
 
 
 
@@ -346,9 +392,11 @@ def main(task_queue, response_queue, test=False):
             if seconds < 0:
                 logger.warn(f"spent {-seconds} overtime on serial communication")
                 read_queue(timeout=0.2)
+                handler.flush()
             else:
                 while update_frequency-(time.time()-start) > 0:
                     read_queue(timeout=0.2)
+                handler.flush()
 
 
     except Exception as e:
