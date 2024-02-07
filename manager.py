@@ -17,10 +17,16 @@ def main(task_queue, response_queue, test=False):
 
         preview_start = 0
 
-        ACCESS_TOKEN = os.getenv("DROPBOX_API_KEY")
+        refresh_token = os.getenv("DROPBOX_API_KEY")
+
+        def refresh_access_token(refresh_token):
+            dbx = dropbox.DropboxOAuth2FlowNoRedirect(os.getenv("DROPBOX_APP_KEY"), os.getenv("DROPBOX_APP_SECRET"))
+            oauth_result = dbx.refresh_access_token(refresh_token)
+            return oauth_result.access_token
 
         def upload_file_to_dropbox(local_path):
-            dbx = dropbox.Dropbox(ACCESS_TOKEN)
+            access_token = refresh_access_token(refresh_token)
+            dbx = dropbox.Dropbox(access_token)
             dropbox_path = "/AquariumControllerLogs/" + os.path.basename(local_path)
             with open(local_path, 'rb') as f:
                 dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
@@ -37,7 +43,7 @@ def main(task_queue, response_queue, test=False):
                     zip_filename = f"{oldest_log}.zip"
                     with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
                         zipf.write(oldest_log, os.path.basename(oldest_log))
-                    upload_file_to_dropbox(zip_filename)
+                    #upload_file_to_dropbox(zip_filename)
                     os.remove(oldest_log)
                     return zip_filename
 
@@ -94,7 +100,9 @@ def main(task_queue, response_queue, test=False):
             logger.info(f"USB device initialized: {serial_device['name']}")
 
         def start_initialization_timer(device):
-            threading.Timer(2, initialize, args=({"device": device, "serial": serial.Serial(device, 9600, timeout=1), "name": None},)).start()
+            ser = serial.Serial(device, 9600, timeout=1)#, dsrdtr=True)
+           # ser.setDTR(False)
+            threading.Timer(2, initialize, args=({"device": device, "serial": ser, "name": None},)).start()
 
         def on_connect(device):
             logger.info(f"USB device connected: {device.device_node}")
@@ -163,15 +171,9 @@ def main(task_queue, response_queue, test=False):
                     device["error"] = "Error: " + wrn
                     device["status"] = "Unexpected response"
                     if not recieved.strip("\n"):
-                        logger.warn(f"usb device {device['name']} did not respond. Attempting restart")
+                        logger.warn(f"usb device {device['name']} did not respond.")
                         device["error"] = "Error: Device is not responding"
                         device["status"] = "No response"
-                        device["serial"].setDTR(False)
-                        time.sleep(1)
-                        device["serial"].setDTR(True)
-                        time.sleep(2)
-
-                        logger.info("restarted device " + str(device["device"]))
                     return False
                 
                 device["status"] = "Responded"
@@ -337,7 +339,7 @@ def main(task_queue, response_queue, test=False):
         default_update_frequency = 5
         update_frequency = default_update_frequency
         
-        time.sleep(update_frequency)
+        time.sleep(3.5)
         while True:
             start = time.time()
 
@@ -373,7 +375,8 @@ def main(task_queue, response_queue, test=False):
                             run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"], minutes_of_day=minutes_of_day)])
                             time.sleep(0.05)
                 else:
-                    logger.warn(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
+                    logger.error(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
+                    raise RuntimeError(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
 
 
             
@@ -384,11 +387,11 @@ def main(task_queue, response_queue, test=False):
             if seconds < 0:
                 logger.warn(f"spent {-seconds} overtime on serial communication")
                 read_queue(timeout=0.2)
-                handler.flush()
+                #handler.flush()
             else:
                 while update_frequency-(time.time()-start) > 0:
                     read_queue(timeout=0.2)
-                handler.flush()
+                #handler.flush()
 
 
     except Exception as e:

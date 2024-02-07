@@ -234,7 +234,7 @@ if __name__ == '__main__':
             if not thread.is_alive():
                 app.logger.warn("It seems the manager has taken an unexpected coffee break... permanently. R.I.P. Initiating resurrection sequence.")
                 thread = start_thread()
-            time.sleep(10)
+            time.sleep(30*60)
         
 
     # Start the thread
