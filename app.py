@@ -222,6 +222,8 @@ if __name__ == '__main__':
     task_queue = queue.Queue()
     response_queue = queue.Queue()
 
+    def full_restart():
+        os.execv(sys.executable, ['python3'] + sys.argv)
 
     # Function to run in the thread
     def thread_function():
@@ -232,8 +234,13 @@ if __name__ == '__main__':
         thread = start_thread()
         while True:
             if not thread.is_alive():
-                app.logger.warn("It seems the manager has taken an unexpected coffee break... permanently. R.I.P. Initiating resurrection sequence.")
-                thread = start_thread()
+                app.logger.warn("It seems the manager has taken an unexpected coffee break... R.I.P. Initiating resurrection sequence.")
+                now = datetime.utcnow()
+                minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
+                if minutes_of_day > 840 and minutes_of_day < 1200:
+                    thread = start_thread()
+                else:
+                    full_restart()
             time.sleep(30*60)
         
 

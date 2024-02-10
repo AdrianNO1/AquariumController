@@ -336,7 +336,7 @@ def main(task_queue, response_queue, test=False):
         # also change in script.js
         preview_duration = 60 # seconds
 
-        default_update_frequency = 5
+        default_update_frequency = 120
         update_frequency = default_update_frequency
         
         time.sleep(3.5)
@@ -402,7 +402,8 @@ def main(task_queue, response_queue, test=False):
         print("FATAL ERROR:", basic_err_info)
         logger.fatal(basic_err_info)
         response_queue.put("\nFATAL INTERNAL ERROR. Arduino manager has crashed. Please contact the coder guy. The following information has been saved to the logs:\n" + basic_err_info)
-
+        for ser in serial_devices:
+            ser.close()
 if __name__ == "__main__":
     main(test=True)
 
