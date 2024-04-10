@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <EEPROM.h>
-//
+
 const int MAX_INPUT_LENGTH = 64; // Maximum length for input command
 const int PWM_PINS[] = {3, 5, 6, 9, 10, 11}; // PWM-capable pins on Arduino Nano
 const int NUM_PWM_PINS = sizeof(PWM_PINS) / sizeof(PWM_PINS[0]);
@@ -64,13 +64,13 @@ String doStuff(String line) {
                 analogWrite(pin, value);
                 returned += cmd + ";"; // Echo the command back
               } else{
-                returned += "Error: Invalid value;";
+                //returned += "Error: Invalid value;";
               }
             } else {
-              returned += "Error: Invalid pin;";
+              //returned += "Error: Invalid pin;";
             }
           } else {
-            returned += "Error: Invalid arguments for 's' command;";
+            //returned += "Error: Invalid arguments for 's' command;";
           }
           break;
         case 'p':
@@ -114,7 +114,9 @@ void loop() {
     if (inChar == '\n') {
       inputBuffer[bufferPosition] = '\0'; // Null-terminate the string
       String output = doStuff(inputBuffer);
-      Serial.println(output);
+      if (output.length() > 0){
+        Serial.println(output);
+      }
       bufferPosition = 0; // Reset buffer position
     } else if (inChar >= 32 && inChar <= 126) { // Readable ASCII characters
       inputBuffer[bufferPosition++] = inChar;

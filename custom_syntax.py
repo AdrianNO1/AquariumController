@@ -125,7 +125,7 @@ def replace_time_with_function(input_string):
     #print(non_time_conditions_dict, result)
     return result, non_time_conditions_dict
 
-def get_current_strength(color, minutes_of_day=None):
+def get_current_strength(color, mult=1, minutes_of_day=None):
     with open(os.path.join("data", "links.json"), "r", encoding="utf-8") as f:
         for _ in range(10):
             try:
@@ -149,7 +149,7 @@ def get_current_strength(color, minutes_of_day=None):
                         return "Error in get_current_strength: division by zero. Two nodes have the same time"
                     else:
                         percentage = link["source"]["percentage"] + (1 - (link["target"]["time"] - minutes_of_day) / total_duration) * (link["target"]["percentage"] - link["source"]["percentage"])
-                        return max(min(round(percentage/100*255*(throttle/100)), 255), 0)
+                        return max(min(round(percentage/100*255*(throttle/100*mult)), 255), 0)
                     
         else:
             return f"Error in get_current_strength: Unable to find {color} in link"
