@@ -1,4 +1,18 @@
-import json, os, sys, re
+import json, os, sys, re, time
+
+if len(sys.argv) > 1 and sys.argv[1] == "restart":
+    print("waiting 10")
+    time.sleep(10)
+    start = 0
+else:
+    start = time.time()
+
+try:
+    num = int(sys.argv[2])+1
+except:
+    num = 0
+
+print(f"APP HAS CRASHED {num} TIMES THIS SESSION")
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
@@ -8,7 +22,7 @@ from datetime import datetime
 from manager import main
 from custom_syntax import parse_code
 import threading
-import queue, time, logging, glob
+import queue, logging, glob, subprocess, signal, vonage
 
 app = Flask(__name__)
 
@@ -98,6 +112,14 @@ def upload():
         json.dump({"throttle": data["throttle"]}, f, indent=4)
 
     response = {'message': 'ok'}
+
+    task_queue.put("update")
+    try:
+        response_queue.get(timeout=5)
+    except:
+        response = {'message': 'file updated. But no response from manager'}
+
+    
     return jsonify(response)
 
 @app.route('/verify', methods=['POST'])
@@ -217,13 +239,18 @@ def cancelpreview():
 
 
 
+
 if __name__ == '__main__':
     # Create queues for communication
     task_queue = queue.Queue()
     response_queue = queue.Queue()
 
-    def full_restart():
-        os.execv(sys.executable, ['python3'] + sys.argv)
+
+    def fakemain(task_queue, a, b):
+        print("fake thing running")
+        time.sleep(3)
+        print("raising")
+        raise ValueError("AAAAAAAAAAAAAAAAAAA")
 
     # Function to run in the thread
     def thread_function():
@@ -234,14 +261,48 @@ if __name__ == '__main__':
         thread = start_thread()
         while True:
             if not thread.is_alive():
-                app.logger.warn("It seems the manager has taken an unexpected coffee break... R.I.P. Initiating resurrection sequence.")
-                now = datetime.utcnow()
-                minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
-                if minutes_of_day > 840 and minutes_of_day < 1200:
-                    thread = start_thread()
+                app.logger.warning("It seems the manager has taken an unexpected coffee break... R.I.P.")
+                print("MANAGER IS DEAD!!!!")
+                time.sleep(10)
+                now = datetime.now()
+                minutes = now.hour*60+now.minute
+                if minutes < 900 or minutes > 1080 and time.time()-start > 15:
+                    print("sending sms")
+                    client = vonage.Client(key="8a5d61ed", secret="Ylf6nHiJ9VJkPj5E")
+                    sms = vonage.Sms(client)
+
+                    responseData = sms.send_message(
+                        {
+                            "from": "Vonage APIs",
+                            "to": "4798035320",
+                            "text": "abnormal crash time\n",
+                        }
+                    )
+
+                    if responseData["messages"][0]["status"] == "0":
+                        print("Message sent successfully.")
+                        app.logger.info("Message sent successfully.")
+                    else:
+                        print(f"Message failed with error: {responseData['messages'][0]['error-text']}")
+                        app.logger.warning(f"Message failed with error: {responseData['messages'][0]['error-text']}")
+
+                    print("waiting 2 hours")
+                    time.sleep(2*60*60)
                 else:
-                    full_restart()
-            time.sleep(30*60)
+                    print("waiting untill 20:30")
+                    time.sleep(max((1230-minutes)*60, 2*60*60))
+                
+
+                
+                subprocess.Popen(f"lxterminal -e python3 /home/adrian/Desktop/Coding/AquariumController/app.py restart {num}", shell=True)
+                print("restarting in 5")
+                time.sleep(5)
+                os.kill(os.getpid(), signal.SIGINT) 
+                break
+
+
+            time.sleep(5)
+        
         
 
     # Start the thread

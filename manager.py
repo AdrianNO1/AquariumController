@@ -113,7 +113,8 @@ def main(task_queue, response_queue, test=False):
                 if serial_device["device"] == device.device_node:
                     serial_devices.remove(serial_device)
                     logger.info(f"USB device disconnected: {device.device_node}")
-                    break
+                    return
+            logger.info(f"unknown USB device disconnected: {device.device_node}")
         
         def run_command(device, cmd, args):
             logger.info(f"Executing function {cmd} with args {args} on {device['name']} ({device['device']})")
@@ -153,7 +154,7 @@ def main(task_queue, response_queue, test=False):
                 try:
                     device["serial"].write(bytes(command, encoding="utf-8"))
                     time.sleep(0.05)
-                    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
+                #    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return False
@@ -163,20 +164,20 @@ def main(task_queue, response_queue, test=False):
                 #print("Received: " + recieved)
                 device["lastused"] = int(time.time())
 
-                if recieved != command:
-                    wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
-                    logger.warn(wrn)
-                    if device["error"]:
-                        raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
-                    device["error"] = "Error: " + wrn
-                    device["status"] = "Unexpected response"
-                    if not recieved.strip("\n"):
-                        logger.warn(f"usb device {device['name']} did not respond.")
-                        device["error"] = "Error: Device is not responding"
-                        device["status"] = "No response"
-                    return False
+                #if recieved != command:
+                 #   wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
+                 #   logger.warn(wrn)
+                 #   if device["error"]:
+                 #       raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
+                 #       print("magic")
+                 #       return
+                 #   device["error"] = "Error: " + wrn
+                 #       logger.warn(f"usb device {device['name']} did not respond.")
+                 #       device["error"] = "Error: Device is not responding"
+                 #       device["status"] = "No response"
+                 #   return False
                 
-                device["status"] = "Responded"
+                device["status"] = "idk"
                 device["error"] = ""
                 return True
             
@@ -245,6 +246,10 @@ def main(task_queue, response_queue, test=False):
                     return
                 elif task == "cancelpreview":
                     cancelpreview()
+                    return
+                elif task == "update":
+                    update_hardcoded_light_pins()
+                    response_queue.put("ok")
                     return
                 
                 elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
@@ -315,15 +320,52 @@ def main(task_queue, response_queue, test=False):
             for device in get_arduinos():
                 logger.info(f"found already connected USB device: {device}")
                 start_initialization_timer(device)
+            usb_listener_process = multiprocessing.Process(target=setup_usb_listener, args=(on_connect, on_disconnect))
 
 
-        #usb_listener_process = multiprocessing.Process(target=setup_usb_listener, args=(on_connect, on_disconnect))
+
+        def update_hardcoded_light_pins():
+            nonlocal preview_start
+            for name in hardcoded_light_pins:
+                matches = list(filter(lambda x: x["name"].startswith(name), serial_devices))
+                #if len(matches) == 0:
+                #    logger.error(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
+                #    raise RuntimeError(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
+                #    print(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
+                if matches:
+                    for device in matches:
+                        for color in hardcoded_light_pins[name]:
+                            if preview_start != 0:
+                                if time.time() - preview_start >= preview_duration:
+                                    preview_start = 0
+                                    update_frequency = default_update_frequency
+                                    minutes_of_day = None
+                                else:
+                                    minutes_of_day = max(int((time.time() - preview_start)*60*(24/preview_duration)), 0)
+                            else:
+                                minutes_of_day = None
+                            if name == "mainLys70":
+                                mult = 0.7
+                            else:
+                                mult = 1
+                            run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"], mult=mult, minutes_of_day=minutes_of_day)])
+                            time.sleep(0.05)
+
+        
 
         if not test:
             setup_usb_listener(on_connect, on_disconnect)
 
         hardcoded_light_pins = {
             "mainLys": [
+                {"color": "Uv", "pin": 11},
+                {"color": "Violet", "pin": 6},
+                {"color": "Royal Blue", "pin": 10},
+                {"color": "Blue", "pin": 5},
+                {"color": "White", "pin": 9},
+                {"color": "Red", "pin": 3},
+            ],
+            "mainLys70": [
                 {"color": "Uv", "pin": 11},
                 {"color": "Violet", "pin": 6},
                 {"color": "Royal Blue", "pin": 10},
@@ -353,33 +395,8 @@ def main(task_queue, response_queue, test=False):
 
 
 
+            update_hardcoded_light_pins()
 
-
-
-
-            for name in hardcoded_light_pins:
-                matches = list(filter(lambda x: x["name"].startswith(name), serial_devices))
-                if matches:
-                    for device in matches:
-                        for color in hardcoded_light_pins[name]:
-                            if preview_start != 0:
-                                if time.time() - preview_start >= preview_duration:
-                                    preview_start = 0
-                                    update_frequency = default_update_frequency
-                                    minutes_of_day = None
-                                else:
-                                    minutes_of_day = max(int((time.time() - preview_start)*60*(24/preview_duration)), 0)
-                            else:
-                                minutes_of_day = None
-                                
-                            run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"], minutes_of_day=minutes_of_day)])
-                            time.sleep(0.05)
-                else:
-                    logger.error(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
-                    raise RuntimeError(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
-
-
-            
 
 
 
@@ -402,8 +419,8 @@ def main(task_queue, response_queue, test=False):
         print("FATAL ERROR:", basic_err_info)
         logger.fatal(basic_err_info)
         response_queue.put("\nFATAL INTERNAL ERROR. Arduino manager has crashed. Please contact the coder guy. The following information has been saved to the logs:\n" + basic_err_info)
-        for ser in serial_devices:
-            ser.close()
+        #for ser in serial_devices:
+        #    ser.close()
 if __name__ == "__main__":
     main(test=True)
 

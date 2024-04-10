@@ -90,7 +90,7 @@ th, td {
 
 .card {
     display: inline-block;
-    background-color: #90ee90; /* Light green background */
+    background-color: #e9e637;/*#90ee90; /* Light green background */
     border-radius: 10px;
     padding: 20px;
     font-family: Arial, sans-serif;
@@ -153,7 +153,7 @@ th, td {
 
 #throttle{
     writing-mode: bt-lr; /* IE */
-    appearance: slider-vertical;
+    writing-mode: vertical-lr;
     width: 8px;
     height: 200px;
     outline: none;
