@@ -334,7 +334,7 @@ def main(task_queue, response_queue, test=False):
                 #    print(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
                 if matches:
                     for device in matches:
-                        for color in hardcoded_light_pins[name]:
+                        for info in hardcoded_light_pins[name]:
                             if preview_start != 0:
                                 if time.time() - preview_start >= preview_duration:
                                     preview_start = 0
@@ -348,8 +348,13 @@ def main(task_queue, response_queue, test=False):
                                 mult = 0.7
                             else:
                                 mult = 1
-                            run_command(device, "analogWrite", [color["pin"], get_current_strength(color["color"], mult=mult, minutes_of_day=minutes_of_day)])
+                            if "color" in info:
+                                run_command(device, "analogWrite", [info["pin"], get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day)])
+                            elif "pump" in info:
+                                pass # TODO
+                            
                             time.sleep(0.05)
+                
 
         
 
@@ -372,6 +377,9 @@ def main(task_queue, response_queue, test=False):
                 {"color": "Blue", "pin": 5},
                 {"color": "White", "pin": 9},
                 {"color": "Red", "pin": 3},
+            ],
+            "mainPump": [
+                {"pump": "Pumpe 1", "pin": 11}
             ]
         }
 
@@ -385,13 +393,13 @@ def main(task_queue, response_queue, test=False):
         while True:
             start = time.time()
 
-            if not preview_start:
-                with open(os.path.join("data", "code.json"), "r", encoding="utf-8") as f:
-                    code = json.load(f)["code"]
-
-                response = parse_code(code, verify=False, run_cmd_func=read_queue, arduinos=[x["name"] for x in serial_devices])
-                if response.startswith("Error"):
-                    logger.error(response)
+            #if not preview_start:
+            #    with open(os.path.join("data", "code.json"), "r", encoding="utf-8") as f:
+            #        code = json.load(f)["code"]
+            #
+            #    response = parse_code(code, verify=False, run_cmd_func=read_queue, arduinos=[x["name"] for x in serial_devices])
+            #    if response.startswith("Error"):
+            #        logger.error(response)
 
 
 
