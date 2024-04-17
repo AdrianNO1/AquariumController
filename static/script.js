@@ -78,6 +78,7 @@ document.getElementById("throttle-form").addEventListener("submit", function(eve
 
 function switchSwitch(checkbox){
     document.getElementById("switchesInfo").innerText = "Upload to apply changes"
+    document.getElementById("switchesInfo").style.visibility = "visible"
 
     let index = -1
     let current = checkbox.parentElement.parentElement
@@ -98,6 +99,7 @@ slider_template = `<div class="switch-pair">
 function sliderNameChange(elem){
     return // name change will make the manager not find it
     document.getElementById("switchesInfo").innerText = "Upload to apply changes"
+    document.getElementById("switchesInfo").style.visibility = "visible"
     
     let index = -1
     let current = elem.parentElement
@@ -129,7 +131,7 @@ if (overwriteNodesWithExample){
             switches.forEach(e => {
                 document.getElementById("switches").innerHTML += slider_template.replace("num", e.name).replace("checked", e.checked ? "checked" : "")
             })
-            document.getElementById("switchesInfo").innerText = ""
+            document.getElementById("switchesInfo").style.visibility = "hidden"
             
         },
         error: function(error) {
@@ -210,7 +212,11 @@ function setCurrentTime() {
     const now = new Date();
     const hours = now.getUTCHours();
     const minutes = now.getUTCMinutes();
-    document.getElementById("current-time").innerHTML = `Current time: <b>${hours}:${minutes}</b> (UTC)`
+    display_minutes = minutes.toString()
+    if (display_minutes.length == 1) {
+        display_minutes = "0" + display_minutes
+    }
+    document.getElementById("current-time").innerHTML = `Current time: <b>${hours}:${display_minutes}</b> (UTC)`
 
     backgroundSvg.selectAll(".time-bar").remove();
 
@@ -712,7 +718,7 @@ document.getElementById("upload").addEventListener("click", function(){
             console.log(response.message);
             document.getElementById("uploadStatus").textContent = response.message
             document.getElementById("upload").removeAttribute("disabled");
-            document.getElementById("switchesInfo").innerText = ""
+            document.getElementById("switchesInfo").style.visibility = "hidden"
         },
         error: function(error) {
             console.log(error);
