@@ -1,0 +1,20 @@
+{
+    "switches": [
+        {
+            "checked": false,
+            "name": "Pumpe 1"
+        },
+        {
+            "checked": false,
+            "name": "Pumpe 2"
+        },
+        {
+            "checked": false,
+            "name": "Pumpe 3"
+        },
+        {
+            "checked": true,
+            "name": "Jack"
+        }
+    ]
+}

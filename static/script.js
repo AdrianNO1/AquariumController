@@ -54,6 +54,7 @@ let arduinos
 let preview_start = 0
 let preview_interval_id
 let preview_duration = 60 // seconds
+let switches = {}
 
 let channels = {}
 let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
@@ -75,6 +76,38 @@ document.getElementById("throttle-form").addEventListener("submit", function(eve
     output.value = Math.max(Math.min(output.value.slice(0, -1), 100), 0) + "%"
 })
 
+function switchSwitch(checkbox){
+    document.getElementById("switchesInfo").innerText = "Upload to apply changes"
+
+    let index = -1
+    let current = checkbox.parentElement.parentElement
+    while (current = current.previousElementSibling) {
+        index++
+    }
+    switches[index].checked = checkbox.checked
+}
+
+slider_template = `<div class="switch-pair">
+<label class="switch">
+<input class="switchInput" type="checkbox" onclick="switchSwitch(this)" checked>
+<span class="slider round"></span>
+</label>
+<h2 contenteditable="true" oninput="sliderNameChange(this)">num</h2>
+</div>`
+
+function sliderNameChange(elem){
+    return // name change will make the manager not find it
+    document.getElementById("switchesInfo").innerText = "Upload to apply changes"
+    
+    let index = -1
+    let current = elem.parentElement
+    while (current = current.previousElementSibling) {
+        index++
+    }
+    switches[index].name = elem.innerText
+    console.log(switches)
+}
+
 if (overwriteNodesWithExample){
     channels_names.forEach(e => {
         nodes[e] = structuredClone(example_nodes)
@@ -92,7 +125,11 @@ if (overwriteNodesWithExample){
             console.log(response.throttle)
             slider.value = JSON.parse(response.throttle)
             output.value = JSON.parse(response.throttle) + "%"
-            //arduinoConstants = JSON.parse(response.arduinoConstants);
+            switches = response.switches
+            switches.forEach(e => {
+                document.getElementById("switches").innerHTML += slider_template.replace("num", e.name).replace("checked", e.checked ? "checked" : "")
+            })
+            document.getElementById("switchesInfo").innerText = ""
             
         },
         error: function(error) {
@@ -670,11 +707,12 @@ document.getElementById("upload").addEventListener("click", function(){
         url: '/upload',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1))}),
+        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1)), switches: switches}),
         success: function(response) {
             console.log(response.message);
             document.getElementById("uploadStatus").textContent = response.message
             document.getElementById("upload").removeAttribute("disabled");
+            document.getElementById("switchesInfo").innerText = ""
         },
         error: function(error) {
             console.log(error);

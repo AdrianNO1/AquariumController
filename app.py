@@ -45,6 +45,7 @@ app.logger.setLevel(logging.INFO)
 links_path = os.path.join("data", "links.json")
 code_path = os.path.join("data", "code.json")
 throttle_path = os.path.join("data", "throttle.json")
+switches_path = os.path.join("data", "switches.json")
 
 @app.errorhandler(500)
 def handle_internal_server_error(e):
@@ -69,6 +70,7 @@ def load():
 
     code = json.load(open(code_path, "r", encoding="utf-8"))
     throttle = json.load(open(throttle_path, "r", encoding="utf-8"))["throttle"]
+    switches = json.load(open(switches_path, "r", encoding="utf-8"))["switches"]
     
     limit = 10
     x = 0
@@ -84,7 +86,7 @@ def load():
     #                break
 
 
-    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines})
+    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines, "switches": switches})
 
 @app.route('/load arduino info', methods=['POST'])
 def load_arduino_info():
@@ -110,6 +112,9 @@ def upload():
 
     with open(throttle_path, "w", encoding="utf-8") as f:
         json.dump({"throttle": data["throttle"]}, f, indent=4)
+
+    with open(switches_path, "w", encoding="utf-8") as f:
+        json.dump({"switches": data["switches"]}, f, indent=4)
 
     response = {'message': 'ok'}
 
@@ -252,10 +257,12 @@ if __name__ == '__main__':
         print("raising")
         raise ValueError("AAAAAAAAAAAAAAAAAAA")
 
+    test = True
+
     # Function to run in the thread
     def thread_function():
         def start_thread():
-            thread = threading.Thread(target=main, args=(task_queue, response_queue, False))
+            thread = threading.Thread(target=main, args=(task_queue, response_queue, test))
             thread.start()
             return thread
         thread = start_thread()
@@ -263,6 +270,8 @@ if __name__ == '__main__':
             if not thread.is_alive():
                 app.logger.warning("It seems the manager has taken an unexpected coffee break... R.I.P.")
                 print("MANAGER IS DEAD!!!!")
+                if test:
+                    break
                 time.sleep(10)
                 now = datetime.now()
                 minutes = now.hour*60+now.minute
