@@ -22,10 +22,12 @@ from datetime import datetime
 from manager import main
 from custom_syntax import parse_code
 import threading
-import queue, logging, glob, subprocess, signal, vonage
+import queue, logging, glob, subprocess, signal#, vonage
 
 app = Flask(__name__)
 
+os.makedirs("logs/app", exist_ok=True)
+os.makedirs("logs/manager", exist_ok=True)
 
 # Create handlers
 current_log_path = os.path.join(os.path.join("logs", "app"), datetime.now().strftime("%d-%m-%Y %H-%M-%S") + ".log")
@@ -257,7 +259,7 @@ if __name__ == '__main__':
         print("raising")
         raise ValueError("AAAAAAAAAAAAAAAAAAA")
 
-    test = True
+    test = False
 
     # Function to run in the thread
     def thread_function():
@@ -275,7 +277,7 @@ if __name__ == '__main__':
                 time.sleep(10)
                 now = datetime.now()
                 minutes = now.hour*60+now.minute
-                if minutes < 900 or minutes > 1080 and time.time()-start > 15:
+                if 0:#if minutes < 900 or minutes > 1080 and time.time()-start > 15:
                     print("sending sms")
                     client = vonage.Client(key="8a5d61ed", secret="Ylf6nHiJ9VJkPj5E")
                     sms = vonage.Sms(client)
@@ -297,15 +299,15 @@ if __name__ == '__main__':
 
                     print("waiting 2 hours")
                     time.sleep(2*60*60)
-                else:
-                    print("waiting untill 20:30")
-                    time.sleep(max((1230-minutes)*60, 2*60*60))
+                #else:
+                #    print("waiting untill 20:30")
+                #    time.sleep(max((1230-minutes)*60, 2*60*60))
                 
 
                 
                 subprocess.Popen(f"lxterminal -e python3 /home/adrian/Desktop/Coding/AquariumController/app.py restart {num}", shell=True)
-                print("restarting in 5")
-                time.sleep(5)
+                print("restarting in 60")
+                time.sleep(60)
                 os.kill(os.getpid(), signal.SIGINT) 
                 break
 

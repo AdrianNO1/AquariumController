@@ -13,7 +13,7 @@
             "name": "Pumpe 3"
         },
         {
-            "checked": true,
+            "checked": false,
             "name": "Jack"
         }
     ]
