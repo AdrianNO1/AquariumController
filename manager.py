@@ -19,17 +19,17 @@ def main(task_queue, response_queue, test=False):
 
         #refresh_token = os.getenv("DROPBOX_API_KEY")
 
-        def refresh_access_token(refresh_token):
-            dbx = dropbox.DropboxOAuth2FlowNoRedirect(os.getenv("DROPBOX_APP_KEY"), os.getenv("DROPBOX_APP_SECRET"))
-            oauth_result = dbx.refresh_access_token(refresh_token)
-            return oauth_result.access_token
+        # def refresh_access_token(refresh_token):
+        #     dbx = dropbox.DropboxOAuth2FlowNoRedirect(os.getenv("DROPBOX_APP_KEY"), os.getenv("DROPBOX_APP_SECRET"))
+        #     oauth_result = dbx.refresh_access_token(refresh_token)
+        #     return oauth_result.access_token
 
-        def upload_file_to_dropbox(local_path):
-            access_token = refresh_access_token(refresh_token)
-            dbx = dropbox.Dropbox(access_token)
-            dropbox_path = "/AquariumControllerLogs/" + os.path.basename(local_path)
-            with open(local_path, 'rb') as f:
-                dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
+        # def upload_file_to_dropbox(local_path):
+        #     access_token = refresh_access_token(refresh_token)
+        #     dbx = dropbox.Dropbox(access_token)
+        #     dropbox_path = "/AquariumControllerLogs/" + os.path.basename(local_path)
+        #     with open(local_path, 'rb') as f:
+        #         dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
 
 
         class CompressingTimedRotatingFileHandler(TimedRotatingFileHandler):

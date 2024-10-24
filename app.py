@@ -277,28 +277,28 @@ if __name__ == '__main__':
                 time.sleep(10)
                 now = datetime.now()
                 minutes = now.hour*60+now.minute
-                if 0:#if minutes < 900 or minutes > 1080 and time.time()-start > 15:
-                    print("sending sms")
-                    client = vonage.Client(key="8a5d61ed", secret="Ylf6nHiJ9VJkPj5E")
-                    sms = vonage.Sms(client)
+                # if 0:#if minutes < 900 or minutes > 1080 and time.time()-start > 15:
+                #     print("sending sms")
+                #     client = vonage.Client(key="8a5d61ed", secret="Ylf6nHiJ9VJkPj5E")
+                #     sms = vonage.Sms(client)
 
-                    responseData = sms.send_message(
-                        {
-                            "from": "Vonage APIs",
-                            "to": "4798035320",
-                            "text": "abnormal crash time\n",
-                        }
-                    )
+                #     responseData = sms.send_message(
+                #         {
+                #             "from": "Vonage APIs",
+                #             "to": "4798035320",
+                #             "text": "abnormal crash time\n",
+                #         }
+                #     )
 
-                    if responseData["messages"][0]["status"] == "0":
-                        print("Message sent successfully.")
-                        app.logger.info("Message sent successfully.")
-                    else:
-                        print(f"Message failed with error: {responseData['messages'][0]['error-text']}")
-                        app.logger.warning(f"Message failed with error: {responseData['messages'][0]['error-text']}")
+                #     if responseData["messages"][0]["status"] == "0":
+                #         print("Message sent successfully.")
+                #         app.logger.info("Message sent successfully.")
+                #     else:
+                #         print(f"Message failed with error: {responseData['messages'][0]['error-text']}")
+                #         app.logger.warning(f"Message failed with error: {responseData['messages'][0]['error-text']}")
 
-                    print("waiting 2 hours")
-                    time.sleep(2*60*60)
+                #     print("waiting 2 hours")
+                #     time.sleep(2*60*60)
                 #else:
                 #    print("waiting untill 20:30")
                 #    time.sleep(max((1230-minutes)*60, 2*60*60))
