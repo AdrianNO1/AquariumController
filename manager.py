@@ -349,7 +349,11 @@ def main(task_queue, response_queue, test=False):
                             else:
                                 mult = 1
                             if "color" in info:
-                                run_command(device, "analogWrite", [info["pin"], get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day)])
+                                strength = get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day)
+                                if type(strength) == str and "Error" in strength:
+                                    logger.error(strength)
+                                else:
+                                    run_command(device, "analogWrite", [info["pin"], strength])
                             elif "pump" in info:
                                 pass # TODO
                             
@@ -386,7 +390,7 @@ def main(task_queue, response_queue, test=False):
         # also change in script.js
         preview_duration = 60 # seconds
 
-        default_update_frequency = 120
+        default_update_frequency = 5
         update_frequency = default_update_frequency
         
         time.sleep(3.5)
