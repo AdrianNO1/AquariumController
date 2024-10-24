@@ -1,6 +1,6 @@
 def main(task_queue, response_queue, test=False):
     try:
-        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys, zipfile, dropbox
+        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys, zipfile#, dropbox
         
         sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
@@ -17,7 +17,7 @@ def main(task_queue, response_queue, test=False):
 
         preview_start = 0
 
-        refresh_token = os.getenv("DROPBOX_API_KEY")
+        #refresh_token = os.getenv("DROPBOX_API_KEY")
 
         def refresh_access_token(refresh_token):
             dbx = dropbox.DropboxOAuth2FlowNoRedirect(os.getenv("DROPBOX_APP_KEY"), os.getenv("DROPBOX_APP_SECRET"))
@@ -386,7 +386,7 @@ def main(task_queue, response_queue, test=False):
         # also change in script.js
         preview_duration = 60 # seconds
 
-        default_update_frequency = 120
+        default_update_frequency = 5
         update_frequency = default_update_frequency
         
         time.sleep(3.5)
