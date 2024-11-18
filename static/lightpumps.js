@@ -122,6 +122,7 @@ function initializeSliders() {
 
         $.ajax({
             url: '/update-slider-values',
+            type: 'POST',
             async: false,
             contentType: 'application/json',
             data: JSON.stringify({values: values, updated_at: new Date().getTime()}),
