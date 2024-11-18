@@ -393,7 +393,10 @@ def main(task_queue, response_queue, test=False):
                 {"color": "Red", "pin": 3},
             ],
             "mainPump": [
-                {"pump": "Pumpe 1", "pin": 11}
+                {"pump": "Pumpe 1", "pin": 10},
+                {"pump": "Pumpe 2", "pin": 9},
+                {"pump": "Pumpe 3", "pin": 3},
+                {"pump": "Pumpe 4", "pin": 11},
             ]
         }
 
