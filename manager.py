@@ -359,7 +359,7 @@ def main(task_queue, response_queue, test=False):
                             else:
                                 mult = 1
                             if "color" in info:
-                                strength = get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day)
+                                strength = get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day, temporaryoverwrite=temporaryoverwrite)
                                 if type(strength) == str and "Error" in strength:
                                     logger.error(strength)
                                 else:
