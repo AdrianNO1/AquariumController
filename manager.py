@@ -82,7 +82,7 @@ def main(task_queue, response_queue, test=False):
             try:
                 serial_device["serial"].write(bytes("whodis\n", encoding="utf-8"))
                 time.sleep(0.05)
-                name = serial_device["serial"].readline().decode().strip().strip(";")
+                name = serial_device["serial"].readline().decode('utf-8').strip().strip(";")
                 if not name:
                     logger.error("serial_device did not recieve a name. Possible timeout")
                     name = "Not responding"
