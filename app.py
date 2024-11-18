@@ -140,7 +140,7 @@ def upload():
 
 
 @app.route('/update-slider-values', methods=['POST'])
-def upload():
+def update_slider_values():
     app.logger.info("update-slider-values request")
     data = request.json
 
