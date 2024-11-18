@@ -288,7 +288,7 @@ if __name__ == '__main__':
         print("raising")
         raise ValueError("AAAAAAAAAAAAAAAAAAA")
 
-    test = True
+    test = False
 
     # Function to run in the thread
     def thread_function():
