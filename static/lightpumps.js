@@ -57,8 +57,31 @@ let preview_duration = 60 // seconds
 let switches = {}
 
 let channels = {}
-let channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
-let channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
+
+let channels_type
+let channels_names
+let channels_colors
+
+let sliderTimeout = null;
+
+// check if the current page is /lights
+if (window.location.pathname === "/lights"){
+    channels_type = "light"
+    channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
+    channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
+} else if (window.location.pathname === "/pumps"){
+    channels_type = "pump"
+    channels_names = ["Pump 1", "Pump 2", "Pump 3", "Pump 4", "Pump 5", "Pump 6"]
+    channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
+} else {
+    document.getElementById("error").textContent = "Unknown page"
+    throw new Error("Unknown page")
+}
+
+if (!channels_type || !channels_names || !channels_colors) {
+    document.getElementById("error").textContent = "Missing variable definitions"
+    throw new Error("Missing variable definitions")
+}
 
 let channelsTable = document.getElementById("channelsTable")
 let slider = document.getElementById('throttle');
@@ -76,38 +99,109 @@ document.getElementById("throttle-form").addEventListener("submit", function(eve
     output.value = Math.max(Math.min(output.value.slice(0, -1), 100), 0) + "%"
 })
 
-function switchSwitch(checkbox){
-    document.getElementById("switchesInfo").innerText = "Upload to apply changes"
-    document.getElementById("switchesInfo").style.visibility = "visible"
+function initializeSliders() {
+    const wrapper = document.getElementById('sliders-wrapper');
+    
+    // Create sliders based on the names array
+    channels_names.forEach(name => {
+        wrapper.appendChild(createSlider(name));
+    });
 
-    let index = -1
-    let current = checkbox.parentElement.parentElement
-    while (current = current.previousElementSibling) {
-        index++
+    const sliders = document.querySelectorAll('.vertical-slider');
+
+    function updateSliderValue(slider) {
+        const value = slider.value;
+        const valueDisplay = slider.parentElement.querySelector('.slider-value');
+        valueDisplay.textContent = value + '%';
     }
-    switches[index].checked = checkbox.checked
+
+    function uploadSliderValues() {
+        const values = Array.from(sliders).map(slider => {
+            return {name: slider.dataset.name, value: slider.value};
+        });
+
+        $.ajax({
+            url: '/update-slider-values',
+            async: false,
+            contentType: 'application/json',
+            data: JSON.stringify({values: values, updated_at: new Date().getTime()}),
+            success: function(response) {
+                document.getElementById("sliders-error").innerText = ""
+            },
+            error: function(error) {
+                document.getElementById("sliders-error").innerText = "Error: " + error.responseText
+                console.error(error);
+            }
+        });
+    }
+        
+
+    function printAllValues() {
+        const values = Array.from(sliders).map(slider => {
+            return `${slider.dataset.name}: ${slider.value}%`;
+        });
+        console.log(values.join(' | '));
+    }
+
+    sliders.forEach(slider => {
+        // Set a unique color for each slider thumb
+        const hue = (channels_names.indexOf(slider.dataset.name) * 360 / channels_names.length);
+        slider.style.setProperty('--thumb-color', `hsl(${hue}, 70%, 60%)`);
+
+        slider.addEventListener('input', (e) => {
+            updateSliderValue(e.target);
+            
+            if (sliderTimeout) {
+                clearTimeout(sliderTimeout);
+            }
+            sliderTimeout = setTimeout(() => {
+                uploadSliderValues()
+                sliderTimeout = null;
+            }, 1000);
+        });
+    });
+
+    // Initialize values
+    sliders.forEach(updateSliderValue);
 }
 
-slider_template = `<div class="switch-pair">
-<label class="switch">
-<input class="switchInput" type="checkbox" onclick="switchSwitch(this)" checked>
-<span class="slider round"></span>
-</label>
-<h2 contenteditable="true" oninput="sliderNameChange(this)">num</h2>
-</div>`
-
-function sliderNameChange(elem){
-    return // name change will make the manager not find it
-    document.getElementById("switchesInfo").innerText = "Upload to apply changes"
-    document.getElementById("switchesInfo").style.visibility = "visible"
+function createSlider(name) {
+    let graphY
+    let links = getLinks(channels[name])
+    let local_current_minutes = current_minutes
     
-    let index = -1
-    let current = elem.parentElement
-    while (current = current.previousElementSibling) {
-        index++
+    for (let i=0; i < links.length; i++){
+        let link = links[i]
+        if (link.source.time <= local_current_minutes && link.target.time >= local_current_minutes){
+            graphY = link.source.y + ((local_current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+            break
+        }
     }
-    switches[index].name = elem.innerText
-    console.log(switches)
+
+    const container = document.createElement('div');
+    container.className = 'slider-container';
+    
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = '0';
+    slider.max = '100';
+    slider.value = Math.round(yScale.invert(graphY));
+    slider.className = 'vertical-slider';
+    slider.dataset.name = name;
+
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'slider-name';
+    nameDiv.textContent = name;
+
+    const valueDiv = document.createElement('div');
+    valueDiv.className = 'slider-value';
+    valueDiv.textContent = '50%';
+
+    container.appendChild(slider);
+    container.appendChild(nameDiv);
+    container.appendChild(valueDiv);
+
+    return container;
 }
 
 if (overwriteNodesWithExample){
@@ -129,9 +223,9 @@ if (overwriteNodesWithExample){
             output.value = JSON.parse(response.throttle) + "%"
             switches = response.switches
             switches.forEach(e => {
-                document.getElementById("switches").innerHTML += slider_template.replace("num", e.name).replace("checked", e.checked ? "checked" : "")
+
             })
-            document.getElementById("switchesInfo").style.visibility = "hidden"
+            //document.getElementById("switchesInfo").style.visibility = "hidden"
             
         },
         error: function(error) {
@@ -783,6 +877,7 @@ function updateTablePercentages(){
 window.onload = function() {
     updateTablePercentages()
     selectRow(document.querySelector('.selectable'))
+    initializeSliders()
 };
 
 //// Initialize the Ace Editor
@@ -1120,65 +1215,3 @@ document.getElementById("refresh cards").addEventListener("click", function(){
 })
 
 document.getElementById("refresh cards").click()
-
-
-
-document.getElementById("preview").addEventListener("click", function(){
-    if (preview_start != 0){
-        document.getElementById("preview").innerText = "Preview (uploads) (1 minute)"
-        document.getElementById("uploadStatus").textContent = "sending..."
-        $.ajax({
-            url: '/cancelpreview',
-            type: 'POST',
-            contentType: 'application/json',
-            data: JSON.stringify({}),
-            success: function(response) {
-                backgroundSvg.selectAll(".vertical-preview-bar").remove()
-                console.log(response.data);
-                if (response.data == "ok"){
-                    preview_start = 0
-                    clearInterval(preview_interval_id)
-                    preview_interval_id = null
-                    document.getElementById("preview").innerText = "Preview (uploads) (1 minute)"
-                }
-                document.getElementById("uploadStatus").textContent = response.data
-            },
-            error: function(error) {
-                console.log(error);
-                document.getElementById("uploadStatus").textContent = error
-            }
-        });
-        return
-    }
-    if (!verifyGraphIntegrity()){
-        document.getElementById("uploadStatus").textContent = "error: Links are somehow not connected"
-        return
-    }
-    
-    
-    document.getElementById("uploadStatus").textContent = "sending..."
-    let links_data = {}
-    channels_names.forEach(e => {
-        links_data[e] = getLinks(channels[e])
-    })
-    document.getElementById("uploadStatus").textContent = "sending..."
-    $.ajax({
-        url: '/preview',
-        type: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1))}),
-        success: function(response) {
-            console.log(response.data);
-            if (response.data == "ok"){
-                document.getElementById("preview").innerText = "Cancel Preview"
-                preview_start = new Date().getTime() / 1000
-                preview_interval_id = setInterval(updatePreviewTime, 500)
-            }
-            document.getElementById("uploadStatus").textContent = response.data
-        },
-        error: function(error) {
-            console.log(error);
-            document.getElementById("uploadStatus").textContent = error
-        }
-    });
-})

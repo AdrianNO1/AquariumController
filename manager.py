@@ -16,6 +16,7 @@ def main(task_queue, response_queue, test=False):
         logger = logging.getLogger(__name__)
 
         preview_start = 0
+        last_updated = 0
 
         #refresh_token = os.getenv("DROPBOX_API_KEY")
 
@@ -251,6 +252,10 @@ def main(task_queue, response_queue, test=False):
                     update_hardcoded_light_pins()
                     response_queue.put("ok")
                     return
+                elif task == "temporaryoverwrite":
+                    update_hardcoded_light_pins(temporaryoverwrite=True)
+                    response_queue.put("ok")
+                    return
                 
                 elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
                     matches = [device for device in serial_devices if device["device"] == task[1]]
@@ -324,7 +329,12 @@ def main(task_queue, response_queue, test=False):
 
 
 
-        def update_hardcoded_light_pins():
+        def update_hardcoded_light_pins(temporaryoverwrite=False):
+            global last_updated
+            if temporaryoverwrite:
+                last_updated = time.time() + 120
+            else:
+                last_updated = time.time()
             nonlocal preview_start
             for name in hardcoded_light_pins:
                 matches = list(filter(lambda x: x["name"].startswith(name), serial_devices))
@@ -406,8 +416,8 @@ def main(task_queue, response_queue, test=False):
             #        logger.error(response)
 
 
-
-            update_hardcoded_light_pins()
+            if (last_updated + update_frequency - 1) < time.time():
+                update_hardcoded_light_pins()
 
 
 

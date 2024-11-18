@@ -3,75 +3,155 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
-    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <title>Control Panel</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+        }
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/mode-python.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.js"></script>
+        .button-container {
+            display: flex;
+            gap: 20px;
+        }
+
+        .main-button {
+            padding: 20px 40px;
+            font-size: 24px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            background-color: #4CAF50;
+            color: white;
+            transition: background-color 0.3s;
+        }
+
+        .main-button:hover {
+            background-color: #45a049;
+        }
+
+        .debug-button {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background-color: #ff4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            min-width: 300px;
+        }
+
+        .debug-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .debug-controls button {
+            padding: 10px;
+            cursor: pointer;
+        }
+
+        .response-area {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            min-height: 100px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .close-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            cursor: pointer;
+            font-size: 20px;
+        }
+    </style>
 </head>
 <body>
-    <button id="upload">Upload</button>
-    <p id="uploadStatus"></p>
-    <br>
-    <div id="graphContainer">
-        <svg id="graph" width="1000" height="300"></svg>
-        <table id="channelsTable"></table>
+    <div class="button-container">
+        <button class="main-button" onclick="navigate('/lights')">Lys</button>
+        <button class="main-button" onclick="navigate('/pumps')">Pumper</button>
     </div>
-    <div id="graphSettingsContainer">
-        <p id="current-time">Current time: Loading...</p>
-        <button id="new">New node</button>
-        <button id="delete">Delete selected node</button>
-        <br>
-        <br>
-        <br>
-        <button id="preview">Preview (uploads) (1 minute)</button>
-        <form id="form">
-            <p class="inputDesc">Percentage</p>
-            <input type="text" value="50%" id="percentage">
-            <p class="inputDesc">Time</p>
-            <input type="text" value="06:00" id="time">
-            <p id="error"></p>
-            <input type="submit" value="Submit">
-        </form>
+
+    <button class="debug-button" onclick="toggleDebugModal()">Debug</button>
+
+    <div id="debugModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" onclick="toggleDebugModal()">&times;</span>
+            <h2>Debug Controls</h2>
+            <div class="debug-controls">
+                <button onclick="makeApiCall('/api/status')">Get Status</button>
+                <button onclick="makeApiCall('/api/test')">Run Test</button>
+                <button onclick="makeApiCall('/api/reset')">Reset System</button>
+            </div>
+            <div class="response-area" id="responseArea">
+                Response will appear here...
+            </div>
+        </div>
     </div>
-    <br>
-    <div id="sliderContainer">
-        <form id="throttle-form">
-            <input id="slider-value" type="text" value="50%">
-        </form>
-        <input type="range" min="0" max="100" value="50" id="throttle" orient="vertical">
-    </div>
-    <br>
-    <div id="switches">
-        <p id="switchesInfo">Loading...</p>
-    </div>
-    
-    <!--<br>-->
-    <!--<button id="verify">Verify</button>-->
-    <!--<button id="runonce">Run Once</button>-->
-    <!--<button id="uploadandrun">Upload and run</button>-->
-    <!--<p id="codeStatus"></p>-->
-    <!--<div id="editor">Loading...</div>-->
-    <!--<br>-->
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <div class="cardss">
-        <p id="cards status"></p>
-        <button id="refresh cards">Refresh</button>
-        <div id="arduino_cards"></div>
-    </div>
-    
+
+    <script>
+        function navigate(route) {
+            window.location.href = route;
+        }
+
+        function toggleDebugModal() {
+            const modal = document.getElementById('debugModal');
+            modal.style.display = modal.style.display === 'block' ? 'none' : 'block';
+        }
+
+        // Close modal when clicking outside
+        window.onclick = function(event) {
+            const modal = document.getElementById('debugModal');
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        async function makeApiCall(endpoint) {
+            const responseArea = document.getElementById('responseArea');
+            responseArea.innerHTML = 'Loading...';
+
+            try {
+                const response = await fetch(endpoint);
+                const data = await response.json();
+                responseArea.innerHTML = JSON.stringify(data, null, 2);
+            } catch (error) {
+                responseArea.innerHTML = `Error: ${error.message}`;
+            }
+        }
+    </script>
 </body>
-<script src="/static/script.js"></script>
 </html>

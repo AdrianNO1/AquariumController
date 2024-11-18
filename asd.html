@@ -1,54 +1,192 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-  .card {
-    background-color: #90ee90; /* Light green background */
-    border-radius: 10px;
-    padding: 20px;
-    font-family: Arial, sans-serif;
-    max-width: 300px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-  }
+    <style>
+        body {
+            background: #1a1a1a;
+            color: #ffffff;
+            font-family: 'Arial', sans-serif;
+        }
 
-  .title {
-    font-size: 30px;
-    font-weight: bold;
-    margin-bottom: 5px;
-  }
+        .slider-container {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0 5px;
+            width: 80px;
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
 
-  .subtitle {
-    font-size: 18px;
-    color: #555;
-    margin-bottom: 15px;
-  }
+        .slider-container:hover {
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+        }
 
-  .content {
-    font-size: 16px;
-    margin-bottom: 10px;
-  }
+        .vertical-slider {
+            -webkit-appearance: slider-vertical;
+            writing-mode: bt-lr;
+            width: 20px;
+            height: 200px;
+            margin: 15px 0;
+            background: #3a3a3a;
+        }
 
-  .status {
-    font-size: 16px;
-    color: #555;
-  }
+        /* Styling the slider thumb */
+        .vertical-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #4CAF50;
+            cursor: pointer;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+            transition: background 0.2s;
+        }
 
-  .error-background {
-    background-color: red;
-  }
-</style>
+        .vertical-slider::-moz-range-thumb {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #4CAF50;
+            cursor: pointer;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+            transition: background 0.2s;
+        }
+
+        /* Styling the slider track */
+        .vertical-slider::-webkit-slider-runnable-track {
+            width: 20px;
+            cursor: pointer;
+            background: #3a3a3a;
+            border-radius: 10px;
+        }
+
+        .vertical-slider::-moz-range-track {
+            width: 20px;
+            cursor: pointer;
+            background: #3a3a3a;
+            border-radius: 10px;
+        }
+
+        .slider-name {
+            font-size: 1.1em;
+            margin: 5px 0;
+            text-align: center;
+            width: 100%;
+            color: #4CAF50;
+            font-weight: bold;
+            text-shadow: 0 0 5px rgba(76, 175, 80, 0.3);
+        }
+
+        .slider-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            text-align: center;
+            width: 100%;
+            color: #ffffff;
+            background: #3a3a3a;
+            padding: 5px 0;
+            border-radius: 5px;
+            margin-top: 5px;
+        }
+
+        #sliders-wrapper {
+            display: flex;
+            justify-content: center;
+            padding: 40px;
+            align-items: flex-start;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2a2a2a 100%);
+        }
+    </style>
 </head>
 <body>
+    <div id="sliders-wrapper">
+        <!-- Sliders will be generated here -->
+    </div>
 
-<div class="card error-background">
-  <div class="title">Arduino1</div>
-  <div class="subtitle">USB: /tt01</div>
-  <div class="content error">Error: test error thing to fill in text at this spot in the placeholder testestestestestestestest</div>       
-  <div class="status">Last used: 53 seconds ago</div>
-  <div class="status">Status: Responded</div>
-</div>
+    <script>
+        const sliderNames = ["Red", "Green", "Blue"]; // You can modify this array to generate different sliders
+        let timeout = null;
 
+        function createSlider(name) {
+            const container = document.createElement('div');
+            container.className = 'slider-container';
+            
+            const slider = document.createElement('input');
+            slider.type = 'range';
+            slider.min = '0';
+            slider.max = '100';
+            slider.value = '50';
+            slider.className = 'vertical-slider';
+            slider.dataset.name = name;
+
+            const nameDiv = document.createElement('div');
+            nameDiv.className = 'slider-name';
+            nameDiv.textContent = name;
+
+            const valueDiv = document.createElement('div');
+            valueDiv.className = 'slider-value';
+            valueDiv.textContent = '50%';
+
+            container.appendChild(slider);
+            container.appendChild(nameDiv);
+            container.appendChild(valueDiv);
+
+            return container;
+        }
+
+        function initializeSliders() {
+            const wrapper = document.getElementById('sliders-wrapper');
+            
+            // Create sliders based on the names array
+            sliderNames.forEach(name => {
+                wrapper.appendChild(createSlider(name));
+            });
+
+            const sliders = document.querySelectorAll('.vertical-slider');
+
+            function updateSliderValue(slider) {
+                const value = slider.value;
+                const valueDisplay = slider.parentElement.querySelector('.slider-value');
+                valueDisplay.textContent = value + '%';
+            }
+
+            function printAllValues() {
+                const values = Array.from(sliders).map(slider => {
+                    return `${slider.dataset.name}: ${slider.value}%`;
+                });
+                console.log(values.join(' | '));
+            }
+
+            sliders.forEach(slider => {
+                // Set a unique color for each slider thumb
+                const hue = (sliderNames.indexOf(slider.dataset.name) * 360 / sliderNames.length);
+                slider.style.setProperty('--thumb-color', `hsl(${hue}, 70%, 60%)`);
+
+                slider.addEventListener('input', (e) => {
+                    updateSliderValue(e.target);
+                    
+                    if (timeout) {
+                        clearTimeout(timeout);
+                    }
+                    timeout = setTimeout(() => {
+                        printAllValues();
+                        timeout = null;
+                    }, 1000);
+                });
+            });
+
+            // Initialize values
+            sliders.forEach(updateSliderValue);
+            printAllValues();
+        }
+
+        // Initialize everything when the page loads
+        document.addEventListener('DOMContentLoaded', initializeSliders);
+    </script>
 </body>
 </html>
