@@ -19,6 +19,10 @@
     margin-right: 5px; /* Optional: Adds some space between the button and the paragraph */
 }
 
+#upload {
+    margin-right: 100px;
+}
+
 #graphContainer{
     display: flex;
     align-items: stretch;
@@ -154,8 +158,8 @@ th, td {
 }
 
 #throttle{
-    writing-mode: bt-lr; /* IE */
-    writing-mode: vertical-lr;
+    -webkit-appearance: slider-vertical;
+    appearance: slider-vertical;
     width: 8px;
     height: 200px;
     outline: none;
@@ -253,6 +257,100 @@ th, td {
 	border-radius: 50%;
 }
 
-#switchesInfo{
-    margin-top: 0;
+
+
+
+.slider-container {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0 5px;
+    width: 80px;
+    height: 320px;
+    background: #ffffff;
+    padding: 15px;
+    border-radius: 12px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.slider-container:hover {
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+}
+
+.vertical-slider {
+    -webkit-appearance: slider-vertical;
+    writing-mode: bt-lr;
+    width: 20px;
+    height: 200px;
+    margin: 15px 0;
+    background: #898989;
+}
+
+/* Styling the slider thumb */
+.vertical-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #2196F3;
+    cursor: pointer;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+    transition: background 0.2s;
+}
+
+.vertical-slider::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #2196F3;
+    cursor: pointer;
+    box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+    transition: background 0.2s;
+}
+
+/* Styling the slider track */
+.vertical-slider::-webkit-slider-runnable-track {
+    width: 20px;
+    cursor: pointer;
+    background: #f0f0f0;
+    border-radius: 10px;
+}
+
+.vertical-slider::-moz-range-track {
+    width: 20px;
+    cursor: pointer;
+    background: #f0f0f0;
+    border-radius: 10px;
+}
+
+.slider-name {
+    font-size: 1.1em;
+    margin: 5px 0;
+    text-align: center;
+    width: 100%;
+    color: #2196F3;
+    font-weight: bold;
+    text-shadow: 0 0 5px rgba(33, 150, 243, 0.2);
+}
+
+.slider-value {
+    font-size: 1.2em;
+    font-weight: bold;
+    text-align: center;
+    width: 100%;
+    color: #333333;
+    background: #f0f0f0;
+    padding: 5px 0;
+    border-radius: 5px;
+    margin-top: 5px;
+}
+
+#sliders-wrapper {
+    display: flex;
+    justify-content: center;
+    padding: 40px;
+    margin-top: 100px;
+    align-items: flex-start;
+    background-color: #f5f5f5;
 }

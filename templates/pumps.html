@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/mode-python.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.js"></script>
+</head>
+<body>
+    <button id="upload">Upload</button>
+    <button onclick="window.location.href = '/'"><- Home</button>
+    <p id="uploadStatus"></p>
+    <br>
+    <div id="graphContainer">
+        <svg id="graph" width="1000" height="300"></svg>
+        <table id="channelsTable"></table>
+    </div>
+    <div id="graphSettingsContainer">
+        <p id="current-time">Current time: Loading...</p>
+        <button id="new">New node</button>
+        <button id="delete">Delete selected node</button>
+        <br>
+        <br>
+        <br>
+        <form id="form">
+            <p class="inputDesc">Percentage</p>
+            <input type="text" value="50%" id="percentage">
+            <p class="inputDesc">Time</p>
+            <input type="text" value="06:00" id="time">
+            <p id="error"></p>
+            <input type="submit" value="Submit">
+        </form>
+    </div>
+    <br>
+    <div id="sliderContainer">
+        <form id="throttle-form">
+            <input id="slider-value" type="text" value="50%">
+        </form>
+        <input type="range" min="0" max="100" value="50" id="throttle" orient="vertical">
+    </div>
+    <br>
+    <div id="sliders-wrapper">
+        <p id="sliders-error"></p>
+        <!-- Sliders will be generated here -->
+    </div>
+    
+    <!--<br>-->
+    <!--<button id="verify">Verify</button>-->
+    <!--<button id="runonce">Run Once</button>-->
+    <!--<button id="uploadandrun">Upload and run</button>-->
+    <!--<p id="codeStatus"></p>-->
+    <!--<div id="editor">Loading...</div>-->
+    <!--<br>-->
+    <br>
+    <br>
+    <br>
+    <br>
+    <br>
+    <br>
+    <br>
+    <br>
+    <div class="cardss">
+        <p id="cards status"></p>
+        <button id="refresh cards">Refresh</button>
+        <div id="arduino_cards"></div>
+    </div>
+    
+</body>
+<script src="/static/lightpumps.js"></script>
+</html>
