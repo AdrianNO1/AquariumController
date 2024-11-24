@@ -17,6 +17,8 @@ void eepromWriteString(int addr, const char* string) {
   EEPROM.write(addr + i, '\0'); // Write the null terminator
 }
 
+
+
 // Function to read a string from EEPROM starting at a specified address
 String eepromReadString(int addr) {
   String string;
@@ -97,11 +99,15 @@ String doStuff(String line) {
 void setup() {
   Serial.begin(9600);
 
+  // TCCR1B = TCCR1B & B11111000 | B00000011;
+  // TCCR2B = TCCR2B & B11111000 | B00000011;
+
+
   String readd = eepromReadString(EEPROM_START_ADDR);
   if (readd == "" or readd.charAt(0) == -1) {
     // If empty, write "unnamed device" to EEPROM
 
-    eepromWriteString(EEPROM_START_ADDR, "unnamed device");
+    eepromWriteString(EEPROM_START_ADDR, "mainLys3");
   }
 }
 
