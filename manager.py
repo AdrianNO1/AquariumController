@@ -16,6 +16,7 @@ def main(task_queue, response_queue, test=False):
         logger = logging.getLogger(__name__)
 
         preview_start = 0
+        last_updated = 0
 
         #refresh_token = os.getenv("DROPBOX_API_KEY")
 
@@ -81,7 +82,7 @@ def main(task_queue, response_queue, test=False):
             try:
                 serial_device["serial"].write(bytes("whodis\n", encoding="utf-8"))
                 time.sleep(0.05)
-                name = serial_device["serial"].readline().decode().strip().strip(";")
+                name = serial_device["serial"].readline().decode('utf-8').strip().strip(";")
                 if not name:
                     logger.error("serial_device did not recieve a name. Possible timeout")
                     name = "Not responding"
@@ -154,28 +155,27 @@ def main(task_queue, response_queue, test=False):
                 try:
                     device["serial"].write(bytes(command, encoding="utf-8"))
                     time.sleep(0.05)
-                #    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
+                    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return False
                 
                 
                 
-                #print("Received: " + recieved)
                 device["lastused"] = int(time.time())
 
-                #if recieved != command:
-                 #   wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
-                 #   logger.warn(wrn)
-                 #   if device["error"]:
-                 #       raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
-                 #       print("magic")
-                 #       return
-                 #   device["error"] = "Error: " + wrn
-                 #       logger.warn(f"usb device {device['name']} did not respond.")
-                 #       device["error"] = "Error: Device is not responding"
-                 #       device["status"] = "No response"
-                 #   return False
+                if recieved != command:
+                    wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
+                    logger.warning(wrn)
+                    if device["error"]:
+                        raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
+                        print("magic")
+                        return
+                    device["error"] = "Error: " + wrn
+                    logger.warning(f"usb device {device['name']} did not respond.")
+                    device["error"] = "Error: Device is not responding"
+                    device["status"] = "No response"
+                    return False
                 
                 device["status"] = "idk"
                 device["error"] = ""
@@ -251,6 +251,10 @@ def main(task_queue, response_queue, test=False):
                     update_hardcoded_light_pins()
                     response_queue.put("ok")
                     return
+                elif task == "temporaryoverwrite":
+                    update_hardcoded_light_pins(temporaryoverwrite=True)
+                    response_queue.put("ok")
+                    return
                 
                 elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
                     matches = [device for device in serial_devices if device["device"] == task[1]]
@@ -324,7 +328,12 @@ def main(task_queue, response_queue, test=False):
 
 
 
-        def update_hardcoded_light_pins():
+        def update_hardcoded_light_pins(temporaryoverwrite=False):
+            global last_updated
+            if temporaryoverwrite:
+                last_updated = time.time() + 120
+            else:
+                last_updated = time.time()
             nonlocal preview_start
             for name in hardcoded_light_pins:
                 matches = list(filter(lambda x: x["name"].startswith(name), serial_devices))
@@ -349,7 +358,7 @@ def main(task_queue, response_queue, test=False):
                             else:
                                 mult = 1
                             if "color" in info:
-                                strength = get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day)
+                                strength = get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day, temporaryoverwrite=temporaryoverwrite)
                                 if type(strength) == str and "Error" in strength:
                                     logger.error(strength)
                                 else:
@@ -383,7 +392,10 @@ def main(task_queue, response_queue, test=False):
                 {"color": "Red", "pin": 3},
             ],
             "mainPump": [
-                {"pump": "Pumpe 1", "pin": 11}
+                {"pump": "Pumpe 1", "pin": 10},
+                {"pump": "Pumpe 2", "pin": 9},
+                {"pump": "Pumpe 3", "pin": 3},
+                {"pump": "Pumpe 4", "pin": 11},
             ]
         }
 
@@ -406,8 +418,8 @@ def main(task_queue, response_queue, test=False):
             #        logger.error(response)
 
 
-
-            update_hardcoded_light_pins()
+            if (last_updated + update_frequency - 1) < time.time():
+                update_hardcoded_light_pins()
 
 
 

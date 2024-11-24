@@ -125,8 +125,14 @@ def replace_time_with_function(input_string):
     #print(non_time_conditions_dict, result)
     return result, non_time_conditions_dict
 
-def get_current_strength(color, mult=1, minutes_of_day=None, retries=0):
+def get_current_strength(color, mult=1, minutes_of_day=None, retries=0, temporaryoverwrite=False):
     try:
+        if temporaryoverwrite:
+            with open(os.path.join("data", "temporaryoverwritesliders.json")) as f:
+                sliders = json.load(f)
+                if "color" not in sliders["values"]:
+                    return f"Error in get_current_strength: {color} not in temporary overwrite"
+                return max(min(round(sliders[color]/100*255*mult), 255), 0)
         with open(os.path.join("data", "links.json"), "r", encoding="utf-8") as f:
             for _ in range(10):
                 try:

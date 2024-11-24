@@ -48,6 +48,7 @@ links_path = os.path.join("data", "links.json")
 code_path = os.path.join("data", "code.json")
 throttle_path = os.path.join("data", "throttle.json")
 switches_path = os.path.join("data", "switches.json")
+temporaryoverwritesliders_path = os.path.join("data", "temporaryoverwritesliders.json")
 
 @app.errorhandler(500)
 def handle_internal_server_error(e):
@@ -57,6 +58,14 @@ def handle_internal_server_error(e):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/lights')
+def lights():
+    return render_template('lights.html')
+
+@app.route('/pumps')
+def pumps():
+    return render_template('pumps.html')
 
 @app.route('/load', methods=['POST'])
 def load():
@@ -121,6 +130,26 @@ def upload():
     response = {'message': 'ok'}
 
     task_queue.put("update")
+    try:
+        response_queue.get(timeout=5)
+    except:
+        response = {'message': 'file updated. But no response from manager'}
+
+    
+    return jsonify(response)
+
+
+@app.route('/update-slider-values', methods=['POST'])
+def update_slider_values():
+    app.logger.info("update-slider-values request")
+    data = request.json
+
+    with open(temporaryoverwritesliders_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+    
+    response = {'message': 'ok'}
+
+    task_queue.put("temporaryoverwrite")
     try:
         response_queue.get(timeout=5)
     except:
@@ -321,4 +350,4 @@ if __name__ == '__main__':
     thread.start()
 
     app.logger.info("starting app")
-    app.run(debug=False, port=2389, host="0.0.0.0")
+    app.run(debug=True, port=2389, host="0.0.0.0")
