@@ -288,7 +288,7 @@ if __name__ == '__main__':
         print("raising")
         raise ValueError("AAAAAAAAAAAAAAAAAAA")
 
-    test = True
+    test = json.load(open("test.json", "r", encoding="utf-8"))["test"]
 
     # Function to run in the thread
     def thread_function():
