@@ -155,7 +155,7 @@ def main(task_queue, response_queue, test=False):
                 try:
                     device["serial"].write(bytes(command, encoding="utf-8"))
                     time.sleep(0.05)
-                    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
+                    # recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
                 except serial.serialutil.SerialException:
                     logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
                     return False
@@ -164,19 +164,19 @@ def main(task_queue, response_queue, test=False):
                 
                 device["lastused"] = int(time.time())
 
-                if recieved != command:
-                    wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
-                    logger.warning(wrn)
-                    if device["error"]:
-                        raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
-                        print("magic")
-                        return
-                    device["error"] = "Error: " + wrn
-                    logger.warning(f"usb device {device['name']} did not respond.")
-                    device["error"] = "Error: Device is not responding"
-                    device["status"] = "No response"
-                    return False
-                
+                #if recieved != command:
+                #    wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
+                #    logger.warning(wrn)
+                #    if device["error"]:
+                #        raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
+                #        print("magic")
+                #       return
+                #    device["error"] = "Error: " + wrn
+                #    logger.warning(f"usb device {device['name']} did not respond.")
+                #    device["error"] = "Error: Device is not responding"
+                #    device["status"] = "No response"
+                #    return False
+                #else:
                 device["status"] = "idk"
                 device["error"] = ""
                 return True
