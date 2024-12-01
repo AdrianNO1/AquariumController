@@ -130,7 +130,7 @@ def get_current_strength(color, mult=1, minutes_of_day=None, retries=0, temporar
         if temporaryoverwrite:
             with open(os.path.join("data", "temporaryoverwritesliders.json")) as f:
                 sliders = json.load(f)
-                if "color" not in sliders["values"]:
+                if color not in sliders["values"]:
                     return f"Error in get_current_strength: {color} not in temporary overwrite"
                 return max(min(round(sliders[color]/100*255*mult), 255), 0)
         with open(os.path.join("data", "links.json"), "r", encoding="utf-8") as f:
