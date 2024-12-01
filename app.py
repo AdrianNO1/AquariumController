@@ -350,4 +350,4 @@ if __name__ == '__main__':
     thread.start()
 
     app.logger.info("starting app")
-    app.run(debug=True, port=2389, host="0.0.0.0")
+    app.run(debug=True, port=2389, host="0.0.0.0", use_reloader=False)

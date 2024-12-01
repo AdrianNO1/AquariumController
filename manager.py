@@ -329,7 +329,8 @@ def main(task_queue, response_queue, test=False):
 
 
         def update_hardcoded_light_pins(temporaryoverwrite=False):
-            global last_updated
+            print("updating", temporaryoverwrite)
+            nonlocal last_updated
             if temporaryoverwrite:
                 last_updated = time.time() + 120
             else:
@@ -417,14 +418,17 @@ def main(task_queue, response_queue, test=False):
             #    if response.startswith("Error"):
             #        logger.error(response)
 
-
-            if (last_updated + update_frequency - 1) < time.time():
+            human_readable_last_updated = datetime.fromtimestamp(last_updated).strftime("%H:%M:%S")
+            print("e", human_readable_last_updated, update_frequency, datetime.fromtimestamp(time.time()).strftime("%H:%M:%S"))
+            if (last_updated + update_frequency) < time.time():
+                print("updating")
+                last_updated = time.time()
                 update_hardcoded_light_pins()
 
 
 
 
-            seconds = update_frequency-(time.time()-start)
+            seconds = last_updated + update_frequency - time.time()
             if seconds < 0:
                 logger.warn(f"spent {-seconds} overtime on serial communication")
                 read_queue(timeout=0.2)
