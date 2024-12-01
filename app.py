@@ -288,7 +288,12 @@ if __name__ == '__main__':
         print("raising")
         raise ValueError("AAAAAAAAAAAAAAAAAAA")
 
-    test = json.load(open("test.json", "r", encoding="utf-8"))["test"]
+    if os.path.exists("test.json"):
+        test = json.load(open("test.json", "r", encoding="utf-8"))["test"]
+    else:
+        test = True
+        with open("test.json", "w", encoding="utf-8") as f:
+            json.dump({"test": True}, f, indent=4)
 
     # Function to run in the thread
     def thread_function():
