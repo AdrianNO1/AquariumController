@@ -10,7 +10,7 @@
         },
         {
             "name": "Royal Blue",
-            "value": "51"
+            "value": "100"
         },
         {
             "name": "Blue",
@@ -18,12 +18,12 @@
         },
         {
             "name": "White",
-            "value": "68"
+            "value": "69"
         },
         {
             "name": "Red",
-            "value": "46"
+            "value": "38"
         }
     ],
-    "updated_at": 1733075562812
+    "updated_at": 1733077204398
 }

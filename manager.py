@@ -319,7 +319,7 @@ def main(task_queue, response_queue, test=False):
                     #print(self.written)
                     return bytes(self.written, encoding="utf-8")
 
-            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "Arduino1", "status": "Responded", "lastused": int(time.time()), "error": ""})
+            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
         else:
             for device in get_arduinos():
                 logger.info(f"found already connected USB device: {device}")
@@ -329,7 +329,6 @@ def main(task_queue, response_queue, test=False):
 
 
         def update_hardcoded_light_pins(temporaryoverwrite=False):
-            print("updating", temporaryoverwrite)
             nonlocal last_updated
             if temporaryoverwrite:
                 last_updated = time.time() + 120
@@ -419,9 +418,7 @@ def main(task_queue, response_queue, test=False):
             #        logger.error(response)
 
             human_readable_last_updated = datetime.fromtimestamp(last_updated).strftime("%H:%M:%S")
-            print("e", human_readable_last_updated, update_frequency, datetime.fromtimestamp(time.time()).strftime("%H:%M:%S"))
             if (last_updated + update_frequency) < time.time():
-                print("updating")
                 last_updated = time.time()
                 update_hardcoded_light_pins()
 
