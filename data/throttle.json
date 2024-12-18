@@ -1,3 +1,4 @@
 {
-    "throttle": 100
+    "lightthrottle": 100,
+    "pumpthrottle": 100
 }

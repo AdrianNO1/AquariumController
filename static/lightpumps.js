@@ -54,7 +54,6 @@ let arduinos
 let preview_start = 0
 let preview_interval_id
 let preview_duration = 60 // seconds
-let switches = {}
 
 let channels = {}
 
@@ -63,16 +62,19 @@ let channels_names
 let channels_colors
 
 let sliderTimeout = null;
+let overwriteStatusTimeout = null;
 
 // check if the current page is /lights
 if (window.location.pathname === "/lights"){
     channels_type = "light"
+    console.log("lights")
     channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
     channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
 } else if (window.location.pathname === "/pumps"){
+    console.log("pumps")
     channels_type = "pump"
-    channels_names = ["Pump 1", "Pump 2", "Pump 3", "Pump 4", "Pump 5", "Pump 6"]
-    channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
+    channels_names = ["Pump 1", "Pump 2", "Pump 3"]//, "Pump 4", "Pump 5", "Pump 6"]
+    channels_colors = ["purple", "violet", "blue"]//, "cyan", "white", "red"]
 } else {
     document.getElementById("error").textContent = "Unknown page"
     throw new Error("Unknown page")
@@ -109,16 +111,31 @@ function initializeSliders() {
 
     const sliders = document.querySelectorAll('.vertical-slider');
 
+    function disableOverwrite() {
+        document.getElementById("sliders-status").innerText = ""
+        updateTablePercentages()
+    }
+
     function updateSliderValue(slider) {
         const value = slider.value;
         const valueDisplay = slider.parentElement.querySelector('.slider-value');
         valueDisplay.textContent = value + '%';
+
+        if (overwriteStatusTimeout) {
+            clearTimeout(overwriteStatusTimeout);
+        }
+        overwriteStatusTimeout = setTimeout(() => {
+            overwriteStatusTimeout = null;
+            disableOverwrite()
+        }, 120000);
+        document.getElementById("sliders-status").innerText = "Overwrite: enabled"
     }
 
     function uploadSliderValues() {
         const values = Array.from(sliders).map(slider => {
             return {name: slider.dataset.name, value: slider.value};
         });
+        console.log("uploading")
 
         $.ajax({
             url: '/update-slider-values',
@@ -161,9 +178,6 @@ function initializeSliders() {
             }, 1000);
         });
     });
-
-    // Initialize values
-    sliders.forEach(updateSliderValue);
 }
 
 function createSlider(name) {
@@ -181,6 +195,7 @@ function createSlider(name) {
 
     const container = document.createElement('div');
     container.className = 'slider-container';
+    container.id = name.replace(" ", "_") + "_slider";
     
     const slider = document.createElement('input');
     slider.type = 'range';
@@ -198,9 +213,9 @@ function createSlider(name) {
     valueDiv.className = 'slider-value';
     valueDiv.textContent = '50%';
 
-    container.appendChild(slider);
     container.appendChild(nameDiv);
     container.appendChild(valueDiv);
+    container.appendChild(slider);
 
     return container;
 }
@@ -215,18 +230,12 @@ if (overwriteNodesWithExample){
         type: 'POST',
         async: false,
         contentType: 'application/json',
-        data: JSON.stringify({}),
+        data: JSON.stringify({"type": channels_type}),
         success: function(response) {
             nodes = JSON.parse(response.data)
             codeText = JSON.parse(response.code)
-            console.log(response.throttle)
             slider.value = JSON.parse(response.throttle)
             output.value = JSON.parse(response.throttle) + "%"
-            switches = response.switches
-            switches.forEach(e => {
-
-            })
-            //document.getElementById("switchesInfo").style.visibility = "hidden"
             
         },
         error: function(error) {
@@ -240,7 +249,7 @@ if (overwriteNodesWithExample){
 
 let i = 0
 channels_names.forEach(e => {
-    channelsTable.innerHTML += `<tr><td class="selectable" onclick="selectRow(this)">${e}</td><td><p id=${e.replace(" ", "_")}per>${e}%</p></td></tr>`
+    channelsTable.innerHTML += `<tr><td class="selectable" onclick="selectRow(this)">${e}</td></tr>`
 
     channels[e] = mainSvg
         .append("g")
@@ -405,7 +414,6 @@ function refreshGraph(svg, name=svg_name){
     svg.selectAll(".link").remove();
     svg.selectAll(".node").remove();
 
-    
     //update wraparound links
     var lastNode = nodes[name][nodes[name].length - 1];
     var firstNode = nodes[name][0];
@@ -801,19 +809,18 @@ document.getElementById("upload").addEventListener("click", function(){
     document.getElementById("uploadStatus").textContent = "sending..."
     let links_data = {}
     channels_names.forEach(e => {
-        links_data[e] = getLinks(channels[e])
+        links_data[e] = {"type": channels_type, "links": getLinks(channels[e])}
     })
     document.getElementById("upload").setAttribute("disabled","disabled")
     $.ajax({
         url: '/upload',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1)), switches: switches}),
+        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1)), type: channels_type}),
         success: function(response) {
             console.log(response.message);
             document.getElementById("uploadStatus").textContent = response.message
             document.getElementById("upload").removeAttribute("disabled");
-            document.getElementById("switchesInfo").style.visibility = "hidden"
         },
         error: function(error) {
             console.log(error);
@@ -855,9 +862,12 @@ function selectRow(row) {
 //}
 
 function updateTablePercentages(){
-    document.querySelectorAll('.selectable').forEach(elem => {
+    if (overwriteStatusTimeout) {
+        return
+    }
+    channels_names.forEach(name => {
         let graphY
-        let links = getLinks(channels[elem.innerText])
+        let links = getLinks(channels[name])
         let local_current_minutes = current_minutes
         if (preview_start !== 0){
             local_current_minutes = Math.max(Math.floor((Date.now() / 1000 - preview_start) * 60 * (24 / preview_duration)), 0);
@@ -867,18 +877,23 @@ function updateTablePercentages(){
             let link = links[i]
             if (link.source.time <= local_current_minutes && link.target.time >= local_current_minutes){
                 graphY = link.source.y + ((local_current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+                // console.log(Math.round(yScale.invert(graphY)) + "%", Math.round(yScale.invert(graphY)), yScale.invert(graphY), graphY, link.source, local_current_minutes, link.target)
                 break
             }
         }
 
-        document.getElementById(elem.innerText.replace(" ", "_") + "per").innerText = Math.round(yScale.invert(graphY)) + "%"
+        const container = document.getElementById(name.replace(" ", "_") + "_slider")
+        if (container) {
+            container.querySelector(".vertical-slider").value = Math.round(yScale.invert(graphY))
+            container.querySelector(".slider-value").innerText = Math.round(yScale.invert(graphY)) + "%"
+        }
     })
 }
 
 window.onload = function() {
+    initializeSliders()
     updateTablePercentages()
     selectRow(document.querySelector('.selectable'))
-    initializeSliders()
 };
 
 //// Initialize the Ace Editor
