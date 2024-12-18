@@ -286,7 +286,7 @@ th, td {
     direction: rtl;
     writing-mode: bt-lr;
     width: 20px;
-    height: 200px;
+    height: 100%;
     margin: 15px 0;
     background: #898989;
 }
@@ -352,7 +352,7 @@ th, td {
 
 #sliders-wrapper {
     display: flex;
-    justify-content: center;
+    justify-content: left;
     padding: 40px;
     padding-top: 0;
     margin-top: 10px;
