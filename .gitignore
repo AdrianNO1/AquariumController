@@ -2,3 +2,5 @@ logs/*
 __pycache__/
 data/*
 test.json
+secret.json
+key.pem

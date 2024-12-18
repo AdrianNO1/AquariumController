@@ -17,15 +17,48 @@ if num > 0:
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
-from flask import Flask, request, jsonify, render_template, url_for
-from multiprocessing import Process
+from flask import Flask, request, jsonify, render_template, url_for, redirect, flash
+from flask_login import LoginManager, login_user, logout_user, login_required, UserMixin, current_user
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from datetime import datetime
 from manager import main
 from custom_syntax import parse_code
 import threading
 import queue, logging, glob, subprocess, signal#, vonage
+from werkzeug.security import check_password_hash
+
+# run on pi: pip install flask_login flask_limiter
+
+
+try:
+    with open('secret.json', 'r') as f:
+        config = json.load(f)
+except FileNotFoundError:
+    raise FileNotFoundError("Secret file not found. Please run generate_secret.py first.")
 
 app = Flask(__name__)
+limiter = Limiter(
+    app=app,
+    key_func=lambda: "global"
+)
+app.secret_key = config['secret_key']
+
+users = {
+    'pjot': {
+        'password_hash': config['password_hash']
+    }
+}
+
+class User(UserMixin):
+    def __init__(self, id):
+        self.id = id
+        self.username = id
+        self.password_hash = users[id]['password_hash']
+
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
 
 os.makedirs("logs/app", exist_ok=True)
 os.makedirs("logs/manager", exist_ok=True)
@@ -52,46 +85,83 @@ switches_path = os.path.join("data", "switches.json")
 temporaryoverwritesliders_path = os.path.join("data", "temporaryoverwritesliders.json")
 
 @app.errorhandler(500)
+@login_required
 def handle_internal_server_error(e):
     app.logger.error('Internal Server Error: %s', e)
     return "Internal Server Error", 500
 
+@app.errorhandler(404)
+@login_required
+def handle_internal_server_error(e):
+    app.logger.error('Not found: %s', e)
+    return "No", 404
+
+@login_manager.user_loader
+def load_user(user_id):
+    if user_id not in users:
+        return None
+    return User(user_id)
+
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
 
+@app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("10 per minute")
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = request.form['password']
+        if username in users and check_password_hash(users[username]['password_hash'], password):
+            user = User(username)
+            login_user(user)
+            app.logger.info(f"User {username} logged in.")
+            return redirect(url_for('index'))
+        else:
+            flash('Invalid username or password')
+            app.logger.warning(f"Failed login attempt for user {username} from {request.remote_addr}.")
+            return render_template('login.html')
+    else:
+        return render_template('login.html')
+
 @app.route('/lights')
+@login_required
 def lights():
     return render_template('lights.html')
 
 @app.route('/pumps')
+@login_required
 def pumps():
     return render_template('pumps.html')
 
 @app.route('/kill')
+@login_required
 def kill():
     app.logger.info("kill request")
     os.kill(os.getpid(), signal.SIGINT)
     return jsonify({"message": "Killed"}) # won't send lol
 
 @app.route('/shutdown')
+@login_required
 def shutdown():
     app.logger.info("shutdown request")
     os.system("sudo shutdown now")
     return jsonify({"message": "Shutting down"})
 
 @app.route('/restart')
+@login_required
 def restart():
     app.logger.info("restart request")
     os.system("sudo reboot")
     return jsonify({"message": "Restarting"})
 
 @app.route('/pullrestart')
+@login_required
 def pullrestart():
     app.logger.info("pullrestart request")
     import subprocess
     import os
-    import sys
     
     try:
         # Get the current directory where app.py is located
@@ -132,11 +202,13 @@ python3 app.py &
     
 
 @app.route('/test')
+@login_required
 def test():
     app.logger.info("test request")
     return jsonify({"message": "Test Func"})
 
 @app.route('/load', methods=['POST'])
+@login_required
 def load():
     app.logger.info("load request")
     data = request.json
@@ -172,6 +244,7 @@ def load():
     return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines})
 
 @app.route('/load arduino info', methods=['POST'])
+@login_required
 def load_arduino_info():
     app.logger.info("load_arduino_info request")
     data = request.json
@@ -186,6 +259,7 @@ def load_arduino_info():
     return jsonify({"data": json.dumps(response)}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
 
 @app.route('/upload', methods=['POST'])
+@login_required
 def upload():
     app.logger.info("upload request")
     data = request.json
@@ -215,6 +289,7 @@ def upload():
 
 
 @app.route('/update-slider-values', methods=['POST'])
+@login_required
 def update_slider_values():
     app.logger.info("update-slider-values request")
     data = request.json
@@ -234,6 +309,7 @@ def update_slider_values():
     return jsonify(response)
 
 @app.route('/verify', methods=['POST'])
+@login_required
 def verify():
     app.logger.info("verify request")
     data = request.json
@@ -258,6 +334,7 @@ def verify():
     return jsonify(response)
 
 @app.route('/run once', methods=['POST'])
+@login_required
 def run_once():
     app.logger.info("run once request")
     data = request.json
@@ -278,6 +355,7 @@ def run_once():
     return jsonify(response)
 
 @app.route('/uploadandrun', methods=['POST'])
+@login_required
 def upload_and_run():
     app.logger.info("upload and run request")
     data = request.json
@@ -300,6 +378,7 @@ def upload_and_run():
     return jsonify(response)
 
 @app.route('/rename', methods=['POST'])
+@login_required
 def rename():
     app.logger.info("upload and run request")
     data = request.json
@@ -313,6 +392,7 @@ def rename():
     return jsonify(response)
 
 @app.route('/preview', methods=['POST'])
+@login_required
 def preview():
     app.logger.info("preview request")
     data = request.json
@@ -329,6 +409,7 @@ def preview():
     return jsonify(response)
 
 @app.route('/cancelpreview', methods=['POST'])
+@login_required
 def cancelpreview():
     app.logger.info("cancelpreview request")
 
@@ -429,5 +510,6 @@ if __name__ == '__main__':
     thread = threading.Thread(target=thread_function)
     thread.start()
 
-    app.logger.info("starting app")
-    app.run(debug=True, port=2389, host="0.0.0.0", use_reloader=False)
+    app.logger.info("starting app with SSL")
+    app.run(debug=True, port=2389, host="0.0.0.0", use_reloader=False, 
+            ssl_context=('cert.pem', 'key.pem'))
