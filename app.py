@@ -67,6 +67,23 @@ def lights():
 def pumps():
     return render_template('pumps.html')
 
+@app.route('/kill')
+def kill():
+    app.logger.info("kill request")
+    os.kill(os.getpid(), signal.SIGINT)
+    return "Killed"
+
+@app.route('/restart')
+def restart():
+    app.logger.info("restart request")
+    os.system("sudo reboot")
+    return "Restarting"
+
+@app.route('/test')
+def test():
+    app.logger.info("test request")
+    return "Test Func"
+
 @app.route('/load', methods=['POST'])
 def load():
     app.logger.info("load request")

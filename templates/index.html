@@ -112,9 +112,10 @@
             <span class="close-button" onclick="toggleDebugModal()">&times;</span>
             <h2>Debug Controls</h2>
             <div class="debug-controls">
-                <button onclick="makeApiCall('/api/status')">Get Status</button>
-                <button onclick="makeApiCall('/api/test')">Run Test</button>
-                <button onclick="makeApiCall('/api/reset')">Reset System</button>
+                <button onclick="makeApiCall('/api/kill')">Kill Program</button>
+                <button onclick="makeApiCall('/api/shutdown')">Shut Down</button>
+                <button onclick="makeApiCall('/api/restart')">Restart</button>
+                <button onclick="makeApiCall('/api/test')">Test</button>
             </div>
             <div class="response-area" id="responseArea">
                 Response will appear here...
@@ -149,7 +150,7 @@
                 const data = await response.json();
                 responseArea.innerHTML = JSON.stringify(data, null, 2);
             } catch (error) {
-                responseArea.innerHTML = `Error: ${error.message}`;
+                responseArea.innerHTML = `Error: ${error.message}\n${error.stack}`;
             }
         }
     </script>
