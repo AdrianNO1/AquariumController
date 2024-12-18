@@ -1,5 +1,6 @@
 #graph{
     background-color: gray;
+    min-width: 1000px;
 }
 
 .inputDesc{
@@ -158,8 +159,8 @@ th, td {
 }
 
 #throttle{
-    -webkit-appearance: slider-vertical;
-    appearance: slider-vertical;
+    writing-mode: vertical-lr;
+    direction: rtl;
     width: 8px;
     height: 200px;
     outline: none;
@@ -266,6 +267,7 @@ th, td {
     align-items: center;
     margin: 0 5px;
     width: 80px;
+    min-width: 37px;
     height: 320px;
     background: #ffffff;
     padding: 15px;
@@ -280,8 +282,8 @@ th, td {
 }
 
 .vertical-slider {
-    -webkit-appearance: slider-vertical;
-    appearance: slider-vertical;
+    writing-mode: vertical-lr;
+    direction: rtl;
     writing-mode: bt-lr;
     width: 20px;
     height: 200px;
@@ -328,9 +330,10 @@ th, td {
 
 .slider-name {
     font-size: 1.1em;
-    margin: 5px 0;
+    max-height: 18px;
+    margin: 5px -15px;
     text-align: center;
-    width: 100%;
+    width: calc(100% + 30px); /* Compensate for the negative margins */
     color: #2196F3;
     font-weight: bold;
     text-shadow: 0 0 5px rgba(33, 150, 243, 0.2);
@@ -351,7 +354,8 @@ th, td {
     display: flex;
     justify-content: center;
     padding: 40px;
-    margin-top: 50px;
+    padding-top: 0;
+    margin-top: 10px;
     align-items: flex-start;
 }
 

@@ -105,7 +105,7 @@
         <button class="main-button" onclick="navigate('/pumps')">Pumper</button>
     </div>
 
-    <button class="debug-button" onclick="toggleDebugModal()">Debug</button>
+    <button class="debug-button" onclick="toggleDebugModal()">Adrian sine knapper</button>
 
     <div id="debugModal" class="modal">
         <div class="modal-content">
@@ -113,8 +113,9 @@
             <h2>Debug Controls</h2>
             <div class="debug-controls">
                 <button onclick="makeApiCall('/kill')">Kill Program</button>
-                <button onclick="makeApiCall('/shutdown')">Shut Down</button>
-                <button onclick="makeApiCall('/restart')">Restart</button>
+                <button onclick="makeApiCall('/shutdown')">Shutdown Pi</button>
+                <button onclick="makeApiCall('/restart')">Restart Pi</button>
+                <button onclick="makeApiCall('/pullrestart')">Kill Pull Start program</button>
                 <button onclick="makeApiCall('/test')">Test</button>
             </div>
             <div class="response-area" id="responseArea">
