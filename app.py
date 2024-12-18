@@ -12,7 +12,8 @@ try:
 except:
     num = 0
 
-print(f"APP HAS CRASHED {num} TIMES THIS SESSION")
+if num > 0:
+    print(f"APP HAS CRASHED {num} TIMES THIS SESSION")
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
@@ -71,25 +72,35 @@ def pumps():
 def kill():
     app.logger.info("kill request")
     os.kill(os.getpid(), signal.SIGINT)
-    return "Killed"
+    return jsonify({"message": "Killed"}) # won't send lol
+
+@app.route('/shutdown')
+def shutdown():
+    app.logger.info("shutdown request")
+    os.system("sudo shutdown now")
+    return jsonify({"message": "Shutting down"})
 
 @app.route('/restart')
 def restart():
     app.logger.info("restart request")
     os.system("sudo reboot")
-    return "Restarting"
+    return jsonify({"message": "Restarting"})
 
 @app.route('/test')
 def test():
     app.logger.info("test request")
-    return "Test Func"
+    return jsonify({"message": "Test Func"})
 
 @app.route('/load', methods=['POST'])
 def load():
     app.logger.info("load request")
     data = request.json
+    mode = data["type"]
     nodes = json.load(open(links_path, "r", encoding="utf-8"))
     for key in nodes.keys():
+        if nodes[key]["type"] != mode:
+            continue
+        nodes[key] = nodes[key]["links"]
         i = 0
         for link in nodes[key]:
             nodes[key][i] = link["source"]
@@ -97,8 +108,7 @@ def load():
         nodes[key] = nodes[key][1:]
 
     code = json.load(open(code_path, "r", encoding="utf-8"))
-    throttle = json.load(open(throttle_path, "r", encoding="utf-8"))["throttle"]
-    switches = json.load(open(switches_path, "r", encoding="utf-8"))["switches"]
+    throttle = json.load(open(throttle_path, "r", encoding="utf-8"))[mode + "throttle"]
     
     limit = 10
     x = 0
@@ -114,7 +124,7 @@ def load():
     #                break
 
 
-    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines, "switches": switches})
+    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines})
 
 @app.route('/load arduino info', methods=['POST'])
 def load_arduino_info():
@@ -134,15 +144,18 @@ def load_arduino_info():
 def upload():
     app.logger.info("upload request")
     data = request.json
+    mode = data["type"]
     
+    links = json.load(open(links_path, "r", encoding="utf-8"))
+    for key in data["links_data"]:
+        links[key] = data["links_data"][key]
     with open(links_path, "w", encoding="utf-8") as f:
-        json.dump(data["links_data"], f, indent=4)
+        json.dump(links, f, indent=4)
 
+    throttle = json.load(open(throttle_path, "r", encoding="utf-8"))
+    throttle[mode + "throttle"] = data["throttle"]
     with open(throttle_path, "w", encoding="utf-8") as f:
-        json.dump({"throttle": data["throttle"]}, f, indent=4)
-
-    with open(switches_path, "w", encoding="utf-8") as f:
-        json.dump({"switches": data["switches"]}, f, indent=4)
+        json.dump(throttle, f, indent=4)
 
     response = {'message': 'ok'}
 

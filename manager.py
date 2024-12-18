@@ -320,6 +320,7 @@ def main(task_queue, response_queue, test=False):
                     return bytes(self.written, encoding="utf-8")
 
             serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
+            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "mainPump", "status": "Responded", "lastused": int(time.time()), "error": ""})
         else:
             for device in get_arduinos():
                 logger.info(f"found already connected USB device: {device}")
@@ -331,16 +332,13 @@ def main(task_queue, response_queue, test=False):
         def update_hardcoded_light_pins(temporaryoverwrite=False):
             nonlocal last_updated
             if temporaryoverwrite:
-                last_updated = time.time() + 120
+                last_updated = time.time() + 120 # also change in lightpumps.js. ctrl + f "120000"
             else:
                 last_updated = time.time()
             nonlocal preview_start
             for name in hardcoded_light_pins:
                 matches = list(filter(lambda x: x["name"].startswith(name), serial_devices))
-                #if len(matches) == 0:
-                #    logger.error(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
-                #    raise RuntimeError(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
-                #    print(f'Unable to find an arduino that starts with: "{name}" from hardcoded thing')
+                
                 if matches:
                     for device in matches:
                         for info in hardcoded_light_pins[name]:
@@ -357,14 +355,12 @@ def main(task_queue, response_queue, test=False):
                                 mult = 0.7
                             else:
                                 mult = 1
-                            if "color" in info:
-                                strength = get_current_strength(info["color"], mult=mult, minutes_of_day=minutes_of_day, temporaryoverwrite=temporaryoverwrite)
+                            if "channel" in info:
+                                strength = get_current_strength(info["channel"], mult=mult, minutes_of_day=minutes_of_day, temporaryoverwrite=temporaryoverwrite)
                                 if type(strength) == str and "Error" in strength:
                                     logger.error(strength)
                                 else:
                                     run_command(device, "analogWrite", [info["pin"], strength])
-                            elif "pump" in info:
-                                pass # TODO
                             
                             time.sleep(0.05)
                 
@@ -376,26 +372,26 @@ def main(task_queue, response_queue, test=False):
 
         hardcoded_light_pins = {
             "mainLys": [
-                {"color": "Uv", "pin": 11},
-                {"color": "Violet", "pin": 6},
-                {"color": "Royal Blue", "pin": 10},
-                {"color": "Blue", "pin": 5},
-                {"color": "White", "pin": 9},
-                {"color": "Red", "pin": 3},
+                {"channel": "Uv", "pin": 11},
+                {"channel": "Violet", "pin": 6},
+                {"channel": "Royal Blue", "pin": 10},
+                {"channel": "Blue", "pin": 5},
+                {"channel": "White", "pin": 9},
+                {"channel": "Red", "pin": 3},
             ],
             "mainLys70": [
-                {"color": "Uv", "pin": 11},
-                {"color": "Violet", "pin": 6},
-                {"color": "Royal Blue", "pin": 10},
-                {"color": "Blue", "pin": 5},
-                {"color": "White", "pin": 9},
-                {"color": "Red", "pin": 3},
+                {"channel": "Uv", "pin": 11},
+                {"channel": "Violet", "pin": 6},
+                {"channel": "Royal Blue", "pin": 10},
+                {"channel": "Blue", "pin": 5},
+                {"channel": "White", "pin": 9},
+                {"channel": "Red", "pin": 3},
             ],
             "mainPump": [
-                {"pump": "Pumpe 1", "pin": 10},
-                {"pump": "Pumpe 2", "pin": 9},
-                {"pump": "Pumpe 3", "pin": 3},
-                {"pump": "Pumpe 4", "pin": 11},
+                {"channel": "Pump 1", "pin": 10},
+                {"channel": "Pump 2", "pin": 9},
+                {"channel": "Pump 3", "pin": 3},
+                {"channel": "Pump 4", "pin": 11},
             ]
         }
 

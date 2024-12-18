@@ -269,6 +269,7 @@ th, td {
     height: 320px;
     background: #ffffff;
     padding: 15px;
+    border: 3px solid #838383;
     border-radius: 12px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     transition: transform 0.2s, box-shadow 0.2s;
@@ -280,6 +281,7 @@ th, td {
 
 .vertical-slider {
     -webkit-appearance: slider-vertical;
+    appearance: slider-vertical;
     writing-mode: bt-lr;
     width: 20px;
     height: 200px;
@@ -313,14 +315,14 @@ th, td {
 .vertical-slider::-webkit-slider-runnable-track {
     width: 20px;
     cursor: pointer;
-    background: #f0f0f0;
+    background: #d0d0d0;
     border-radius: 10px;
 }
 
 .vertical-slider::-moz-range-track {
     width: 20px;
     cursor: pointer;
-    background: #f0f0f0;
+    background: #d0d0d0;
     border-radius: 10px;
 }
 
@@ -340,7 +342,6 @@ th, td {
     text-align: center;
     width: 100%;
     color: #333333;
-    background: #f0f0f0;
     padding: 5px 0;
     border-radius: 5px;
     margin-top: 5px;
@@ -350,7 +351,10 @@ th, td {
     display: flex;
     justify-content: center;
     padding: 40px;
-    margin-top: 100px;
+    margin-top: 50px;
     align-items: flex-start;
-    background-color: #f5f5f5;
+}
+
+#sliders-status {
+    min-height: 18px;
 }

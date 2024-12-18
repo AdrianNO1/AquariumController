@@ -1,29 +1,17 @@
 {
     "values": [
         {
-            "name": "Uv",
-            "value": "0"
+            "name": "Pump 1",
+            "value": "72"
         },
         {
-            "name": "Violet",
-            "value": "0"
+            "name": "Pump 2",
+            "value": "70"
         },
         {
-            "name": "Royal Blue",
-            "value": "100"
-        },
-        {
-            "name": "Blue",
-            "value": "0"
-        },
-        {
-            "name": "White",
-            "value": "69"
-        },
-        {
-            "name": "Red",
-            "value": "38"
+            "name": "Pump 3",
+            "value": "13"
         }
     ],
-    "updated_at": 1733077204398
+    "updated_at": 1734524887505
 }

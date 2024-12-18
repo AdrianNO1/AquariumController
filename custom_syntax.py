@@ -145,13 +145,17 @@ def get_current_strength(color, mult=1, minutes_of_day=None, retries=0, temporar
                     #logger.warn(str(e))
             else:
                 raise ValueError(str(e))
-            throttle = json.load(open(os.path.join("data", "throttle.json"), "r", encoding="utf-8"))["throttle"]
+            
+            if color not in links:
+                return f"Error in get_current_strength: Unable to find {color} in link"
+            
+            throttle = json.load(open(os.path.join("data", "throttle.json"), "r", encoding="utf-8"))[links[color]["type"] + "throttle"]
             if color in links:
                 if minutes_of_day == None:
                     now = datetime.utcnow()
                     minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
 
-                for link in links[color]:
+                for link in links[color]["links"]:
                     if link["source"]["time"] <= minutes_of_day and link["target"]["time"] >= minutes_of_day:
                         total_duration = link["target"]["time"] - link["source"]["time"]
                         if total_duration == 0:
