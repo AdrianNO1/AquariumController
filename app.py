@@ -86,6 +86,51 @@ def restart():
     os.system("sudo reboot")
     return jsonify({"message": "Restarting"})
 
+@app.route('/pullrestart')
+def pullrestart():
+    app.logger.info("pullrestart request")
+    import subprocess
+    import os
+    import sys
+    
+    try:
+        # Get the current directory where app.py is located
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Create a shell script that will run after we exit
+        update_script = """#!/bin/bash
+cd {}
+git pull
+sleep 2
+python3 app.py &
+""".format(current_dir)
+
+        # Write the update script
+        with open('/tmp/update_and_restart.sh', 'w') as f:
+            f.write(update_script)
+        
+        # Make the script executable
+        subprocess.call(['chmod', '+x', '/tmp/update_and_restart.sh'])
+        
+        # Execute the update script in the background
+        subprocess.Popen(['/bin/bash', '/tmp/update_and_restart.sh'])
+        
+        # Return success message before shutting down
+        response = {'status': 'success', 'message': 'Update and restart initiated'}
+        
+        # Shutdown the Flask application
+        func = request.environ.get('werkzeug.server.shutdown')
+        if func is None:
+            raise RuntimeError('Not running with the Werkzeug Server')
+        func()
+        
+        return jsonify(response)
+        
+    except Exception as e:
+        app.logger.error(f"Error in pullrestart: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+
 @app.route('/test')
 def test():
     app.logger.info("test request")

@@ -1177,13 +1177,13 @@ function editTitle(buttonElement) {
                 buttonElement.textContent = 'Edit';
                 if (!response.data){
                     console.log(response)
-                    document.getElementById("cards status").textContent = response.error
+                    document.getElementById("cards-status").textContent = response.error
                 }
             },
             error: function(error) {
                 buttonElement.disabled = false
                 console.log(error);
-                document.getElementById("cards status").textContent = "Error: Unable to connect"
+                document.getElementById("cards-status").textContent = "Error: Unable to connect"
             }
         });
     }
@@ -1215,17 +1215,17 @@ document.getElementById("refresh cards").addEventListener("click", function(){
                     </div>`
                 }
                 document.getElementById("arduino_cards").innerHTML = totalText
-                document.getElementById("cards status").textContent = "OK"
+                document.getElementById("cards-status").textContent = "OK"
             }
             else{
                 console.log(response)
-                document.getElementById("cards status").textContent = response.error
+                document.getElementById("cards-status").textContent = response.error
             }
         },
         error: function(error) {
             document.getElementById("refresh cards").removeAttribute("disabled")
             console.log(error);
-            document.getElementById("cards status").textContent = "Error: Unable to connect"
+            document.getElementById("cards-status").textContent = "Error: Unable to connect"
         }
     });
 })
