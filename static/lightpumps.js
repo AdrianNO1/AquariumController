@@ -54,6 +54,8 @@ let arduinos
 let preview_start = 0
 let preview_interval_id
 let preview_duration = 60 // seconds
+let avaliableChannels = []
+let outputs = {}
 
 let channels = {}
 
@@ -236,7 +238,9 @@ if (overwriteNodesWithExample){
             codeText = JSON.parse(response.code)
             slider.value = JSON.parse(response.throttle)
             output.value = JSON.parse(response.throttle) + "%"
-            
+            avaliableChannels = response.avaliable_channels
+            outputs = JSON.parse(response.outputs)
+            document.getElementById("edit-channel-config").removeAttribute("disabled")
         },
         error: function(error) {
             console.log(error);
@@ -1189,26 +1193,223 @@ function editTitle(buttonElement) {
     }
 }
 
-document.getElementById("refresh cards").addEventListener("click", function(){
-    document.getElementById("refresh cards").setAttribute("disabled","disabled")
+
+
+
+// ESP32 Configuration Popup
+function showESP32Config(arduino_index) {
+    let arduino = arduinos[arduino_index]
+    console.log(arduino)
+    const template = $('#esp32-config-template').html();
+    const $popup = $('<div class="popup-overlay">').html(template);
+    
+    // Set initial values
+    $popup.find('#esp32-name').val(arduino.name);
+    $popup.find('#esp32-freq').val(arduino.freq);
+    $popup.find('#esp32-res').val(arduino.res);
+
+    // Close handlers
+    function closePopup() {
+        $popup.remove();
+    }
+
+    $popup.find('.close-btn, .cancel-btn').click(closePopup);
+
+    // Submit handler
+    $popup.find('.submit-btn').click(() => {
+        $popup.find('.submit-btn').attr('disabled', 'disabled');
+        const data = {
+            id: arduino.id,
+            name: $popup.find('#esp32-name').val().replace(" ", "_"),
+            freq: parseInt($popup.find('#esp32-freq').val()),
+            res: parseInt($popup.find('#esp32-res').val())
+        };
+
+        $.ajax({
+            url: '/editesp',
+            method: 'POST',
+            data: JSON.stringify(data),
+            contentType: 'application/json',
+            success: function() {
+                closePopup();
+                $('#refresh-cards').click();
+            },
+            error: function(xhr) {
+                $popup.find('.error-message').text(xhr.responseText || 'Error updating device');
+            },
+            finally: function(){
+                $popup.find('.submit-btn').removeAttr('disabled');
+            }
+        });
+    });
+
+    $('body').append($popup);
+}
+
+// Channel Configuration Popup
+function showChannelConfig(outputs = {}) {
+    const template = $('#channel-config-template').html();
+    const $popup = $('<div class="popup-overlay">').html(template);
+    const $outputGroups = $popup.find('#output-groups');
+
+    function addChannelToOutput($output, channelData = null) {
+        const $channel = $('<div class="channel-entry">');
+        const $select = $('<select>').append(
+            avaliableChannels.map(ch => $('<option>').text(ch))
+        );
+        const $pinInput = $('<input type="number" placeholder="Pin">');
+        const $removeBtn = $('<button>').text('Remove');
+
+        if (channelData) {
+            $select.val(channelData.channel);
+            $pinInput.val(channelData.pin);
+        }
+
+        $removeBtn.click(() => $channel.remove());
+        $channel.append($select, $pinInput, $removeBtn);
+        $output.find('.channels').append($channel);
+        return $channel;
+    }
+
+    function addOutputGroup(name = '', channels = []) {
+        const $output = $('<div class="output-group">');
+        $output.append(`
+            <input type="text" class="output-name" value="${name}" placeholder="Start of device name">
+            <button class="add-channel-btn">Add Channel</button>
+            <button class="remove-output-btn">Remove Group</button>
+            <div class="channels"></div>
+        `);
+
+        $output.find('.add-channel-btn').click(() => addChannelToOutput($output));
+        $output.find('.remove-output-btn').click(() => $output.remove());
+        $outputGroups.append($output);
+
+        channels.forEach(channel => {
+            addChannelToOutput($output, channel);
+        });
+
+        return $output;
+    }
+
+    // Add existing outputs
+    Object.entries(outputs).forEach(([name, channels]) => {
+        addOutputGroup(name, channels);
+    });
+
+    $popup.find('.add-output-btn').click(() => addOutputGroup());
+
+    // Close handlers
+    function closePopup() {
+        $popup.remove();
+    }
+
+    $popup.find('.close-btn, .cancel-btn').click(closePopup);
+
+    // Submit handler
+    $popup.find('.submit-btn').click(() => {
+        $popup.find('.submit-btn').attr('disabled', 'disabled');
+        const outputs = {};
+        let hasError = false;
+
+        $outputGroups.find('.output-group').each(function() {
+            const $output = $(this);
+            const name = $output.find('.output-name').val();
+            const channels = [];
+            const usedPins = new Set();
+
+            $output.find('.channel-entry').each(function() {
+                const channel = {
+                    channel: $(this).find('select').val(),
+                    pin: parseInt($(this).find('input').val())
+                };
+
+                if (usedPins.has(channel.pin)) {
+                    hasError = true;
+                    $popup.find('.error-message').text('Duplicate pins not allowed');
+                    return false;
+                }
+
+                if (isNaN(channel.pin)) {
+                    hasError = true;
+                    $popup.find('.error-message').text('Pin must be a number');
+                    return false;
+                }
+
+                if (typeof channel.channel !== 'string') {
+                    hasError = true;
+                    $popup.find('.error-message').text('Channel must be a string');
+                    return false;
+                }
+                if (!avaliableChannels.includes(channel.channel)) {
+                    hasError = true;
+                    $popup.find('.error-message').text(`Invalid channel: "${channel.channel}" from group "${name}"`);
+                    return false;
+                }
+
+                usedPins.add(channel.pin);
+                channels.push(channel);
+            });
+
+            if (outputs[name]) {
+                hasError = true;
+                $popup.find('.error-message').text('Duplicate group names not allowed');
+                return false;
+            }
+
+            outputs[name] = channels;
+        });
+
+        if (!hasError) {
+            $.ajax({
+                url: '/update-channels',
+                method: 'POST', 
+                data: JSON.stringify({ outputs }),
+                contentType: 'application/json',
+                success: function(response) {
+                    closePopup();
+                    $('#refresh-cards').click();
+                },
+                error: function(xhr) {
+                    $popup.find('.error-message').text(xhr.responseText || 'Error updating channels');
+                },
+                finally: function(){
+                    $popup.find('.submit-btn').removeAttr('disabled');
+                }
+            });
+        } else {
+            $popup.find('.submit-btn').removeAttr('disabled');
+        }
+    });
+
+    $('body').append($popup);
+}
+
+document.getElementById("edit-channel-config").addEventListener("click", function(){
+    showChannelConfig(outputs)
+})
+
+
+
+document.getElementById("refresh-cards").addEventListener("click", function(){
+    document.getElementById("refresh-cards").setAttribute("disabled","disabled")
     $.ajax({
-        url: '/load arduino info',
+        url: '/loadarduinoinfo',
         type: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({}),
         success: function(response) {
-            document.getElementById("refresh cards").removeAttribute("disabled")
+            document.getElementById("refresh-cards").removeAttribute("disabled")
             if (response.data){
                 console.log(JSON.parse(response.data))
                 arduinos = JSON.parse(response.data);
                 
                 totalText = ""
-                for (arduino in arduinos){
-                    arduino = arduinos[arduino]
+                for (let i = 0; i < arduinos.length; i++){
+                    let arduino = arduinos[i];
                     totalText += `<div class="card ${arduino.error ? 'error-background' : ''}">
                     <div class="title">${arduino.name}</div>
-                    <button class="edit-button" id=${arduino.device} onclick="editTitle(this)">Edit</button>
-                    <div class="subtitle">USB: ${arduino.device}</div>
+                    ${arduino.wireless ? `<input type="button" class="edit-button" value="Edit" onclick="showESP32Config(${i})">` : `<input disabled type="button" class="edit-button" id=${arduino.device} value="Edit" onclick="editTitle(this)">`}
+                    ${arduino.wireless ? `<div class="subtitle">ID: ${arduino.id}</div>` : `<div class="subtitle">USB: ${arduino.device}</div>`}
                     <div class="content error">${arduino.error}</div>       
                     <div class="lastused">Last used: ${timeSinceEpochToString(arduino.lastused)}</div>
                     <div class="status">Status: ${arduino.status}</div>
@@ -1223,11 +1424,11 @@ document.getElementById("refresh cards").addEventListener("click", function(){
             }
         },
         error: function(error) {
-            document.getElementById("refresh cards").removeAttribute("disabled")
+            document.getElementById("refresh-cards").removeAttribute("disabled")
             console.log(error);
             document.getElementById("cards-status").textContent = "Error: Unable to connect"
         }
     });
 })
 
-document.getElementById("refresh cards").click()
+document.getElementById("refresh-cards").click()

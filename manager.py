@@ -1,6 +1,6 @@
 def main(task_queue, response_queue, test=False):
     try:
-        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys, zipfile#, dropbox
+        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys, os, zipfile#, dropbox
         
         sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
@@ -8,15 +8,21 @@ def main(task_queue, response_queue, test=False):
         from custom_syntax import parse_code, get_current_strength
         from logging.handlers import TimedRotatingFileHandler
 
+        slaves = []
+        logger = logging.getLogger(__name__)
+
         if not test:
             from usb_listener import setup_usb_listener
             from get_connected_arduinos import get_arduinos
-
-        # Create a custom logger
-        logger = logging.getLogger(__name__)
+        
+        # TODO: move into test
+        from ESP32Manager import ESP32Manager
+        esp_controller = ESP32Manager(slaves, logger)
 
         preview_start = 0
         last_updated = 0
+        device_outputs = {}
+        channels_path = os.path.join("data", "channels.json")
 
         #refresh_token = os.getenv("DROPBOX_API_KEY")
 
@@ -97,7 +103,7 @@ def main(task_queue, response_queue, test=False):
             except serial.serialutil.SerialException:
                 logger.warn("Device disconnected when initializing")
                 return
-            serial_devices.append(serial_device)
+            slaves.append(serial_device)
             logger.info(f"USB device initialized: {serial_device['name']}")
 
         def start_initialization_timer(device):
@@ -110,14 +116,24 @@ def main(task_queue, response_queue, test=False):
             start_initialization_timer(device.device_node)
             
         def on_disconnect(device):
-            for serial_device in serial_devices:
+            for serial_device in slaves:
                 if serial_device["device"] == device.device_node:
-                    serial_devices.remove(serial_device)
+                    slaves.remove(serial_device)
                     logger.info(f"USB device disconnected: {device.device_node}")
                     return
             logger.info(f"unknown USB device disconnected: {device.device_node}")
         
         def run_command(device, cmd, args):
+            if device.get("wireless"):
+                logger.info(f"Executing function {cmd} with args {args} on {device['name']} (ESP: {device['id']})")
+                command_map = {
+                    "analogWrite": "s",
+                    "editesp": "e"
+                }
+                if cmd not in command_map:
+                    logger.error(f"Command {cmd} not found in command_map")
+                    return False
+                return esp_controller.run_command(device["name"], command_map[cmd], " ".join(map(str, args)))
             logger.info(f"Executing function {cmd} with args {args} on {device['name']} ({device['device']})")
             if cmd == "isOn" or cmd == "isOff":
                 command = "p\n"
@@ -239,7 +255,7 @@ def main(task_queue, response_queue, test=False):
                 logger.info(f"Recieved message from queue: {task}.")
                 response = "Error: no error info given"
                 if task == "get_arduinos":
-                    response_queue.put([{x: device[x] for x in device if x not in "serial"} for device in serial_devices])
+                    response_queue.put([{x: device[x] for x in device if x not in "serial"} for device in slaves])
                     return
                 elif task == "preview":
                     preview()
@@ -248,26 +264,42 @@ def main(task_queue, response_queue, test=False):
                     cancelpreview()
                     return
                 elif task == "update":
-                    update_hardcoded_light_pins()
+                    update_device_outputs()
                     response_queue.put("ok")
                     return
                 elif task == "temporaryoverwrite":
-                    update_hardcoded_light_pins(temporaryoverwrite=True)
+                    update_device_outputs(temporaryoverwrite=True)
                     response_queue.put("ok")
+                    return
+                elif task == "update-channels":
+                    response_queue.put("ok")
+                    load_device_outputs()
                     return
                 
                 elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
-                    matches = [device for device in serial_devices if device["device"] == task[1]]
+                    matches = [device for device in slaves if device["device"] == task[1]]
                     if matches:
                         for device in matches:
                             run_command(device, "rename", [task[2]])
 
+                elif type(task) == tuple and len(task) == 2 and task[0] == "editesp":
+                    data = task[1]
+                    print("GOT:", data)
+                    matches = [device for device in slaves if device.get("id") == data["id"]]
+                    if matches:
+                        res = run_command(matches[0], "editesp", [data["id"], data["name"], data["freq"], data["res"]])
+                        if res:
+                            response = "ok"
+                        else:
+                            logger.error(f"Error: not good. editesp something went wrong")
+                            response = "Error: something went wrong"
+
                 elif len(task.split(".")) == 0:
                     response = "Error: unable to split task at '.'"
                 elif len(task.split(".")) == 1:
-                    response = str(task.split(".")[0] in [x["name"] for x in serial_devices])
+                    response = str(task.split(".")[0] in [x["name"] for x in slaves])
                 elif len(task.split(".")) == 2:
-                    matches = [device for device in serial_devices if device["name"] == task.split(".")[0]]
+                    matches = [device for device in slaves if device["name"] == task.split(".")[0]]
                     if matches:
                         #if len(matches) > 1:
                         #    response = f"Error: found {len(matches)} arduino devices with the same name."
@@ -300,8 +332,6 @@ def main(task_queue, response_queue, test=False):
 
                 task = None
 
-        serial_devices = []
-
         if test:
             class fakeserial:
                 def __init__(self):
@@ -319,8 +349,8 @@ def main(task_queue, response_queue, test=False):
                     #print(self.written)
                     return bytes(self.written, encoding="utf-8")
 
-            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
-            serial_devices.append({"device": "idk", "serial": fakeserial(), "name": "mainPump", "status": "Responded", "lastused": int(time.time()), "error": ""})
+            slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
+            slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainPump", "status": "Responded", "lastused": int(time.time()), "error": ""})
         else:
             for device in get_arduinos():
                 logger.info(f"found already connected USB device: {device}")
@@ -329,19 +359,19 @@ def main(task_queue, response_queue, test=False):
 
 
 
-        def update_hardcoded_light_pins(temporaryoverwrite=False):
+        def update_device_outputs(temporaryoverwrite=False):
             nonlocal last_updated
             if temporaryoverwrite:
                 last_updated = time.time() + 120 # also change in lightpumps.js. ctrl + f "120000"
             else:
                 last_updated = time.time()
             nonlocal preview_start
-            for name in hardcoded_light_pins:
-                matches = list(filter(lambda x: x["name"].startswith(name), serial_devices))
+            for name in device_outputs:
+                matches = list(filter(lambda x: x["name"].startswith(name), slaves))
                 
                 if matches:
                     for device in matches:
-                        for info in hardcoded_light_pins[name]:
+                        for info in device_outputs[name]:
                             if preview_start != 0:
                                 if time.time() - preview_start >= preview_duration:
                                     preview_start = 0
@@ -363,38 +393,27 @@ def main(task_queue, response_queue, test=False):
                                     run_command(device, "analogWrite", [info["pin"], strength])
                             
                             time.sleep(0.05)
-                
-
-        
 
         if not test:
             setup_usb_listener(on_connect, on_disconnect)
 
-        hardcoded_light_pins = {
-            "mainLys": [
-                {"channel": "Uv", "pin": 11},
-                {"channel": "Violet", "pin": 6},
-                {"channel": "Royal Blue", "pin": 10},
-                {"channel": "Blue", "pin": 5},
-                {"channel": "White", "pin": 9},
-                {"channel": "Red", "pin": 3},
-            ],
-            "mainLys70": [
-                {"channel": "Uv", "pin": 11},
-                {"channel": "Violet", "pin": 6},
-                {"channel": "Royal Blue", "pin": 10},
-                {"channel": "Blue", "pin": 5},
-                {"channel": "White", "pin": 9},
-                {"channel": "Red", "pin": 3},
-            ],
-            "mainPump": [
-                {"channel": "Pump 1", "pin": 10},
-                {"channel": "Pump 2", "pin": 9},
-                {"channel": "Pump 3", "pin": 3},
-                {"channel": "Pump 4", "pin": 11},
-            ]
-        }
 
+        def load_device_outputs(retries=4):
+            nonlocal device_outputs
+            try:
+                with open(channels_path, "r", encoding="utf-8") as f:
+                    device_outputs = json.load(f)
+            except Exception as e:
+                if retries > 0:
+                    logger.warning(f"Failed to load device outputs, retrying... ({retries} attempts left)")
+                    time.sleep(0.5)
+                    return load_device_outputs(retries - 1)
+                else:
+                    logger.error(f"Failed to load device outputs after all retries: {e}")
+                    raise e
+                
+        load_device_outputs()
+                
         # also change in script.js
         preview_duration = 60 # seconds
 
@@ -416,7 +435,7 @@ def main(task_queue, response_queue, test=False):
             human_readable_last_updated = datetime.fromtimestamp(last_updated).strftime("%H:%M:%S")
             if (last_updated + update_frequency) < time.time():
                 last_updated = time.time()
-                update_hardcoded_light_pins()
+                update_device_outputs()
 
 
 
