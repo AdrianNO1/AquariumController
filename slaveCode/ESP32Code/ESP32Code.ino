@@ -6,7 +6,7 @@ unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000; // 5 seconds
 const char* ssid = "REDACTED-WIFI-SSID";
 const char* password = "REDACTED-WIFI-PASSWORD";
-const char* mqtt_server = "broker.hivemq.com";
+const char* mqtt_server = "192.168.1.73";
 const int mqtt_port = 1883;
 const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 

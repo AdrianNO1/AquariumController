@@ -10,8 +10,8 @@ class ESP32Manager:
         self.client = mqtt.Client()
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
-        print("Connecting to broker.hivemq.com...")
-        self.client.connect("broker.hivemq.com", 1883, 60)
+        print("Connecting to local MQTT broker...")
+        self.client.connect("localhost", 1883, 60)
         
         self.slaves = slaves  # Reference to the global slaves list
         self.logger = logger
