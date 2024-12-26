@@ -36,7 +36,7 @@
             <p class="inputDesc">Time</p>
             <input type="text" value="06:00" id="time">
             <p id="error"></p>
-            <input type="submit" value="Submit">
+            <button type="submit">Submit</button>
         </form>
     </div>
     <br>
@@ -52,14 +52,47 @@
         <p id="sliders-error"></p>
         <!-- Sliders will be generated here -->
     </div>
+
+
+    <div id="esp32-config-template" style="display: none;">
+        <div class="popup-content">
+        <span class="close-btn">&times;</span>
+        <h2>Configure ESP32</h2>
+        <div class="form-group">
+            <label>Name:</label>
+            <input type="text" id="esp32-name" />
+        </div>
+        <div class="form-group">
+            <label>Frequency (Hz):</label>
+            <input type="number" id="esp32-freq" />
+        </div>
+        <div class="form-group">
+            <label>Resolution (bits):</label>
+            <input type="number" id="esp32-res" />
+        </div>
+        <div class="error-message"></div>
+        <div class="button-group">
+            <button class="submit-btn">Submit</button>
+            <button class="cancel-btn">Cancel</button>
+        </div>
+        </div>
+    </div>
     
-    <!--<br>-->
-    <!--<button id="verify">Verify</button>-->
-    <!--<button id="runonce">Run Once</button>-->
-    <!--<button id="uploadandrun">Upload and run</button>-->
-    <!--<p id="codeStatus"></p>-->
-    <!--<div id="editor">Loading...</div>-->
-    <!--<br>-->
+    <div id="channel-config-template" style="display: none;">
+        <div class="popup-content">
+        <span class="close-btn">&times;</span>
+        <h2>Configure Channels</h2>
+        <div id="output-groups"></div>
+        <button class="add-output-btn">Add Group</button>
+        <div class="error-message"></div>
+        <div class="button-group">
+            <button class="submit-btn">Submit</button>
+            <button class="cancel-btn">Cancel</button>
+        </div>
+        </div>
+    </div>
+    
+
     <br>
     <br>
     <br>
@@ -68,9 +101,10 @@
     <br>
     <br>
     <br>
+    <button id="edit-channel-config" disabled>Edit channles</button>
     <div class="cardss">
         <p id="cards-status"></p>
-        <button id="refresh cards">Refresh</button>
+        <button id="refresh-cards">Refresh</button>
         <div id="arduino_cards"></div>
     </div>
     

@@ -17,11 +17,11 @@ if num > 0:
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
-from flask import Flask, request, jsonify, render_template, url_for, redirect, flash
+from flask import Flask, request, jsonify, render_template, url_for, redirect, flash, session
 from flask_login import LoginManager, login_user, logout_user, login_required, UserMixin, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from datetime import datetime
+from datetime import datetime, timedelta
 from manager import main
 from custom_syntax import parse_code
 import threading
@@ -43,6 +43,9 @@ limiter = Limiter(
     key_func=lambda: "global"
 )
 app.secret_key = config['secret_key']
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=3650)  # 10 years
+app.config['SESSION_PERMANENT'] = True
+
 
 users = {
     'pjot': {
@@ -82,6 +85,7 @@ links_path = os.path.join("data", "links.json")
 code_path = os.path.join("data", "code.json")
 throttle_path = os.path.join("data", "throttle.json")
 switches_path = os.path.join("data", "switches.json")
+channels_path = os.path.join("data", "channels.json")
 temporaryoverwritesliders_path = os.path.join("data", "temporaryoverwritesliders.json")
 
 @app.errorhandler(500)
@@ -115,6 +119,7 @@ def login():
         password = request.form['password']
         if username in users and check_password_hash(users[username]['password_hash'], password):
             user = User(username)
+            session.permanent = True
             login_user(user)
             app.logger.info(f"User {username} logged in.")
             return redirect(url_for('index'))
@@ -128,12 +133,12 @@ def login():
 @app.route('/lights')
 @login_required
 def lights():
-    return render_template('lights.html')
+    return render_template('lightpumps.html')
 
 @app.route('/pumps')
 @login_required
 def pumps():
-    return render_template('pumps.html')
+    return render_template('lightpumps.html')
 
 @app.route('/kill')
 @login_required
@@ -214,7 +219,9 @@ def load():
     data = request.json
     mode = data["type"]
     nodes = json.load(open(links_path, "r", encoding="utf-8"))
+    avaliable_channels = []
     for key in nodes.keys():
+        avaliable_channels.append(key)
         if nodes[key]["type"] != mode:
             continue
         nodes[key] = nodes[key]["links"]
@@ -226,6 +233,7 @@ def load():
 
     code = json.load(open(code_path, "r", encoding="utf-8"))
     throttle = json.load(open(throttle_path, "r", encoding="utf-8"))[mode + "throttle"]
+    outputs = json.load(open(channels_path, "r", encoding="utf-8"))
     
     limit = 10
     x = 0
@@ -241,12 +249,12 @@ def load():
     #                break
 
 
-    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines})
+    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines, "avaliable_channels": avaliable_channels, "outputs": json.dumps(outputs)})
 
-@app.route('/load arduino info', methods=['POST'])
+@app.route('/loadarduinoinfo', methods=['POST'])
 @login_required
 def load_arduino_info():
-    app.logger.info("load_arduino_info request")
+    app.logger.info("loadarduinoinfo request")
     data = request.json
     
     task_queue.put("get_arduinos")
@@ -380,7 +388,7 @@ def upload_and_run():
 @app.route('/rename', methods=['POST'])
 @login_required
 def rename():
-    app.logger.info("upload and run request")
+    app.logger.info("rename request")
     data = request.json
 
     task_queue.put(("rename", data["device"], data["newname"]))
@@ -390,6 +398,41 @@ def rename():
         response = {'error': "timeout when waiting for response from manager"}
 
     return jsonify(response)
+
+@app.route('/editesp', methods=['POST'])
+@login_required
+def editesp():
+    app.logger.info("edit esp request")
+    data = request.json
+
+    task_queue.put(("editesp", data))
+    try:
+        response = {"data": response_queue.get(timeout=10)}
+    except:
+        response = {'error': "timeout when waiting for response from manager"}
+
+    return jsonify(response)
+
+@app.route('/update-channels', methods=['POST'])
+@login_required
+def update_channels():
+    app.logger.info("update-channels request")
+    data = request.json
+    if "outputs" not in data:
+        return jsonify({'error': "no outputs in data"}), 400
+    
+    try:
+        json.dump(data["outputs"], open(channels_path, "w", encoding="utf-8"), indent=4)
+    except Exception as e:
+        return jsonify({'error': f"error when writing to file: {str(e)}"}), 400,
+
+    task_queue.put("update-channels")
+    try:
+        response = {"data": response_queue.get(timeout=10)}
+        return jsonify(response)
+    except queue.Empty:
+        app.logger.error("Timeout waiting for manager response")
+        return jsonify({'error': "timeout when waiting for response from manager"}), 504
 
 @app.route('/preview', methods=['POST'])
 @login_required
