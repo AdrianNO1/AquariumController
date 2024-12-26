@@ -6,7 +6,7 @@ unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000; // 5 seconds
 const char* ssid = "ASUS+";
 const char* password = "nemo1234";
-const char* mqtt_server = "broker.hivemq.com";
+const char* mqtt_server = "192.168.1.73";
 const int mqtt_port = 1883;
 const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 
