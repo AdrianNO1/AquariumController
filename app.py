@@ -161,6 +161,40 @@ def restart():
     os.system("sudo reboot")
     return jsonify({"message": "Restarting"})
 
+@app.route('/pull')
+@login_required
+def pull():
+    # run git pull in the current directory without restarting the application
+    app.logger.info("pull request")
+    import subprocess
+    import os
+
+    try:
+        # Get the current directory where app.py is located
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # Create a shell script that will run after we exit
+        update_script = """#!/bin/bash
+cd {}
+git pull
+""".format(current_dir)
+        
+        # Write the update script
+        with open('/tmp/update.sh', 'w') as f:
+            f.write(update_script)
+
+        # Make the script executable
+        subprocess.call(['chmod', '+x', '/tmp/update.sh'])
+
+        # Execute the update script in the background
+        subprocess.Popen(['/bin/bash', '/tmp/update.sh'])
+
+        return jsonify({'status': 'success', 'message': 'Update initiated'})
+    
+    except Exception as e:
+        app.logger.error(f"Error in pull: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @app.route('/pullrestart')
 @login_required
 def pullrestart():

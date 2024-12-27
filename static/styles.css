@@ -158,9 +158,10 @@ th, td {
     width: 3em;
 }
 
-#throttle{
-    writing-mode: vertical-lr;
-    direction: rtl;
+#throttle {
+    -webkit-appearance: slider-vertical;
+    appearance: slider-vertical;
+    writing-mode: bt-lr;
     width: 8px;
     height: 200px;
     outline: none;
@@ -282,9 +283,9 @@ th, td {
 }
 
 .vertical-slider {
-    writing-mode: vertical-lr;
-    direction: rtl;
-    writing-mode: bt-lr;
+    -webkit-appearance: slider-vertical; /* Safari specific */
+    appearance: slider-vertical;
+    writing-mode: bt-lr; /* Standard syntax */
     width: 20px;
     height: 100%;
     margin: 15px 0;
@@ -448,6 +449,7 @@ button {
     background-color: #007bff;
     color: white;
     margin: 5px;
+    margin-left: 0px;
 }
 
 button:hover {
