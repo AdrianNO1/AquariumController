@@ -153,12 +153,14 @@ void handleCommand(String command, String args) {
   if (command == "s") {
     int pin, value;
     if (sscanf(args.c_str(), "%d %d", &pin, &value) == 2) {
+        Serial.println("Pin: " + String(pin));
+        Serial.println("Value: " + String(value));
         if (value >= 0 && value <= 255) {
             if (!attachedPins[pin]) {
                 if (ledcAttach(pin, freq, resolution)) {
                     attachedPins[pin] = true;
                     ledcWrite(pin, value);
-                    lastPinValues[pin] = value;  // Store the value
+                    lastPinValues[pin] = value;
                     
                     response["status"] = "success";
                     response["echo"] = "s " + String(pin) + " " + String(value);
@@ -168,7 +170,7 @@ void handleCommand(String command, String args) {
                 }
             } else {
                 ledcWrite(pin, value);
-                lastPinValues[pin] = value;  // Store the value
+                lastPinValues[pin] = value;
                 response["status"] = "success";
                 response["echo"] = "s " + String(pin) + " " + String(value);
             }

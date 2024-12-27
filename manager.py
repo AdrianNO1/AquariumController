@@ -15,9 +15,8 @@ def main(task_queue, response_queue, test=False):
             from usb_listener import setup_usb_listener
             from get_connected_arduinos import get_arduinos
         
-        # TODO: move into test
-        from ESP32Manager import ESP32Manager
-        esp_controller = ESP32Manager(slaves, logger)
+            from ESP32Manager import ESP32Manager
+            esp_controller = ESP32Manager(slaves, logger)
 
         preview_start = 0
         last_updated = 0

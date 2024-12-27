@@ -1,6 +1,5 @@
-import datetime
+import pyautogui, time
 
+time.sleep(30)
 
-now = datetime.datetime.now()
-
-print(now.hour*60+now.minute)
+pyautogui.click()
