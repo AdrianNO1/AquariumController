@@ -88,6 +88,10 @@ switches_path = os.path.join("data", "switches.json")
 channels_path = os.path.join("data", "channels.json")
 temporaryoverwritesliders_path = os.path.join("data", "temporaryoverwritesliders.json")
 
+def clear_res_queue():
+    while not response_queue.empty():
+        response_queue.get()
+
 @app.errorhandler(500)
 @login_required
 def handle_internal_server_error(e):
@@ -291,6 +295,7 @@ def load_arduino_info():
     app.logger.info("loadarduinoinfo request")
     data = request.json
     
+    clear_res_queue()
     task_queue.put("get_arduinos")
     try:
         response = response_queue.get(timeout=30)
@@ -320,6 +325,7 @@ def upload():
 
     response = {'message': 'ok'}
 
+    clear_res_queue()
     task_queue.put("update")
     try:
         response_queue.get(timeout=5)
@@ -341,6 +347,7 @@ def update_slider_values():
     
     response = {'message': 'ok'}
 
+    clear_res_queue()
     task_queue.put("temporaryoverwrite")
     try:
         response_queue.get(timeout=5)
@@ -360,6 +367,7 @@ def verify():
 
     evaluation = parse_code(code, verify=True, arduinos=arduinos)
 
+    #clear_res_queue()
     #task_queue.put(("func_name, args, kwargs",))
     #start = time.time()
     #while time.time() - start < 5:
@@ -425,6 +433,7 @@ def rename():
     app.logger.info("rename request")
     data = request.json
 
+    clear_res_queue()
     task_queue.put(("rename", data["device"], data["newname"]))
     try:
         response = {"data": response_queue.get(timeout=10)}
@@ -439,6 +448,7 @@ def editesp():
     app.logger.info("edit esp request")
     data = request.json
 
+    clear_res_queue()
     task_queue.put(("editesp", data))
     try:
         response = {"data": response_queue.get(timeout=10)}
@@ -460,6 +470,7 @@ def update_channels():
     except Exception as e:
         return jsonify({'error': f"error when writing to file: {str(e)}"}), 400,
 
+    clear_res_queue()
     task_queue.put("update-channels")
     try:
         response = {"data": response_queue.get(timeout=10)}
@@ -477,6 +488,7 @@ def preview():
     with open(links_path, "w", encoding="utf-8") as f:
         json.dump(data["links_data"], f, indent=4)
 
+    clear_res_queue()
     task_queue.put("preview")
     try:
         response = {"data": response_queue.get(timeout=10)}
@@ -490,6 +502,7 @@ def preview():
 def cancelpreview():
     app.logger.info("cancelpreview request")
 
+    clear_res_queue()
     task_queue.put("cancelpreview")
     try:
         response = {"data": response_queue.get(timeout=10)}
