@@ -15,8 +15,8 @@ def main(task_queue, response_queue, test=False):
             from usb_listener import setup_usb_listener
             from get_connected_arduinos import get_arduinos
         
-            from ESP32Manager import ESP32Manager
-            esp_controller = ESP32Manager(slaves, logger)
+        from ESP32Manager import ESP32Manager
+        esp_controller = ESP32Manager(slaves, test, logger)
 
         preview_start = 0
         last_updated = 0
@@ -122,17 +122,18 @@ def main(task_queue, response_queue, test=False):
                     return
             logger.info(f"unknown USB device disconnected: {device.device_node}")
         
-        def run_command(device, cmd, args):
+        def run_command(device, cmd, args=None): # legacy
             if device.get("wireless"):
-                logger.info(f"Executing function {cmd} with args {args} on {device['name']} (ESP: {device['id']})")
-                command_map = {
-                    "analogWrite": "s",
-                    "editesp": "e"
-                }
-                if cmd not in command_map:
-                    logger.error(f"Command {cmd} not found in command_map")
-                    return False
-                return esp_controller.run_command(device["name"], command_map[cmd], " ".join(map(str, args)))
+                return False
+                # logger.info(f"Executing function {cmd} with args {args} on {device['name']} (ESP: {device['id']})")
+                # command_map = {
+                #     "analogWrite": "s",
+                #     "editesp": "e"
+                # }
+                # if cmd not in command_map:
+                #     logger.error(f"Command {cmd} not found in command_map")
+                #     return False
+                # return esp_controller.run_command(device["name"], command_map[cmd], " ".join(map(str, args)))
             logger.info(f"Executing function {cmd} with args {args} on {device['name']} ({device['device']})")
             if cmd == "isOn" or cmd == "isOff":
                 command = "p\n"
@@ -286,39 +287,22 @@ def main(task_queue, response_queue, test=False):
                     print("GOT:", data)
                     matches = [device for device in slaves if device.get("id") == data["id"]]
                     if matches:
-                        res = run_command(matches[0], "editesp", [data["id"], data["name"], data["freq"], data["res"]])
-                        if res:
-                            response = "ok"
+                        if matches[0].get("wireless"):
+                            device = matches[0]
+                            res = esp_controller.run_command(f"{device['id']} e {device['name']} {device['freq']} {device['res']}")
+                            if len(res) > 0 and res[0]["status"]:
+                                response = "ok"
+                            else:
+                                logger.error(f"Error: not good. editesp something went wrong with wireless device")
+                                response = "Error: something went wrong with wireless device"
                         else:
-                            logger.error(f"Error: not good. editesp something went wrong")
-                            response = "Error: something went wrong"
+                            res = run_command(matches[0], "editesp", [data["id"], data["name"], data["freq"], data["res"]])
+                            if res:
+                                response = "ok"
+                            else:
+                                logger.error(f"Error: not good. editesp something went wrong")
+                                response = "Error: something went wrong"
 
-                elif len(task.split(".")) == 0:
-                    response = "Error: unable to split task at '.'"
-                elif len(task.split(".")) == 1:
-                    response = str(task.split(".")[0] in [x["name"] for x in slaves])
-                elif len(task.split(".")) == 2:
-                    matches = [device for device in slaves if device["name"] == task.split(".")[0]]
-                    if matches:
-                        #if len(matches) > 1:
-                        #    response = f"Error: found {len(matches)} arduino devices with the same name."
-                        for device in matches:
-                            pattern = r'\((.*?)\)'
-                            func = re.sub(pattern, '', task.split(".")[1])
-                            mtches = re.findall(pattern, task.split(".")[1])
-                            if len(mtches) > 1:
-                                response = f"Error: got {len(mtches)} matches when only 1 or 0 are expected."
-                                break
-                            elif len(mtches) == 0:
-                                logger.error(f"Error: something went wrong AQGF7:\n" + "\n".join([str(mtches), str(func), str(pattern), str(matches), str(task)]))
-                                response = f"Error: something went wrong AQGF7"
-                                break
-                            parameters = [x.strip() for x in mtches[0].split(",")]
-                            response = str(run_command(device, func, parameters))
-                    else:
-                        response = f"Error: '{task.split('.')[0]}' not found."
-                else:
-                    response = "Error: list length over 2 when splitting on '.'"
                 if "error" in response.lower():
                     logger.warn(f"Responding with: {response}")
                 else:
@@ -365,6 +349,9 @@ def main(task_queue, response_queue, test=False):
             else:
                 last_updated = time.time()
             nonlocal preview_start
+
+            wireless_cmd_builder = ""
+            wireless_cmd_devices = []
             for name in device_outputs:
                 matches = list(filter(lambda x: x["name"].startswith(name), slaves))
                 
@@ -389,9 +376,24 @@ def main(task_queue, response_queue, test=False):
                                 if type(strength) == str and "Error" in strength:
                                     logger.error(strength)
                                 else:
-                                    run_command(device, "analogWrite", [info["pin"], strength])
+                                    if device.get("wireless"):
+                                        wireless_cmd_builder += f"{device['id']} s {info['pin']} {strength};"
+                                        wireless_cmd_devices.append(device)
+                                    else:
+                                        run_command(device, "analogWrite", [info["pin"], strength])
                             
                             time.sleep(0.05)
+            if wireless_cmd_builder:
+                responses = esp_controller.run_command(wireless_cmd_builder.strip(";"))
+                if responses:
+                    for key in responses:
+                        r = responses[key]
+
+                        if not r["status"]:
+                            wireless_cmd_devices[key]["status"] = "Error"
+                            wireless_cmd_devices[key]["error"] = r["message"]
+                else:
+                    logger.error("Error: esp_controller returned: " + str(responses))
 
         if not test:
             setup_usb_listener(on_connect, on_disconnect)
