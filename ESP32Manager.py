@@ -3,20 +3,26 @@ import json
 import time
 import threading
 from typing import Dict, List
+import traceback
+import sys
 
 class ESP32Manager:
-    def __init__(self, slaves, logger):
+    def __init__(self, slaves, test, logger=None):
         print("Initializing ESP32Manager...")
         self.client = mqtt.Client()
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
         print("Connecting to local MQTT broker...")
-        self.client.connect("localhost", 1883, 60)
+        self.client.connect("192.168.1.73", 1883, 60)  # Replace with your MQTT broker address if different
         
         self.slaves = slaves  # Reference to the global slaves list
+        if logger is None:
+            # create dummy logger object with empty functions
+            logger = type("Logger", (), {"info": lambda self, msg: None, "error": lambda self, msg: None})()
         self.logger = logger
         self.responses: Dict[str, List] = {}  # Store command responses
         self.response_events: Dict[str, threading.Event] = {}
+        self.TEST = test
         
         self.client.loop_start()
         print("MQTT client loop started")
@@ -24,28 +30,34 @@ class ESP32Manager:
     def discover_devices(self):
         """Request all ESP32s to announce themselves"""
         print("Broadcasting device discovery message...")
-        self.client.publish("aquarium/discover", "announce")
-
+        if self.TEST:
+            self.client.publish("test/aquarium/command", "discover")
+        else:
+            self.client.publish("aquarium/command", "discover")
+        
     def on_connect(self, client, userdata, flags, rc):
         print(f"Connected to MQTT broker with result code: {rc}")
-        client.subscribe("aquarium/announce")
-        client.subscribe("aquarium/response/#")
-        client.subscribe("aquarium/discover")
+        if self.TEST:
+            client.subscribe("test/aquarium/announce")
+            client.subscribe("test/aquarium/response")
+        else:
+            client.subscribe("aquarium/announce")
+            client.subscribe("aquarium/response")
         print("Subscribed to required topics")
         self.discover_devices()
-
+        
     def on_message(self, client, userdata, msg):
         print(f"\nReceived message on topic: {msg.topic}")
         decoded = msg.payload.decode()
-        print(f"Message payload: {decoded}")
+        print(f"Message payload: {decoded}") # {"id":"58B55856","name":"ESP32_Device","commands":[{"index":2,"response":"o"}]}
         if decoded == "announce":
             print("Ignoring self-discovery message")
             return
         
         try:
-            payload = json.loads(msg.payload.decode())
+            payload = json.loads(decoded)
             
-            if msg.topic == "aquarium/announce":
+            if not self.TEST and msg.topic == "aquarium/announce" or self.TEST and msg.topic == "test/aquarium/announce":
                 device_id = payload["id"]
                 device_name = payload["name"]
                 print(f"Device announcement received - ID: {device_id}, Name: {device_name}")
@@ -79,156 +91,183 @@ class ESP32Manager:
                     })
                 print("Current slaves list:", json.dumps([x for x in self.slaves if x.get("wireless")], indent=2))
             
-            elif msg.topic.startswith("aquarium/response/"):
-                device_name = msg.topic.split("/")[-1]
-                command_id = f"{device_name}_{payload['command']}"
-                print(f"Command response received from {device_name}")
-                print(f"Command ID: {command_id}")
+            elif not self.TEST and msg.topic == "aquarium/response" or self.TEST and msg.topic == "test/aquarium/response":
+                device_id = payload.get("id")
+                device_name = payload.get("name", "unknown")
+                responses = payload.get("responses")
                 
-                if command_id in self.responses:
-                    self.responses[command_id].append(payload)
-                    if command_id in self.response_events:
-                        print(f"Setting event for command: {command_id}")
-                        self.response_events[command_id].set()
+                print(f"Command response received from {device_name} (ID: {device_id}), Responses: {responses}")
+
+                self.responses[device_id] = payload
+                if device_id in self.response_events:
+                    self.response_events[device_id].set()
         
         except json.JSONDecodeError:
-            print(f"Error: Invalid JSON received: {msg.payload}")
+            print(f"Error: Invalid JSON received: {decoded}")
 
-    def get_devices_by_name(self, name: str) -> List[str]:
-        """Get all device IDs with the specified name from slaves list"""
-        devices = [device["id"] for device in self.slaves 
-                  if device.get("wireless") and device["name"] == name]
-        print(f"Found devices for name '{name}': {devices}")
-        return devices
-
-    def run_command(self, device_name: str, command: str, args: str, timeout: float = 3) -> bool:
+    def run_command(self, command_str: str, timeout: float = 3):
         try:
-            print(f"\nRunning command '{command}' for device '{device_name}' with args: {args}")
+            print(f"\nRunning commands: {command_str}")
             
-            # Get expected device IDs
-            expected_ids = self.get_devices_by_name(device_name)
-            if not expected_ids:
-                print(f"Error: No devices found with name: {device_name}")
-                return False
+            # Split the command string on semicolons
+            commands = [cmd.strip() for cmd in command_str.split(';') if cmd.strip()]
+            if not commands:
+                print("No commands to run.")
+                return []
 
-            # Create unique command ID
-            command_id = f"{device_name}_{command}"
-            print(f"Command ID: {command_id}")
-            
-            # Initialize response storage and event
-            self.responses[command_id] = []
-            self.response_events[command_id] = threading.Event()
-            
-            # Publish command
-            message = {
-                "command": command,
-                "args": args
-            }
-            print(f"Publishing command to topic: aquarium/command/{device_name}")
-            print(f"Message: {json.dumps(message)}")
-            self.client.publish(f"aquarium/command/{device_name}", json.dumps(message))
-            
+            expected_responses = {}
+            for slave in self.slaves:
+                if not slave.get("wireless"):
+                    continue
+                i = 0
+                for cmd in command_str.split(";"):
+                    parts = cmd.strip().split()
+                    if len(parts) < 2:
+                        print(f"Invalid command: {cmd}")
+                        return
+                    target = parts[0]
+                    command = parts[1]
+                    args = ' '.join(parts[2:])
+                    print(slave)
+                    if target == slave["name"] or target == slave["id"]:
+                        if command == "s":
+                            res = f"s {args}"
+                        elif command == "e":
+                            res = args
+                        elif command == "p":
+                            res = "o"
+                        elif command == "clear":
+                            res = "EEPROM cleared"
+                        else:
+                            print(f"Invalid command: {cmd}")
+                            return
+                        expected_responses[i] = {
+                            "id": slave["id"],
+                            "response": res
+                        }
+                        self.response_events[slave["id"]] = threading.Event()
+
+                    i += 1
+
+    
+            # Publish the combined command string
+            print(f"Publishing commands to topic: aquarium/command")
+            print(f"Message: {command_str}")
+            if self.TEST:
+                self.client.publish("test/aquarium/command", command_str)
+            else:
+                self.client.publish("aquarium/command", command_str)
+    
             # Wait for responses
             print(f"Waiting for responses (timeout: {timeout}s)...")
-            success = self.response_events[command_id].wait(timeout)
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                all_events_set = all(self.response_events[expected_responses[key]["id"]].is_set() for key in expected_responses)
+                if all_events_set:
+                    break
+                time.sleep(0.1)
+
+
+            real_responses = {}
+
+            print(expected_responses)
             
-            # Update all expected devices
-            current_time = int(time.time())
-            for device in self.slaves:
-                if device.get("wireless") and device["name"] == device_name:
-                    device["lastused"] = current_time
-            
-            if not success:
-                print(f"Error: Timeout waiting for response from {device_name}")
-                for device in self.slaves:
-                    if device.get("wireless") and device["name"] == device_name:
-                        device["status"] = "missing"
-                return False
-            
-            # Process responses
-            responses = self.responses[command_id]
-            responding_ids = [r["id"] for r in responses]
-            print(f"Received responses from devices: {responding_ids}")
-            
-            # Check for unexpected responses
-            unexpected_ids = set(responding_ids) - set(expected_ids)
-            if unexpected_ids:
-                print(f"Warning: Received responses from unexpected devices: {unexpected_ids}")
-                
-            # Check for missing responses
-            missing_ids = set(expected_ids) - set(responding_ids)
-            if missing_ids:
-                print(f"Warning: Missing responses from devices: {missing_ids}")
-            
-            # Update device statuses
-            for device in self.slaves:
-                if device.get("wireless") and device["name"] == device_name:
-                    if device["id"] in responding_ids:
-                        if command != "s" and device["id"] == args.split()[0]:
-                            if command == "e":
-                                echo_list = [x for x in responses if x["id"] == device["id"]][0]["echo"].split(" ")
-                                if len(echo_list) != 3:
-                                    err = "Invalid echo response from device: " + responses[responding_ids.index(device["id"])]["echo"]
-                                    device["error"] = err
-                                    print("Error:", err)
-                                device["name"] = echo_list[0]
-                                device["freq"] = int(echo_list[1])
-                                device["res"] = int(echo_list[2])
-                        device["status"] = "ok"
-                        if responses[responding_ids.index(device["id"])].get("error"):
-                            device["error"] = "Error from device: " + responses[responding_ids.index(device["id"])]["error"]
+            for index in expected_responses.keys():
+                expected = expected_responses[index]
+                actual = self.responses.get(expected["id"])
+
+                def do_error_stuff(error):
+                    print(error)
+                    for slave in self.slaves:
+                        if not slave.get("wireless"):
+                            continue
+                        if slave["id"] == expected["id"]:
+                            slave["status"] = "error"
+                            slave["error"] = error
+                            slave["lastused"] = int(time.time())
+                            break
+                    else:
+                        print(f"Error: Could not update status for device {expected['id']}. It is missing from the slaves list.")
+
+                if actual is None:
+                    error = f"Command {index} failed: No response received"
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
+
+                if "responses" not in actual:
+                    error = f"Command {index} failed: Invalid response received", actual
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
+
+                actual_actual = [x for x in actual["responses"] if x["index"] == index]
+                if not actual_actual:
+                    error = f"Command {index} failed: No response received for that specific index"
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
+
+                actual_actual = actual_actual[0]
+                if "response" not in actual_actual:
+                    error = f"Command {index} failed: Invalid response received", actual
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
+
+                if actual_actual["response"] == expected["response"]:
+                    print(f"Command {index} succeeded")
+                    real_responses[index] = {"message": actual_actual["response"], "status": True}
+                    notok = False
+                    for index2 in expected_responses.keys():
+                        expected2 = expected_responses[index2]
+                        if expected2["id"] == expected["id"] and real_responses.get(index2) is not None and real_responses[index2]["status"] is not True:
+                            notok = True
+                            break
+
+                    if not notok:
+                        for slave in self.slaves:
+                            if not slave.get("wireless"):
+                                continue
+                            if slave["id"] == expected["id"]:
+                                slave["status"] = "ok"
+                                slave["error"] = ""
+                                slave["lastused"] = int(time.time())
+                                break
                         else:
-                            device["error"] = ""
-                        if device["id"] in unexpected_ids:
-                            device["error"] = "Unexpected response from device"
-                    elif device["id"] in missing_ids:
-                        device["status"] = "missing"
+                            print(f"Error: Could not update status for device {expected['id']}. It is missing from the slaves list.")
+
+                else:
+                    error = f"Command {index} failed: Expected {expected['response']}, got {actual_actual['response']}"
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
             
-            # Clean up
-            del self.responses[command_id]
-            del self.response_events[command_id]
-            
-            # Command is successful only if all expected devices responded correctly
-            success = len(missing_ids) == 0 and len(unexpected_ids) == 0 and \
-                    all(r.get("status") == "success" for r in responses)
-            print(f"Command execution {'successful' if success else 'failed'}")
-            return success
+            # cleanup
+            self.responses = {}
+            self.response_events = {}
+
+            return real_responses
+    
         except Exception as e:
-            print(f"Error: {e}")
-            return False
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            tb_str = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+            print(f"Error occurred:\n{tb_str}")
+            self.logger.error(f"Command execution failed:\n{tb_str}")
+            return None
 
 # To test the code:
 if __name__ == "__main__":
     slaves = []  # Initialize empty slaves list
-    esp_manager = ESP32Manager(slaves)
+    esp_manager = ESP32Manager(slaves, True)
     
     # Keep the program running
     try:
         while True:
-            inp = input("Enter command (device_name command [device_id] [args]): ")
-            if inp == "exit":
+            inp = input("Enter commands (e.g., 'esp32_1 s 15 128; esp32_2 e new_name 5000 12'): ")
+            if inp.lower() == "exit":
                 break
-            
-            parts = inp.split()
-            if len(parts) < 2:
-                print("Invalid input format")
-                continue
-                
-            device_name = parts[0]
-            command = parts[1]
-            
-            if command in ['p', 'e', 'w']:
-                # These commands require device ID
-                if len(parts) < 3:
-                    print(f"Error: {command} command requires device ID")
-                    continue
-                device_id = parts[2]
-                args = device_id + (" " + " ".join(parts[3:]) if len(parts) > 3 else "")
-            else:
-                # For 's' command and others
-                args = " ".join(parts[2:])
-            
-            esp_manager.run_command(device_name, command, args)
+            print("RES:", esp_manager.run_command(inp))
     except KeyboardInterrupt:
         print("\nShutting down...")
         esp_manager.client.loop_stop()
