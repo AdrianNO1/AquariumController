@@ -60,6 +60,10 @@ class ESP32Manager:
             if not self.TEST and msg.topic == "aquarium/announce" or self.TEST and msg.topic == "test/aquarium/announce":
                 device_id = payload["id"]
                 device_name = payload["name"]
+                if "version" in payload:
+                    version = payload["version"]
+                else:
+                    version = "0"
                 print(f"Device announcement received - ID: {device_id}, Name: {device_name}")
                 
                 # Check if device already exists in slaves list
@@ -77,6 +81,7 @@ class ESP32Manager:
                     existing_device["status"] = "ok"
                     existing_device["lastused"] = int(time.time())
                     existing_device["error"] = ""
+                    existing_device["version"] = version
                 else:
                     print(f"Adding new device: {device_id}")
                     self.slaves.append({
@@ -87,7 +92,8 @@ class ESP32Manager:
                         "status": "ok",
                         "error": "",
                         "lastused": int(time.time()),
-                        "wireless": True
+                        "wireless": True,
+                        "version": version
                     })
                 print("Current slaves list:", json.dumps([x for x in self.slaves if x.get("wireless")], indent=2))
             

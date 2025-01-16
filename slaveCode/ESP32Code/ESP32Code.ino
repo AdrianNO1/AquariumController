@@ -13,6 +13,7 @@ const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;		 // Default resolution in bits
 
+const char* VERSION = "2w";
 const bool TEST = true;
 
 // EEPROM configuration
@@ -149,6 +150,7 @@ void announcePresence() {
 	doc["res"] = resolution;
 	doc["id"] = deviceId;
 	doc["status"] = "online";
+  doc["version"] = VERSION;
 	
 	String message;
 	serializeJson(doc, message);
