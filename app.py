@@ -17,7 +17,7 @@ if num > 0:
 
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
-from flask import Flask, request, jsonify, render_template, url_for, redirect, flash, session
+from flask import Flask, request, jsonify, render_template, url_for, redirect, flash, session, send_file
 from flask_login import LoginManager, login_user, logout_user, login_required, UserMixin, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -357,75 +357,6 @@ def update_slider_values():
     
     return jsonify(response)
 
-@app.route('/verify', methods=['POST'])
-@login_required
-def verify():
-    app.logger.info("verify request")
-    data = request.json
-    code = data["code"]
-    arduinos = data["arduinos"]
-
-    evaluation = parse_code(code, verify=True, arduinos=arduinos)
-
-    #clear_res_queue()
-    #task_queue.put(("func_name, args, kwargs",))
-    #start = time.time()
-    #while time.time() - start < 5:
-    #    try:
-    #        thing = response_queue.get(timeout=0.1)
-    #    except queue.Empty:
-    #        thing = None
-    #
-    #print(thing)
-    if evaluation.startswith("Error"):
-        response = {'error': evaluation}
-    else:
-        response = {'message': evaluation.strip()}
-    return jsonify(response)
-
-@app.route('/run once', methods=['POST'])
-@login_required
-def run_once():
-    app.logger.info("run once request")
-    data = request.json
-    code = data["code"]
-    arduinos = data["arduinos"]
-
-    verify_evaluation = parse_code(code, verify=True, arduinos=arduinos)
-    if verify_evaluation.startswith("Error"):
-        response = {'error': verify_evaluation}
-        return jsonify(response)
-    
-    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue, arduinos=arduinos)
-    if evaluation.startswith("Error"):
-        response = {'error': evaluation}
-    else:
-        response = {'message': evaluation.strip()}
-
-    return jsonify(response)
-
-@app.route('/uploadandrun', methods=['POST'])
-@login_required
-def upload_and_run():
-    app.logger.info("upload and run request")
-    data = request.json
-    code = data["code"]
-    arduinos = data["arduinos"]
-
-    verify_evaluation = parse_code(code, verify=True, arduinos=arduinos)
-    if verify_evaluation.startswith("Error"):
-        response = {'error': verify_evaluation}
-        return jsonify(response)
-    
-    evaluation = parse_code(code, verify=False, task_queue=task_queue, response_queue=response_queue, arduinos=arduinos)
-    if evaluation.startswith("Error"):
-        response = {'error': evaluation}
-    else:
-        response = {'message': evaluation.strip()}
-        with open(code_path, "w", encoding="utf-8") as f:
-            json.dump({"code": code}, f, indent=4)
-
-    return jsonify(response)
 
 @app.route('/rename', methods=['POST'])
 @login_required
@@ -479,47 +410,55 @@ def update_channels():
         app.logger.error("Timeout waiting for manager response")
         return jsonify({'error': "timeout when waiting for response from manager"}), 504
 
-@app.route('/preview', methods=['POST'])
+
+
+@app.route('/getlog')
 @login_required
-def preview():
-    app.logger.info("preview request")
-    data = request.json
-
-    with open(links_path, "w", encoding="utf-8") as f:
-        json.dump(data["links_data"], f, indent=4)
-
-    clear_res_queue()
-    task_queue.put("preview")
+def getlog():
+    app.logger.info("getlog request")
+    
     try:
-        response = {"data": response_queue.get(timeout=10)}
-    except:
-        response = {'error': "timeout when waiting for response from manager"}
-
-    return jsonify(response)
-
-@app.route('/cancelpreview', methods=['POST'])
-@login_required
-def cancelpreview():
-    app.logger.info("cancelpreview request")
-
-    clear_res_queue()
-    task_queue.put("cancelpreview")
-    try:
-        response = {"data": response_queue.get(timeout=10)}
-    except:
-        response = {'error': "timeout when waiting for response from manager"}
-
-    return jsonify(response)
-
-
-
-#@app.route('/getlog', methods=['POST'])
-#def getlog():
-#    data = request.json
-#    data["limit"]
-#    return jsonify(response)
-
-
+        # Get latest log files from both directories
+        app_logs = glob.glob(os.path.join("logs", "app", "*.log"))
+        manager_logs = glob.glob(os.path.join("logs", "manager", "*.log"))
+        
+        latest_app_log = max(app_logs, key=os.path.getctime) if app_logs else None
+        latest_manager_log = max(manager_logs, key=os.path.getctime) if manager_logs else None
+        
+        # Combine logs into a single file
+        timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+        combined_log_path = os.path.join("logs", f"combined_logs_{timestamp}.txt")
+        
+        with open(combined_log_path, 'w', encoding='utf-8') as outfile:
+            outfile.write("=== APPLICATION LOGS ===\n\n")
+            if latest_app_log:
+                with open(latest_app_log, 'r', encoding='utf-8') as infile:
+                    outfile.write(infile.read())
+            
+            outfile.write("\n\n=== MANAGER LOGS ===\n\n")
+            if latest_manager_log:
+                with open(latest_manager_log, 'r', encoding='utf-8') as infile:
+                    outfile.write(infile.read())
+        
+        # Send the combined file
+        response = send_file(
+            combined_log_path,
+            mimetype='text/plain',
+            as_attachment=True,
+            download_name=f'aquarium_logs_{timestamp}.txt'
+        )
+        
+        # Clean up the combined file after sending
+        @response.call_on_close
+        def cleanup():
+            if os.path.exists(combined_log_path):
+                os.remove(combined_log_path)
+        
+        return response
+        
+    except Exception as e:
+        app.logger.error(f"Error in getlog: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == '__main__':

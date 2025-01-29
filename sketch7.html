@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Dashboard</title>
+<style>
+  body {
+    font-family: sans-serif;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    padding: 20px;
+    background-color: #f0f0f0;
+  }
+
+  .box {
+    background-color: #e0e0e0;
+    border-radius: 5px;
+    padding: 10px;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.1);
+  }
+
+  .box-title {
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+
+  .data-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+  }
+
+  .status-indicator {
+    display: inline-block;
+    padding: 5px 10px;
+    border-radius: 3px;
+    font-size: 0.8em;
+  }
+
+  .status-off {
+    background-color: #ddd;
+  }
+
+  .status-auto {
+    background-color: #ffc107;
+  }
+
+  .status-on {
+    background-color: #4CAF50;
+    color: white;
+  }
+
+  .status-alarm {
+    background-color: #f44336;
+    color: white;
+  }
+
+  .highlight-error {
+    background-color: #f44336;
+    color: white;
+  }
+
+  .switches-table, .status-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .switches-table th, .switches-table td, .status-table th, .status-table td {
+    padding: 5px;
+    text-align: left;
+    border-bottom: 1px solid #ccc;
+  }
+
+  .switches-table th, .status-table th {
+    font-weight: bold;
+  }
+
+  #overview {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+  }
+
+  #main {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  #main2 {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  #switches {
+    grid-column: 4;
+    grid-row: 1;
+  }
+
+  #status {
+    grid-column: 4;
+    grid-row: 2;
+  }
+
+  #main1b {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  #main2b {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  #kjeller {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  #kjeller2 {
+    grid-column: 3;
+    grid-row: 3;
+  }
+
+  #feeds {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  #airtemps {
+    grid-column: 1;
+    grid-row: 4;
+  }
+
+  .time {
+    margin-bottom: 10px;
+    font-size: 1.2em;
+  }
+</style>
+</head>
+<body>
+
+<div id="overview" class="box">
+  <div class="time">12/ aug.. 2024     20:34</div>
+  <div class="data-item"><div>Ph</div><div>8,4</div></div>
+  <div class="data-item"><div>Redox</div><div>320</div></div>
+  <div class="data-item"><div>Temp Main</div><div>26</div></div>
+  <div class="data-item"><div>Temp Main2</div><div>26</div></div>
+  <div class="data-item"><div>Temp Sump</div><div>25,6</div></div>
+  <div class="data-item"><div>Temp Biljard</div><div>25,8</div></div>
+  <div class="data-item"><div>Temp Loft</div><div>26</div></div>
+  <div class="data-item"><div>Temp Bad</div><div>26,1</div></div>
+</div>
+
+<div id="main" class="box">
+  <div class="box-title">Main</div>
+</div>
+
+<div id="main2" class="box">
+  <div class="box-title">Main 2</div>
+</div>
+
+<div id="switches" class="box">
+  <div class="box-title">Switches</div>
+  <table class="switches-table">
+    <tr><td>Main High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Main Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Loft High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Loft Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Bad High</td><td>Open</td><td class="status-indicator status-alarm">ALARM</td></tr>
+    <tr><td>Bad Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Sump High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Sump Med</td><td>Open</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Sump Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Frag High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Frag Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Qt High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Qt Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Qt2 High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Qt2 Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Q3t High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Qt3 Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Qt4 High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Qt4 Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Biljard High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Biljard Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Sump2 High</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Sump2 Med</td><td>Open</td><td class="status-indicator status-off">Ok</td></tr>
+    <tr><td>Sump2 Low</td><td>Closed</td><td class="status-indicator status-off">Ok</td></tr>
+  </table>
+</div>
+
+<div id="status" class="box">
+  <div class="box-title">Status</div>
+  <table class="status-table">
+    <tr><td>Status</td><td class="status-indicator status-alarm">ALARM</td></tr>
+    <tr><td>Main FlowKill</td><td class="status-indicator status-on">Ok</td></tr>
+    <tr><td>Frag FlowKill</td><td class="status-indicator status-alarm">22min</td></tr>
+    <tr><td>Bad FlowKill</td><td class="status-indicator status-on">Ok</td></tr>
+  </table>
+</div>
+
+<div id="main1b" class="box">
+  <div class="box-title">Main 1b</div>
+</div>
+
+<div id="main2b" class="box">
+  <div class="box-title">Main 2b</div>
+</div>
+
+<div id="kjeller" class="box">
+  <div class="box-title">Kjeller</div>
+</div>
+
+<div id="kjeller2" class="box">
+  <div class="box-title">Kjeller 2</div>
+</div>
+
+<div id="feeds" class="box">
+  <div class="box-title"></div>
+  <div class="data-item"><div>Light</div><div>Feed A</div></div>
+  <div class="data-item"><div>SeaSwirl</div><div>Feed B</div></div>
+  <div class="data-item"><div>Flow</div><div>Feed C</div></div>
+  <div class="data-item"><div>DosingPump</div><div>Feed D</div></div>
+</div>
+
+<div id="airtemps" class="box">
+  <div class="box-title"></div>
+  <div class="data-item"><div>AirTemp Main</div><div>25,8</div></div>
+  <div class="data-item"><div>AirTemp Kjeller</div><div>26</div></div>
+  <div class="data-item"><div>AirTemp Loft</div><div>26,1</div></div>
+</div>
+
+<script>
+  const createDataItem = (label, status) => {
+    const div = document.createElement('div');
+    div.classList.add('data-item');
+    div.innerHTML = `<div>${label}</div><div>${status}</div>`;
+    return div;
+  };
+
+  const createStatusIndicator = (status) => {
+    const span = document.createElement('span');
+    span.classList.add('status-indicator');
+    if (status === 'Off') {
+      span.classList.add('status-off');
+      span.textContent = 'Off';
+    } else if (status === 'Auto') {
+      span.classList.add('status-auto');
+      span.textContent = 'Auto';
+    } else if (status === 'On') {
+      span.classList.add('status-on');
+      span.textContent = 'On';
+    }
+    return span;
+  };
+
+  const createMainSection = (id, title, items) => {
+    const box = document.getElementById(id);
+    box.innerHTML = `<div class="box-title">${title}</div>`;
+    items.forEach(item => {
+      const dataItem = document.createElement('div');
+      dataItem.classList.add('data-item');
+      dataItem.innerHTML = `<div>${item.name}</div>`;
+      const statusDiv = document.createElement('div');
+      const statusOff = createStatusIndicator(item.off);
+      const statusAuto = createStatusIndicator(item.auto);
+      const statusOn = createStatusIndicator(item.on);
+
+      if (item.auto === 'Auto') {
+        statusAuto.classList.add('highlight-error');
+      }
+      statusDiv.appendChild(statusOff);
+      statusDiv.appendChild(statusAuto);
+      statusDiv.appendChild(statusOn);
+      dataItem.appendChild(statusDiv);
+      box.appendChild(dataItem);
+    });
+  };
+
+  const createKjellerSection = (id, title, items) => {
+    const box = document.getElementById(id);
+    box.innerHTML = `<div class="box-title">${title}</div>`;
+    items.forEach(item => {
+      const dataItem = document.createElement('div');
+      dataItem.classList.add('data-item');
+      dataItem.innerHTML = `<div>${item.name}</div>`;
+      const statusDiv = document.createElement('div');
+      const statusOff = createStatusIndicator(item.off);
+      const statusAuto = createStatusIndicator(item.auto);
+      const statusOn = createStatusIndicator(item.on);
+      if (item.auto === 'Auto') {
+        statusAuto.classList.add('highlight-error');
+      }
+      statusDiv.appendChild(statusOff);
+      statusDiv.appendChild(statusAuto);
+      statusDiv.appendChild(statusOn);
+      dataItem.appendChild(statusDiv);
+      box.appendChild(dataItem);
+    });
+  };
+
+  const mainItems = [
+    { name: 'Heat 1', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pumpe loft', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Chiller', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Light1', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Pump 1', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Pump 2', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'SeaSwirl1', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'ATO', off: 'Off', auto: 'Auto', on: 'On' },
+  ];
+
+  const main2Items = [
+    { name: 'Heat 2', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'SeaSwirl2', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'SeaSwirl3', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Ventilasjon', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Pump 3', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Pump 4', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Frontlys', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Surge', off: 'Off', auto: 'Auto', on: 'On' },
+  ];
+
+  const main1bItems = [
+    { name: 'Heat 3', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 5', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 6', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Ventilasjon 2', off: 'Off', auto: 'Auto', on: 'On' },
+  ];
+
+  const main2bItems = [
+    { name: 'Heat 4', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 7', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 8', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 9', off: 'Off', auto: 'Auto', on: 'On' },
+  ];
+
+  const kjellerItems = [
+    { name: 'MainReturn', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Return1', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Light 11', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Light 12', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Heat 5', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 11', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Pump 12', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 13', off: 'Off', auto: 'Auto', on: 'On' },
+  ];
+
+  const kjeller2Items = [
+    { name: 'MainReturn2', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Return2', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Light 13', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Biljard', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Heat 6', off: 'Off', auto: 'Auto', on: 'Off' },
+    { name: 'Pump 14', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Pump 15', off: 'Off', auto: 'Auto', on: 'On' },
+    { name: 'Pump 16', off: 'Off', auto: 'Auto', on: 'On' },
+  ];
+
+  createMainSection('main', 'Main', mainItems);
+  createMainSection('main2', 'Main 2', main2Items);
+  createMainSection('main1b', 'Main 1b', main1bItems);
+  createMainSection('main2b', 'Main 2b', main2bItems);
+  createKjellerSection('kjeller', 'Kjeller', kjellerItems);
+  createKjellerSection('kjeller2', 'Kjeller 2', kjeller2Items);
+
+</script>
+
+</body>
+</html>

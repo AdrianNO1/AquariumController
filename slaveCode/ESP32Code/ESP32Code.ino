@@ -14,7 +14,7 @@ const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;		 // Default resolution in bits
 
 const char* VERSION = "2w";
-const bool TEST = true;
+const bool TEST = false;
 
 // EEPROM configuration
 #define EEPROM_SIZE 512
@@ -216,10 +216,14 @@ String handleCommand(String command, String args) {
 			// args_array[0] is the new name
 			// args_array[1] is the new frequency
 			// args_array[2] is the new resolution
+
+      
 			
 			String newName = args_array[0];
 			int newFreq = args_array[1].toInt();
 			int newRes = args_array[2].toInt();
+
+     Serial.println(deviceName + " " + newName + " " + String(newFreq) + " " + String(newRes));
 			
 			if (true) {
 				bool needReattach = false;
