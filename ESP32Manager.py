@@ -23,6 +23,8 @@ class ESP32Manager:
         self.responses: Dict[str, List] = {}  # Store command responses
         self.response_events: Dict[str, threading.Event] = {}
         self.TEST = test
+        if test:
+            print("IS TESTING MODE---------------------------------")
         
         self.client.loop_start()
         print("MQTT client loop started")

@@ -289,7 +289,7 @@ def main(task_queue, response_queue, test=False):
                     if matches:
                         if matches[0].get("wireless"):
                             device = matches[0]
-                            res = esp_controller.run_command(f"{device['id']} e {device['name']} {device['freq']} {device['res']}")
+                            res = esp_controller.run_command(f"{data['id']} e {data['name']} {data['freq']} {data['res']}")
                             if len(res) > 0 and res[0]["status"]:
                                 response = "ok"
                             else:
