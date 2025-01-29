@@ -5,3 +5,4 @@ test.json
 secret.json
 key.pem
 test[0-9]*.py
+todo.txt
