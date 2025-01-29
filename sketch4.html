@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #b0c4de;
+            color: #333;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-around;
+            padding: 20px;
+        }
+        .box {
+            background-color: #e6e6fa;
+            border: 1px solid #ccc;
+            margin: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            width: 200px;
+        }
+        .header {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+        .status {
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        .off {
+            background-color: red;
+            color: white;
+        }
+        .auto {
+            background-color: gold;
+        }
+        .on {
+            background-color: green;
+            color: white;
+        }
+        .alarm {
+            background-color: red;
+            color: white;
+        }
+        .ok {
+            background-color: green;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container" id="dashboard"></div>
+
+<script>
+    const data = {
+        "Main": [
+            ["Heat 1", "Off", "Auto Off", "On"],
+            ["Pumpe loft", "Off", "Auto Off", "On"],
+            ["Chiller", "Off", "Auto Off", "On"],
+            ["Light1", "Off", "Auto On", "On"],
+            ["Pump 1", "Off", "Auto", "On"],
+            ["Pump 2", "Off", "Auto On", "On"],
+            ["SeaSwirl1", "Off", "Auto On", "On"],
+            ["ATO", "Off", "Auto On", "On"]
+        ],
+        "Main 2": [
+            ["Heat 2", "Off", "Auto Off", "On"],
+            ["SeaSwirl2", "Off", "Auto On", "On"],
+            ["SeaSwirl3", "Off", "Auto", "On"],
+            ["Ventilasjon", "Off", "Auto On", "On"],
+            ["Pump 3", "Off", "Auto On", "On"],
+            ["Pump 4", "Off", "Auto On", "On"],
+            ["Frontlys", "Off", "Auto", "On"],
+            ["Surge", "Off", "Auto On", "On"]
+        ],
+        "Status": [
+            ["Main High", "Closed", "Ok"],
+            ["Main Low", "Closed", "Ok"],
+            ["Loft High", "Closed", "Ok"],
+            ["Loft Low", "Closed", "Ok"],
+            ["Bad High", "Open", "ALARM"],
+            ["Bad Low", "Closed", "Ok"],
+            ["Sump High", "Closed", "Ok"],
+            ["Sump Med", "Open", "Ok"],
+            ["Sump Low", "Closed", "Ok"],
+            ["Frag High", "Closed", "Ok"],
+            ["Frag Low", "Closed", "Ok"],
+            ["Qt High", "Closed", "Ok"],
+            ["Qt Low", "Closed", "Ok"],
+            ["Qt2 High", "Closed", "Ok"],
+            ["Qt2 Low", "Closed", "Ok"],
+            ["Qt3 High", "Closed", "Ok"]
+        ]
+    };
+
+    function createBox(title, items) {
+        const box = document.createElement('div');
+        box.className = 'box';
+
+        const header = document.createElement('div');
+        header.className = 'header';
+        header.textContent = title;
+        box.appendChild(header);
+
+        items.forEach(item => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'item';
+
+            const name = document.createElement('span');
+            name.textContent = item[0];
+            itemDiv.appendChild(name);
+
+            item.slice(1).forEach(status => {
+                const statusSpan = document.createElement('span');
+                statusSpan.className = `status ${status.toLowerCase().replace(' ', '')}`;
+                statusSpan.textContent = status;
+                itemDiv.appendChild(statusSpan);
+            });
+
+            box.appendChild(itemDiv);
+        });
+
+        return box;
+    }
+
+    const dashboard = document.getElementById('dashboard');
+    for (const [title, items] of Object.entries(data)) {
+        dashboard.appendChild(createBox(title, items));
+    }
+</script>
+
+</body>
+</html>

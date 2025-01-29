@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Aquarium Dashboard</title>
+<style>
+body {
+  font-family: sans-serif;
+}
+.dashboard {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-gap: 10px;
+  padding: 20px;
+}
+.box {
+  border: 1px solid #ccc;
+  padding: 10px;
+  background-color: #f9f9f9;
+}
+.box-header {
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table th, .table td {
+  border: 1px solid #ccc;
+  padding: 5px;
+  text-align: center;
+}
+.status-ok {
+  background-color: #90ee90; /* Light green */
+}
+.status-alarm {
+  background-color: #ff6347; /* Tomato (red) */
+}
+.switch-on {
+    background-color: #90ee90; /* Light green */
+}
+.auto-on {
+    background-color: #fffacd; /* Light yellow */
+}
+.switch-closed {
+    background-color: #90ee90; /* Light green */
+}
+.switch-open {
+    background-color: #ff6347; /* Tomato (red) */
+}
+
+</style>
+</head>
+<body>
+
+<div class="dashboard" id="dashboard"></div>
+
+<script>
+function createBox(title, content) {
+  const box = document.createElement('div');
+  box.classList.add('box');
+  box.innerHTML = `
+    <div class="box-header">${title}</div>
+    ${content}
+  `;
+  return box;
+}
+
+function createTable(data, highlightColumn) {
+    const table = document.createElement('table');
+    table.classList.add('table');
+
+    const headerRow = table.insertRow();
+    data[0].forEach(header => {
+        const th = document.createElement('th');
+        th.textContent = header;
+        headerRow.appendChild(th);
+    });
+
+    for (let i = 1; i < data.length; i++) {
+        const row = table.insertRow();
+        for (let j = 0; j < data[i].length; j++) {
+            const cell = row.insertCell();
+            cell.textContent = data[i][j];
+
+            if (j === highlightColumn && data[i][j] === "On") {
+                cell.classList.add('switch-on');
+            }
+            if (j === highlightColumn && data[i][j] === "Auto") {
+                cell.classList.add('auto-on');
+            }
+            if (j === highlightColumn && data[i][j] === "Closed") {
+                cell.classList.add('switch-closed');
+            }
+            if (j === highlightColumn && data[i][j] === "Open") {
+                cell.classList.add('switch-open');
+            }
+            if (j === highlightColumn && data[i][j] === "ALARM") {
+                cell.classList.add('status-alarm');
+            }
+            if (j === highlightColumn && data[i][j] === "Ok") {
+                cell.classList.add('status-ok');
+            }
+            if (j === highlightColumn && data[i][j] === "22min") {
+                cell.classList.add('status-alarm');
+            }
+        }
+    }
+
+    return table;
+}
+
+const dashboardData = [
+  { title: "12/ aug.. 2024 20:34", data: [["Ph", "8,4"], ["Redox", "320"], ["Temp Main", "26"], ["Temp Main2", "26"], ["Temp Sump", "25,6"], ["Temp Billjard", "25,8"], ["Temp Loft", "26"], ["Temp Bad", "26,1"]] },
+  { title: "Main", data: [["Heat 1", "Off", "Auto", "Off", "On"], ["Pumpe loft", "Off", "Auto", "Off", "On"], ["Chiller", "Off", "Auto", "Off", "On"], ["Light1", "Off", "Auto", "On", "On"], ["Pump 1", "Off", "Auto", "On", "On"], ["Pump 2", "Off", "Auto", "On", "On"], ["SeaSwirl1", "Off", "Auto", "On", "On"], ["ATO", "Off", "Auto", "On", "On"]] , highlightColumn: 2},
+  { title: "Main 2", data: [["Heat 2", "Off", "Auto", "Off", "On"], ["SeaSwirl2", "Off", "Auto", "On", "On"], ["SeaSwirl3", "Off", "Auto", "On", "On"], ["Ventilasjon", "Off", "Auto", "On", "On"], ["Pump 3", "Off", "Auto", "On", "On"], ["Pump 4", "Off", "Auto", "On", "On"], ["Frontlys", "Off", "Auto", "On", "On"], ["Surge", "Off", "Auto", "On", "On"]], highlightColumn: 2 },
+  { title: "Switches", data: [["Main High", "Closed", "Ok"], ["Main Low", "Closed", "Ok"], ["Loft High", "Closed", "Ok"], ["Loft Low", "Closed", "Ok"], ["Bad High", "Open", "ALARM"], ["Bad Low", "Closed", "Ok"], ["Sump High", "Closed", "Ok"], ["Sump Med", "Open", "Ok"], ["Sump Low", "Closed", "Ok"], ["Frag High", "Closed", "Ok"], ["Frag Low", "Closed", "Ok"], ["Qt High", "Closed", "Ok"], ["Qt Low", "Closed", "Ok"], ["Qt2 High", "Closed", "Ok"], ["Qt2 Low", "Closed", "Ok"], ["Qt3 High", "Closed", "Ok"], ["Qt3 Low", "Closed", "Ok"], ["Qt4 High", "Closed", "Ok"], ["Qt4 Low", "Closed", "Ok"], ["Billjard High", "Closed", "Ok"], ["Billjard Low", "Closed", "Ok"], ["Sump2 High", "Closed", "Ok"], ["Sump2 Med", "Open", "Ok"], ["Sump2 Low", "Closed", "Ok"]], highlightColumn: 2 },
+  { title: "Status", data: [["Main FlowKill", "Ok"], ["Frag FlowKill", "22min"], ["Bad FlowKill", "Ok"]], highlightColumn: 1 },
+  { title: "Main 1b", data: [["Heat 3", "Off", "Auto", "Off", "On"], ["Pump 5", "Off", "Auto", "Off", "On"], ["Pump 6", "Off", "Auto", "Off", "On"], ["Ventilasjon 2", "Off", "Auto", "On", "On"]], highlightColumn: 2 },
+  { title: "Main 2b", data: [["Heat 4", "Off", "Auto", "Off", "On"], ["Pump 7", "Off", "Auto", "Off", "On"], ["Pump 8", "Off", "Auto", "Off", "On"], ["Pump 9", "Off", "Auto", "On", "On"]], highlightColumn: 2 },
+  { title: "", data: [] }, // Empty box for spacing
+  { title: "Light SeaSwirl Flow DosingPump", data: [["Feed A"], ["Feed B"], ["Feed C"], ["Feed D"]] },
+  { title: "Kjeller", data: [["MainReturn", "Off", "Auto", "Off", "On"], ["Return1", "Off", "Auto", "Off", "On"], ["Light 11", "Off", "Auto", "Off", "On"], ["Light 12", "Off", "Auto", "On", "On"], ["Heat 5", "Off", "Auto", "Off", "On"], ["Pump 11", "Off", "Auto", "On", "On"], ["Pump 12", "Off", "Auto", "Off", "On"], ["Pump 13", "Off", "Auto", "On", "On"]], highlightColumn: 2 },
+  { title: "Kjeller 2", data: [["MainReturn2", "Off", "Auto", "Off", "On"], ["Return2", "Off", "Auto", "Off", "On"], ["Light 13", "Off", "Auto", "Off", "On"], ["Billjard", "Off", "Auto", "On", "On"], ["Heat 6", "Off", "Auto", "Off", "On"], ["Pump 14", "Off", "Auto", "On", "On"], ["Pump 15", "Off", "Auto", "On", "On"], ["Pump 16", "Off", "Auto", "On", "On"]], highlightColumn: 2 },
+  { title: "", data: [] }, // Empty box for spacing
+  { title: "AirTemp Main AirTemp Kjeller AirTemp Loft", data: [["25,8"], ["26"], ["26,1"]] },
+];
+
+
+dashboardData.forEach(item => {
+  const tableHTML = createTable(item.data, item.highlightColumn);
+  const box = createBox(item.title, tableHTML.outerHTML);
+  document.getElementById('dashboard').appendChild(box);
+});
+
+</script>
+
+</body>
+</html>

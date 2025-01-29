@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background-color: #e6f3ff;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+        }
+        .section {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .grid-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            padding: 5px;
+            align-items: center;
+        }
+        .value-cell {
+            text-align: right;
+            padding: 5px;
+        }
+        .status-off { color: red; }
+        .status-auto { background-color: #FFD700; }
+        .status-on { color: green; }
+        .status-closed { color: green; }
+        .status-open { color: orange; }
+        .status-alarm {
+            background-color: red;
+            color: white;
+            animation: blink 1s infinite;
+        }
+        .status-ok {
+            background-color: #90EE90;
+        }
+        @keyframes blink {
+            50% { opacity: 0.5; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard" id="dashboard"></div>
+
+    <script>
+        const measurements = [
+            ['Ph', '8,4'],
+            ['Redox', '320'],
+            ['Temp Main', '26'],
+            ['Temp Main2', '26'],
+            ['Temp Sump', '25,6'],
+            ['Temp Biljard', '25,8'],
+            ['Temp Loft', '26'],
+            ['Temp Bad', '26,1']
+        ];
+
+        const status = [
+            ['Status', 'ALARM'],
+            ['Main FlowKill', 'Ok'],
+            ['Frag FlowKill', '22min'],
+            ['Bad FlowKill', 'Ok']
+        ];
+
+        const feeds = [
+            ['Light', 'Feed A'],
+            ['SeaSwirl', 'Feed B'],
+            ['Flow', 'Feed C'],
+            ['DosingPump', 'Feed D']
+        ];
+
+        const temperatures = [
+            ['AirTemp Main', '25,8'],
+            ['AirTemp Kjeller', '26'],
+            ['AirTemp Loft', '26,1']
+        ];
+
+        const controls = {
+            'Main': [
+                ['Heat 1', 'Off', 'Auto Off', 'On'],
+                ['Pumpe loft', 'Off', 'Auto Off', 'On'],
+                ['Chiller', 'Off', 'Auto Off', 'On'],
+                ['Light1', 'Off', 'Auto On', 'On'],
+                ['Pump 1', 'Off', 'Auto', 'On'],
+                ['Pump 2', 'Off', 'Auto On', 'On'],
+                ['SeaSwirl1', 'Off', 'Auto On', 'On'],
+                ['ATO', 'Off', 'Auto On', 'On']
+            ],
+            // Add other sections similarly
+        };
+
+        const switches = [
+            ['Main High', 'Closed', 'Ok'],
+            ['Main Low', 'Closed', 'Ok'],
+            ['Loft High', 'Closed', 'Ok'],
+            ['Loft Low', 'Closed', 'Ok'],
+            ['Bad High', 'Open', 'ALARM'],
+            // Add other switches
+        ];
+
+        function createSection(title, rows, type) {
+            const section = document.createElement('div');
+            section.className = 'section';
+            
+            const titleElement = document.createElement('h3');
+            titleElement.textContent = title;
+            section.appendChild(titleElement);
+
+            rows.forEach(row => {
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'grid-row';
+
+                row.forEach((cell, index) => {
+                    const cellDiv = document.createElement('div');
+                    cellDiv.textContent = cell;
+                    
+                    if (cell === 'ALARM') {
+                        cellDiv.className = 'status-alarm';
+                    } else if (cell === 'Ok') {
+                        cellDiv.className = 'status-ok';
+                    }
+                    // Add other status classes as needed
+
+                    rowDiv.appendChild(cellDiv);
+                });
+
+                section.appendChild(rowDiv);
+            });
+
+            return section;
+        }
+
+        const dashboard = document.getElementById('dashboard');
+        
+        // Add all sections
+        dashboard.appendChild(createSection('Measurements', measurements));
+        dashboard.appendChild(createSection('Status', status));
+        dashboard.appendChild(createSection('Feeds', feeds));
+        dashboard.appendChild(createSection('Temperatures', temperatures));
+
+        // Add control sections
+        Object.entries(controls).forEach(([title, rows]) => {
+            dashboard.appendChild(createSection(title, rows, 'control'));
+        });
+
+        // Add switches section
+        dashboard.appendChild(createSection('Switches', switches));
+    </script>
+</body>
+</html>

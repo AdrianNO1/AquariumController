@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #e6f3ff;
+            padding: 20px;
+        }
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+        }
+        .panel {
+            background-color: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .reading {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+        .controls {
+            display: grid;
+            grid-template-columns: auto auto auto auto;
+            gap: 10px;
+            margin: 5px 0;
+        }
+        .button {
+            padding: 5px 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .off { background-color: #ffdddd; color: red; }
+        .auto { background-color: #fff3cd; color: #856404; }
+        .on { background-color: #d4edda; color: green; }
+        .alarm { background-color: red; color: white; }
+        .ok { background-color: #d4edda; color: green; }
+        h3 { margin-top: 0; }
+    </style>
+</head>
+<body>
+    <div class="grid-container" id="dashboard"></div>
+
+    <script>
+        const readings = [
+            ['Ph', '8,4'],
+            ['Redox', '320'],
+            ['Temp Main', '26'],
+            ['Temp Main2', '26'],
+            ['Temp Sump', '25,6'],
+            ['Temp Biljard', '25,8'],
+            ['Temp Loft', '26'],
+            ['Temp Bad', '26,1']
+        ];
+
+        const status = [
+            ['Status', 'ALARM'],
+            ['Main FlowKill', 'Ok'],
+            ['Frag FlowKill', '22min'],
+            ['Bad FlowKill', 'Ok']
+        ];
+
+        const feeds = [
+            ['Light', 'Feed A'],
+            ['SeaSwirl', 'Feed B'],
+            ['Flow', 'Feed C'],
+            ['DosingPump', 'Feed D']
+        ];
+
+        const airTemp = [
+            ['AirTemp Main', '25,8'],
+            ['AirTemp Kjeller', '26'],
+            ['AirTemp Loft', '26,1']
+        ];
+
+        const controls = {
+            'Main': [
+                'Heat 1', 'Pumpe loft', 'Chiller', 'Light1', 'Pump 1', 'Pump 2', 'SeaSwirl1', 'ATO'
+            ],
+            'Main 2': [
+                'Heat 2', 'SeaSwirl2', 'SeaSwirl3', 'Ventilasjon', 'Pump 3', 'Pump 4', 'Frontlys', 'Surge'
+            ],
+            'Main 1b': [
+                'Heat 3', 'Pump 5', 'Pump 6', 'Ventilasjon 2'
+            ],
+            'Main 2b': [
+                'Heat 4', 'Pump 7', 'Pump 8', 'Pump 9'
+            ],
+            'Kjeller': [
+                'MainReturn', 'Return1', 'Light 11', 'Light 12', 'Heat 5', 'Pump 11', 'Pump 12', 'Pump 13'
+            ],
+            'Kjeller 2': [
+                'MainReturn2', 'Return2', 'Light 13', 'Biljard', 'Heat 6', 'Pump 14', 'Pump 15', 'Pump 16'
+            ]
+        };
+
+        const switches = [
+            ['Main High', 'Closed', 'Ok'],
+            ['Main Low', 'Closed', 'Ok'],
+            ['Loft High', 'Closed', 'Ok'],
+            ['Loft Low', 'Closed', 'Ok'],
+            ['Bad High', 'Open', 'ALARM'],
+            ['Bad Low', 'Closed', 'Ok'],
+            ['Sump High', 'Closed', 'Ok'],
+            ['Sump Med', 'Open', 'Ok'],
+            ['Sump Low', 'Closed', 'Ok'],
+            ['Frag High', 'Closed', 'Ok'],
+            ['Frag Low', 'Closed', 'Ok'],
+            ['Qt High', 'Closed', 'Ok'],
+            ['Qt Low', 'Closed', 'Ok'],
+            ['Qt2 High', 'Closed', 'Ok'],
+            ['Qt2 Low', 'Closed', 'Ok'],
+            ['Qt3 High', 'Closed', 'Ok'],
+            ['Qt3 Low', 'Closed', 'Ok'],
+            ['Qt4 High', 'Closed', 'Ok'],
+            ['Qt4 Low', 'Closed', 'Ok'],
+            ['Biljard High', 'Closed', 'Ok'],
+            ['Biljard Low', 'Closed', 'Ok'],
+            ['Sump2 High', 'Closed', 'Ok'],
+            ['Sump2 Med', 'Open', 'Ok'],
+            ['Sump2 Low', 'Closed', 'Ok']
+        ];
+
+        function createReadingsPanel(readings, title) {
+            const panel = document.createElement('div');
+            panel.className = 'panel';
+            if (title) {
+                panel.innerHTML = `<h3>${title}</h3>`;
+            }
+            readings.forEach(([label, value]) => {
+                panel.innerHTML += `
+                    <div class="reading">
+                        <span>${label}</span>
+                        <span>${value}</span>
+                    </div>
+                `;
+            });
+            return panel;
+        }
+
+        function createControlPanel(title, items) {
+            const panel = document.createElement('div');
+            panel.className = 'panel';
+            panel.innerHTML = `<h3>${title}</h3>`;
+            items.forEach(item => {
+                panel.innerHTML += `
+                    <div class="controls">
+                        <span>${item}</span>
+                        <span class="button off">Off</span>
+                        <span class="button auto">Auto Off</span>
+                        <span class="button on">On</span>
+                    </div>
+                `;
+            });
+            return panel;
+        }
+
+        function createSwitchesPanel() {
+            const panel = document.createElement('div');
+            panel.className = 'panel';
+            panel.innerHTML = '<h3>Switches</h3>';
+            switches.forEach(([name, state, status]) => {
+                panel.innerHTML += `
+                    <div class="controls">
+                        <span>${name}</span>
+                        <span class="button ${state === 'Closed' ? 'on' : 'off'}">${state}</span>
+                        <span class="button ${status === 'Ok' ? 'ok' : 'alarm'}">${status}</span>
+                    </div>
+                `;
+            });
+            return panel;
+        }
+
+        const dashboard = document.getElementById('dashboard');
+        dashboard.appendChild(createReadingsPanel(readings));
+        dashboard.appendChild(createReadingsPanel(status));
+        dashboard.appendChild(createReadingsPanel(feeds));
+        dashboard.appendChild(createReadingsPanel(airTemp));
+
+        Object.entries(controls).forEach(([title, items]) => {
+            dashboard.appendChild(createControlPanel(title, items));
+        });
+
+        dashboard.appendChild(createSwitchesPanel());
+    </script>
+</body>
+</html>
