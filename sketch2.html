@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #e6f3ff;
+            padding: 20px;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+        }
+        .panel {
+            background-color: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .grid-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            padding: 5px;
+            align-items: center;
+        }
+        .control-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr 1fr;
+            padding: 5px;
+            align-items: center;
+        }
+        .red { color: red; }
+        .green { color: green; }
+        .yellow { background-color: #FFE4B5; }
+        .status-alarm {
+            background-color: red;
+            color: white;
+            padding: 2px 5px;
+        }
+        .status-ok {
+            background-color: #90EE90;
+            padding: 2px 5px;
+        }
+        h3 {
+            margin-top: 0;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard" id="dashboard"></div>
+
+    <script>
+        const measurements = [
+            ['Ph', '8,4'],
+            ['Redox', '320'],
+            ['Temp Main', '26'],
+            ['Temp Main2', '26'],
+            ['Temp Sump', '25,6'],
+            ['Temp Biljard', '25,8'],
+            ['Temp Loft', '26'],
+            ['Temp Bad', '26,1']
+        ];
+
+        const statusItems = [
+            ['Status', 'ALARM', 'status-alarm'],
+            ['Main FlowKill', 'Ok', 'status-ok'],
+            ['Frag FlowKill', '22min', 'status-alarm'],
+            ['Bad FlowKill', 'Ok', 'status-ok']
+        ];
+
+        const feeds = [
+            ['Light', 'Feed A'],
+            ['SeaSwirl', 'Feed B'],
+            ['Flow', 'Feed C'],
+            ['DosingPump', 'Feed D']
+        ];
+
+        const airTemps = [
+            ['AirTemp Main', '25,8'],
+            ['AirTemp Kjeller', '26'],
+            ['AirTemp Loft', '26,1']
+        ];
+
+        const controls = {
+            'Main': [
+                'Heat 1', 'Pumpe loft', 'Chiller', 'Light1', 'Pump 1', 'Pump 2', 
+                'SeaSwirl1', 'ATO'
+            ],
+            'Main 2': [
+                'Heat 2', 'SeaSwirl2', 'SeaSwirl3', 'Ventilasjon', 'Pump 3', 
+                'Pump 4', 'Frontlys', 'Surge'
+            ],
+            'Main 1b': [
+                'Heat 3', 'Pump 5', 'Pump 6', 'Ventilasjon 2'
+            ],
+            'Main 2b': [
+                'Heat 4', 'Pump 7', 'Pump 8', 'Pump 9'
+            ],
+            'Kjeller': [
+                'MainReturn', 'Return1', 'Light 11', 'Light 12', 'Heat 5',
+                'Pump 11', 'Pump 12', 'Pump 13'
+            ],
+            'Kjeller 2': [
+                'MainReturn2', 'Return2', 'Light 13', 'Biljard', 'Heat 6',
+                'Pump 14', 'Pump 15', 'Pump 16'
+            ]
+        };
+
+        const switches = [
+            'Main High', 'Main Low', 'Loft High', 'Loft Low', 'Bad High', 
+            'Bad Low', 'Sump High', 'Sump Med', 'Sump Low', 'Frag High', 
+            'Frag Low', 'Qt High', 'Qt Low', 'Qt2 High', 'Qt2 Low', 'Qt3 High',
+            'Qt3 Low', 'Qt4 High', 'Qt4 Low', 'Biljard High', 'Biljard Low',
+            'Sump2 High', 'Sump2 Med', 'Sump2 Low'
+        ];
+
+        function createMeasurementsPanel() {
+            const panel = document.createElement('div');
+            panel.className = 'panel';
+            panel.innerHTML = `
+                <div style="text-align: right; color: gray;">
+                    12/aug. 2024 20:34
+                </div>
+                ${measurements.map(([label, value]) => `
+                    <div class="grid-row">
+                        <div>${label}</div>
+                        <div>${value}</div>
+                    </div>
+                `).join('')}
+            `;
+            return panel;
+        }
+
+        function createControlPanel(title, items) {
+            const panel = document.createElement('div');
+            panel.className = 'panel';
+            panel.innerHTML = `
+                <h3>${title}</h3>
+                ${items.map(item => `
+                    <div class="control-row">
+                        <div>${item}</div>
+                        <div class="red">Off</div>
+                        <div class="yellow">Auto Off</div>
+                        <div class="green">On</div>
+                    </div>
+                `).join('')}
+            `;
+            return panel;
+        }
+
+        function createSwitchesPanel() {
+            const panel = document.createElement('div');
+            panel.className = 'panel';
+            panel.innerHTML = `
+                <h3>Switches</h3>
+                ${switches.map(item => `
+                    <div class="grid-row">
+                        <div>${item}</div>
+                        <div class="green">Closed</div>
+                        <div class="green">Ok</div>
+                    </div>
+                `).join('')}
+            `;
+            return panel;
+        }
+
+        function initializeDashboard() {
+            const dashboard = document.getElementById('dashboard');
+            dashboard.appendChild(createMeasurementsPanel());
+            
+            for (const [title, items] of Object.entries(controls)) {
+                dashboard.appendChild(createControlPanel(title, items));
+            }
+            
+            dashboard.appendChild(createSwitchesPanel());
+        }
+
+        initializeDashboard();
+    </script>
+</body>
+</html>

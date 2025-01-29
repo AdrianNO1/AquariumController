@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aquarium Dashboard</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #e0f2f7;
+            color: #212529;
+            margin: 20px;
+            padding-top: 30px;
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 250px 350px 350px 300px;
+            gap: 10px;
+            align-items: start;
+        }
+
+        .box {
+            background-color: #fff;
+            border: 1px solid #a7d9ed;
+            padding: 9px;
+            border-radius: 5px;
+        }
+
+        .box-title {
+            font-weight: bold;
+            padding-bottom: 10px;
+            color: #228b22;
+            cursor: pointer;
+        }
+
+        .status-closed {
+            background-color: #f5deb3;
+            text-align: center;
+        }
+
+        .status-open {
+            background-color: #88fb98;
+            text-align: center;
+        }
+
+        .status-ok {
+            background-color: #88fb98;
+            text-align: center;
+        }
+
+        .status-alarm {
+            background-color: #ff0000;
+            color: white;
+            text-align: center;
+        }
+
+        .switch-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .switch-table td {
+            padding: 5px;
+            text-align: center;
+        }
+
+        .switch-off {
+            background-color: #d3d3d3;
+            width: 50px;
+        }
+        .switch-off.switch-enabled {
+            background-color: #f5deb3;
+        }
+
+        .switch-auto {
+            background-color: #f5deb3;
+            width: 100px;
+        }
+        .switch-auto.switch-enabled {
+            background-color: #88fb98;
+        }
+
+        .switch-on {
+            background-color: #d3d3d3;
+            width: 50px;
+        }
+        .switch-on.switch-enabled {
+            background-color: #88fb98;
+        }
+
+        .switch-overwritten {
+            background-color: #ff0000;
+            color: white;
+        }
+
+        .switch-auto.no-code {
+            background-color: #d3d3d3;
+        }
+
+        .status-column {
+            grid-column: 4;
+            align-self: start;
+        }
+
+        .first-column {
+            grid-column: 1;
+        }
+
+        .switch-columns {
+            grid-column: 2 / span 2;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .sensor-spacing {
+            margin-bottom: 20px;
+        }
+
+        .feed-air-container p:nth-child(4) {
+            margin-bottom: 30px;
+        }
+
+        .sensor-boxes {
+            grid-column: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .sensor-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .sensor-table tr {
+            height: 28px;
+        }
+
+        .sensor-table td {
+            padding: 5px;
+            text-align: left;
+        }
+
+        .sensor-table td:last-child {
+            text-align: right;
+        }
+
+        .sensor-value {
+            font-weight: normal;
+        }
+
+        .sensor-table td.date-cell {
+            width: 50%;
+        }
+
+        .sensor-table td.status-cell {
+            width: 30%;
+            padding: 0;
+        }
+
+        .sensor-table td.status-cell span {
+            display: block;
+            width: 100%;
+            height: 28px;
+            line-height: 28px;
+        }
+
+        .status-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 15px;
+            transition: background-color 0.3s ease;
+        }
+
+        .status-bar.alarm {
+            background-color: #ff0000;
+        }
+
+        .status-bar.ok {
+            background-color: #90ee90;
+        }
+
+        .popup-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+
+        .popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            padding-top: 0;
+            border-radius: 8px;
+            width: 400px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .switch-config-popup .popup {
+            width: 800px;
+            height: 600px;
+        }
+
+        .switch-config-popup .popup-content {
+            max-height: 460px;
+            height: 100%;
+            margin-bottom: 55px;
+            overflow: visible;
+        }
+
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .popup-close {
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        .popup-content {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .switch-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .popup-buttons {
+            margin-top: 20px;
+            text-align: right;
+        }
+
+        .popup-buttons button {
+            margin-left: 10px;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .popup-buttons button.save {
+            background: #228b22;
+            color: white;
+        }
+
+        .popup-buttons button.cancel {
+            background: #ccc;
+        }
+
+        .success-toast {
+            position: fixed;
+            top: -50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #228b22;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            animation: slideDown 0.3s forwards, slideUp 0.3s forwards 1s;
+            z-index: 2000;
+        }
+
+        @keyframes slideDown {
+            to { top: 20px; }
+        }
+
+        @keyframes slideUp {
+            to { top: -50px; }
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0,0,0,0.1);
+            border-radius: 50%;
+            border-top-color: #228b22;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .help-tooltip {
+            position: relative;
+            display: inline-block;
+            margin-left: 10px;
+            width: 20px;
+            height: 20px;
+            background: #eee;
+            border-radius: 50%;
+            text-align: center;
+            cursor: help;
+        }
+
+        .tooltip-content {
+            display: none;
+            position: absolute;
+            left: 30px;
+            top: 0;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            width: 200px;
+            z-index: 1000;
+        }
+
+        .help-tooltip:hover .tooltip-content {
+            display: block;
+        }
+
+        .dsl-code {
+            width: 100%;
+            height: 100%;
+            font-family: monospace;
+            padding: 10px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
+            resize: none;
+        }
+
+        .button-row {
+            margin: 10px 0;
+            display: flex;
+            gap: 10px;
+        }
+
+        .button-row button {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+        }
+
+        .button-row button:hover {
+            opacity: 0.9;
+        }
+
+        .header-content {
+            display: flex;
+            align-items: center;
+        }
+
+        .switch-name-cell {
+            cursor: pointer;
+        }
+        .switch-name-cell:hover {
+            text-decoration: underline;
+        }
+
+        .form-row {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="status-bar" id="statusBar"></div>
+
+    <div class="container" id="dashboard"></div>
+
+    <template id="popupTemplate">
+        <div class="popup-overlay">
+            <div class="popup">
+                <div class="popup-header">
+                    <input type="text" class="group-title-input">
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div class="switches-list"></div>
+                    <button onclick="cellEdit.addSwitch()">Add Switch</button>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="statusSwitchPopupTemplate">
+        <div class="popup-overlay status-switch-popup">
+            <div class="popup">
+                <div class="popup-header">
+                    <h3>Edit Status Switch</h3>
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div class="switch-form">
+                        <div class="form-row">
+                            <label>Name:</label>
+                            <input type="text" class="switch-name-input">
+                        </div>
+                        <div class="form-row">
+                            <label>Device:</label>
+                            <select class="device-select">
+                                <option value="">None</option>
+                                <option value="Device 1">Device 1</option>
+                                <option value="Device 2">Device 2</option>
+                                <option value="Device 3">Device 3</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Pin:</label>
+                            <input type="number" class="pin-input" min="0">
+                        </div>
+                        <div class="form-row">
+                            <label>Open means OK:</label>
+                            <input type="checkbox" class="open-desired-input">
+                        </div>
+                        <div class="form-row">
+                            <label>Alarm Delay (minutes):</label>
+                            <input type="number" min="0" class="alarm-delay-input">
+                        </div>
+                    </div>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="switchConfigPopupTemplate">
+        <div class="popup-overlay switch-config-popup">
+            <div class="popup">
+                <div class="popup-header">
+                    <div class="header-content">
+                        <h3>Configure Switch: <span class="switch-name"></span></h3>
+                        <div class="help-tooltip">
+                            ?
+                            <div class="tooltip-content">
+                                <h4>Available DSL Functions:</h4>
+                                <ul>
+                                    <li>turnOn()</li>
+                                    <li>turnOff()</li>
+                                    <li>readTemp("sensor")</li>
+                                    <li>delay(minutes)</li>
+                                    <li>ifOpen("switch")</li>
+                                    <li>setTimer(time, action)</li>
+                                    <!-- Add more placeholder functions -->
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div style="margin-top: -20px;" class="form-row">
+                        <label>Pin:</label>
+                        <input type="number" class="pin-input" min="1">
+                    </div>
+                    <textarea class="dsl-code" rows="10" placeholder="Code here..."></textarea>
+                    <div class="button-row">
+                        <button class="verify">Verify</button>
+                        <button class="run-once">Run Once</button>
+                    </div>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <script>
+        const data = {
+            sensors: {
+                date: "25",
+                month: "January",
+                year: "2025",
+                time: "20:34",
+                readings: [
+                    ["Ph", "8,4"], ["Redox", "320"], ["Temp Main", "26"], ["Temp Main2", "26"],
+                    ["Temp Sump", "25,6"], ["Temp Biljard", "25,8"], ["Temp Loft", "26"], ["Temp Bad", "26,1"]
+                ]
+            },
+            switchGroups: {
+                "Main": [
+                    { name: "Heat 1", status: "auto off", code: "", pin: 0 },
+                    { name: "Pumpe loft", status: "auto on", code: "", pin: 0 },
+                    { name: "Chiller", status: "auto off", code: "", pin: 0 },
+                    { name: "Light1", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 1", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 2", status: "auto off", code: "", pin: 0 },
+                    { name: "SeaSwirl1", status: "auto on", code: "", pin: 0 },
+                    { name: "ATO", status: "auto off", code: "", pin: 0 }
+                ],
+                "Main 2": [
+                    { name: "Heat 2", status: "auto off", code: "", pin: 0 },
+                    { name: "SeaSwirl2", status: "auto on", code: "", pin: 0 },
+                    { name: "SeaSwirl3", status: "off", code: "", pin: 0 },
+                    { name: "Ventilasjn", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 3", status: "on", code: "", pin: 0 },
+                    { name: "Pump 4", status: "auto off", code: "", pin: 0 },
+                    { name: "Frontlys", status: "off", code: "", pin: 0 },
+                    { name: "Surge", status: "auto on", code: "", pin: 0 }
+                ],
+                "Main 1b": [
+                    { name: "Heat 3", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 5", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 6", status: "auto off", code: "", pin: 0 },
+                    { name: "Ventilasjn 2", status: "auto off", code: "", pin: 0 }
+                ],
+                "Main 2b": [
+                    { name: "Heat 4", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 7", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 8", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 9", status: "auto off", code: "", pin: 0 }
+                ],
+                "Kjeller": [
+                    { name: "MainReturn", status: "auto on", code: "", pin: 0 },
+                    { name: "Return1", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 11", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 12", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 5", status: "on", code: "", pin: 0 },
+                    { name: "Pump 11", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 12", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 13", status: "auto on", code: "", pin: 0 }
+                ],
+                "Kjeller 2": [
+                    { name: "MainReturn2", status: "auto on", code: "", pin: 0 },
+                    { name: "Return2", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 13", status: "auto on", code: "", pin: 0 },
+                    { name: "Biljard", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 6", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 14", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 15", status: "off", code: "", pin: 0 },
+                    { name: "Pump 16", status: "auto on", code: "", pin: 0 }
+                ],
+                "Biljard": [
+                    { name: "MainReturn", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 7", status: "auto on", code: "", pin: 0 },
+                    { name: "Skimmer", status: "auto on", code: "", pin: 0 },
+                    { name: "Luft", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 20", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 21", status: "auto off", code: "", pin: 0 },
+                    { name: "ReturnATO", status: "auto on", code: "", pin: 0 },
+                    { name: "ATO4", status: "auto on", code: "", pin: 0 }
+                ],
+                "Biljard 2": [
+                    { name: "ReturnBad", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 8", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 20", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 21", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 32", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 22", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 23", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 24", status: "auto on", code: "", pin: 0 }
+                ],
+                "Bad": [
+                    { name: "Heat 9", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 30", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 30", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 31", status: "auto on", code: "", pin: 0 }
+                ],
+                "Loft": [
+                    { name: "Heat 10", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 40", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 40", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 41", status: "auto on", code: "", pin: 0 }
+                ]
+            },
+            statusSwitches: [
+                { name: "Main High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Main Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Loft High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Loft Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Bad High", open: true, status: "ALARM", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Bad Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Sump High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Sump Med", open: true, status: "Ok", open_desired: true, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Sump Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Frag High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Frag Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt2 High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt2 Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt3 High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt3 Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt4 High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt4 Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Biljard High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Biljard Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Sump2 High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Sump2 Med", open: true, status: "Ok", open_desired: true, alarm_delay: 30, device: null, pin: null },
+                { name: "Sump2 Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "ATO High", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "ATO Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Ca Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kh Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Mg Low", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Lys 1", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Lys 2", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Lys 3", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Akvarium 1", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Akvarium 2", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kjeller 1", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kjeller 2", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kjeller 3", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Loft", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Aux1", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Aux2", open: false, status: "Ok", open_desired: false, alarm_delay: 30, device: null, pin: null }
+            ],
+            additionalSensors: {
+                flowKills: [
+                    { name: "Main FlowKill", status: "Ok" },
+                    { name: "Frag FlowKill", status: "22min" },
+                    { name: "Bad FlowKill", status: "Ok" }
+                ],
+                feeds: [
+                    { type: "Feed A", device: "Light" },
+                    { type: "Feed B", device: "SeaSwirl" },
+                    { type: "Feed C", device: "Flow" },
+                    { type: "Feed D", device: "DosingPump" }
+                ],
+                airTemps: [
+                    { location: "Main", temp: "25,8" },
+                    { location: "Kjeller", temp: "26" },
+                    { location: "Loft", temp: "26,1" }
+                ]
+            }
+        };
+
+        function createBox(content, className) {
+            const box = document.createElement('div');
+            box.className = `box ${className}`;
+            box.innerHTML = content;
+            return box;
+        }
+
+        function createSensorBox() {
+            return createBox(
+                `<table class="sensor-table">
+                    <tr>
+                        <td class="date-cell">${data.sensors.date} ${data.sensors.month}</td>
+                        <td class="date-cell">${data.sensors.time}</td>
+                    </tr>
+                    ${data.sensors.readings.map(([label, value]) => `
+                        <tr>
+                            <td>${label === "Ph" || label === "Redox" || label.includes("Main") ? '<b>' + label + '</b>' : label}</td>
+                            <td class="sensor-value">${value}</td>
+                        </tr>
+                    `).join('')}
+                </table>`,
+                'first-column'
+            );
+        }
+
+        function createSwitchBox(title, switches, className) {
+            console.log(switches)
+            return createBox(
+                `<div class="box-title" onclick="cellEdit.open('${title}')">${title}</div>
+                <table class="switch-table">
+                    ${switches.map(sw => `
+                        <tr>
+                            <td class="switch-name-cell" onclick="switchConfig.open('${title}', ${JSON.stringify(sw).replace(/"/g, '&quot;')})">
+                                ${sw.name}
+                            </td>
+                            <td class="switch-off ${sw.status === 'off' ? 'switch-enabled' : ''}">Off</td>
+                            <td class="switch-auto ${sw.status == "auto on" ? 'switch-enabled' : sw.status != "auto off" ? 'switch-overwritten' : ''} ${!sw.code ? 'no-code' : ''}">${sw.status == "auto on" ? 'Auto On' : sw.status == "auto off" ? 'Auto Off' : 'Auto'}</td>
+                            <td class="switch-on ${sw.status === 'on' ? 'switch-enabled' : ''}">On</td>
+                        </tr>
+                    `).join('')}
+                </table>`,
+                className
+            );
+        }
+
+        function createStatusSwitchBox() {
+            return createBox(
+                `<div class="box-title">Switches</div>
+                <table class="switch-table">
+                    ${data.statusSwitches.map(sw => `
+                        <tr style="${!sw.device ? 'background-color: #d3d3d3;' : ''}">
+                            <td class="switch-name-cell" onclick="statusSwitchEdit.open(${JSON.stringify(sw).replace(/"/g, '&quot;')})">${sw.name}</td>
+                            ${sw.device ? `
+                                <td class="${sw.open ? 'status-open' : 'status-closed'}">${sw.open ? 'Open' : 'Closed'}</td>
+                                <td class="${sw.status === 'Ok' ? 'status-ok' : 'status-alarm'}">${sw.status}</td>
+                            ` : '<td colspan="2"></td>'}
+                        </tr>
+                    `).join('')}
+                </table>`,
+                'status-column'
+            );
+        }
+
+        function createFlowKillBox() {
+            return createBox(`
+                <div class="box-title">Flow Kill</div>
+                <table class="sensor-table">
+                    <tr>
+                        <td>Status</td>
+                        <td class="status-cell"><span class="status-alarm">ALARM</span></td>
+                    </tr>
+                    ${data.additionalSensors.flowKills
+                        .map(fk => `
+                            <tr>
+                                <td>${fk.name}</td>
+                                <td class="status-cell"><span class="${fk.status === 'Ok' ? 'status-ok' : 'status-alarm'}">${fk.status}</span></td>
+                            </tr>
+                        `).join('')}
+                </table>
+            `, 'first-column');
+        }
+
+        function createFeedAirTempBox() {
+            return createBox(`
+                <div class="box-title">Feed & Air</div>
+                <table class="sensor-table">
+                    <tbody>
+                        ${data.additionalSensors.feeds.concat([{type: "", device: ""}])
+                            .map(feed => `
+                                <tr>
+                                    <td>${feed.device}</td>
+                                    <td><span class="feed-type">${feed.type}</span></td>
+                                </tr>
+                            `).join('')}
+                    </tbody>
+                    <tbody>
+                        ${data.additionalSensors.airTemps
+                            .map(temp => `
+                                <tr>
+                                    <td>AirTemp ${temp.location}</td>
+                                    <td>${temp.temp}</td>
+                                </tr>
+                            `).join('')}
+                    </tbody>
+                </table>
+            `, 'first-column');
+        }
+
+        function checkForAlarms() {
+            return true;
+        }
+
+        const statusBar = document.getElementById('statusBar');
+        statusBar.className = `status-bar ${checkForAlarms() ? 'alarm' : 'ok'}`;
+
+        const dashboard = document.getElementById('dashboard');
+
+        // Wrap all first-column boxes in a container
+        const sensorBoxesContainer = document.createElement('div');
+        sensorBoxesContainer.className = 'sensor-boxes';
+        sensorBoxesContainer.appendChild(createSensorBox());
+        sensorBoxesContainer.appendChild(createFlowKillBox());
+        sensorBoxesContainer.appendChild(createFeedAirTempBox());
+        dashboard.appendChild(sensorBoxesContainer);
+
+        // Create & append switch groups container
+        const switchContainer = document.createElement('div');
+        switchContainer.className = 'switch-columns';
+        Object.entries(data.switchGroups).forEach(([title, switches]) => {
+            switchContainer.appendChild(createSwitchBox(title, switches, ''));
+        });
+        dashboard.appendChild(switchContainer);
+
+        // Finally, add status switches on the right
+        dashboard.appendChild(createStatusSwitchBox());
+
+        const cellEdit = {
+            currentGroup: null,
+            overlay: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('popupTemplate').innerHTML);
+                this.overlay = document.querySelector('.popup-overlay');
+                this.setupListeners();
+            },
+
+            setupListeners() {
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+            },
+
+            open(groupTitle) {
+                const switches = data.switchGroups[groupTitle];
+                console.log(data)
+                this.currentGroup = { title: groupTitle, switches: [...switches] };
+                this.overlay.style.display = 'block';
+                
+                const titleInput = this.overlay.querySelector('.group-title-input');
+                titleInput.value = groupTitle;
+
+                this.renderSwitches();
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentGroup = null;
+            },
+
+            renderSwitches() {
+                const list = this.overlay.querySelector('.switches-list');
+                list.innerHTML = this.currentGroup.switches.map((sw, idx) => `
+                    <div class="switch-item">
+                        <input type="text" value="${sw.name}">
+                        <button onclick="cellEdit.removeSwitch(${idx})">Remove</button>
+                    </div>
+                `).join('');
+            },
+
+            addSwitch() {
+                this.currentGroup.switches.push({ name: "New Switch", status: "auto off" });
+                this.renderSwitches();
+            },
+
+            removeSwitch(index) {
+                this.currentGroup.switches.splice(index, 1);
+                this.renderSwitches();
+            },
+
+            async save() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const saveBtn = this.overlay.querySelector('.save');
+                const originalText = saveBtn.textContent;
+                saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
+
+                try {
+                    const newSwitches = this.currentGroup.switches
+                    const newTitle = this.overlay.querySelector('.group-title-input').value;
+
+                    // Simulate API call returning the updated group data
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    const originalGroupTitle = this.currentGroup.title;
+                    const apiResponse = { newTitle, newSwitches } // Simulated API response
+
+                    // Update the data structure
+                    delete data.switchGroups[originalGroupTitle];
+                    data.switchGroups[newTitle] = apiResponse.newSwitches;
+
+                    // Find and update the corresponding switch box in the UI
+                    const switchBoxes = document.querySelectorAll('.switch-columns .box');
+                    for (let box of switchBoxes) {
+                        const titleDiv = box.querySelector('.box-title');
+                        if (titleDiv && titleDiv.textContent === originalGroupTitle) {
+                            const newBox = createSwitchBox(apiResponse.newTitle, apiResponse.newSwitches, '');
+                            box.parentNode.replaceChild(newBox, box);
+                            break;
+                        }
+                    }
+                    
+                    this.showSuccess();
+                    this.close();
+                } catch (error) {
+                    alert('Error saving changes: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    saveBtn.textContent = originalText;
+                }
+            },
+
+            showSuccess() {
+                const toast = document.createElement('div');
+                toast.className = 'success-toast';
+                toast.textContent = 'Success!';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
+            }
+        };
+
+        const statusSwitchEdit = {
+            currentSwitch: null,
+            overlay: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('statusSwitchPopupTemplate').innerHTML);
+                this.overlay = document.querySelector('.status-switch-popup');
+                this.setupListeners();
+            },
+
+            setupListeners() {
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+            },
+
+            open(switchData) {
+                this.currentSwitch = { ...switchData };
+                this.overlay.style.display = 'block';
+                
+                const nameInput = this.overlay.querySelector('.switch-name-input');
+                const deviceSelect = this.overlay.querySelector('.device-select');
+                const pinInput = this.overlay.querySelector('.pin-input');
+                const openDesiredInput = this.overlay.querySelector('.open-desired-input');
+                const alarmDelayInput = this.overlay.querySelector('.alarm-delay-input');
+
+                nameInput.value = switchData.name;
+                deviceSelect.value = switchData.device || '';
+                pinInput.value = switchData.pin || '';
+                openDesiredInput.checked = switchData.open_desired;
+                alarmDelayInput.value = switchData.alarm_delay;
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentSwitch = null;
+            },
+
+            async save() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const saveBtn = this.overlay.querySelector('.save');
+                const originalText = saveBtn.textContent;
+                saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
+
+                try {
+                    const nameInput = this.overlay.querySelector('.switch-name-input');
+                    const deviceSelect = this.overlay.querySelector('.device-select');
+                    const pinInput = this.overlay.querySelector('.pin-input');
+                    const openDesiredInput = this.overlay.querySelector('.open-desired-input');
+                    const alarmDelayInput = this.overlay.querySelector('.alarm-delay-input');
+
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    // Update the data structure
+                    const switchIndex = data.statusSwitches.findIndex(s => s.name === this.currentSwitch.name);
+                    if (switchIndex !== -1) {
+                        data.statusSwitches[switchIndex] = {
+                            ...data.statusSwitches[switchIndex],
+                            name: nameInput.value,
+                            device: deviceSelect.value || null,
+                            pin: pinInput.value ? parseInt(pinInput.value) : null,
+                            open_desired: openDesiredInput.checked,
+                            alarm_delay: parseInt(alarmDelayInput.value)
+                        };
+
+                        // Update the UI
+                        const statusBox = document.querySelector('.status-column');
+                        const newStatusBox = createStatusSwitchBox();
+                        statusBox.parentNode.replaceChild(newStatusBox, statusBox);
+                    }
+
+                    this.showSuccess();
+                    this.close();
+                } catch (error) {
+                    alert('Error saving changes: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    saveBtn.textContent = originalText;
+                }
+            },
+
+            showSuccess() {
+                const toast = document.createElement('div');
+                toast.className = 'success-toast';
+                toast.textContent = 'Success!';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
+            }
+        };
+
+        const switchConfig = {
+            currentSwitch: null,
+            overlay: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('switchConfigPopupTemplate').innerHTML);
+                this.overlay = document.querySelector('.switch-config-popup');
+                this.setupListeners();
+            },
+
+            setupListeners() {
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+                this.overlay.querySelector('.verify').addEventListener('click', () => this.verify());
+                this.overlay.querySelector('.run-once').addEventListener('click', () => this.runOnce());
+            },
+
+            open(groupTitle, switchData) {
+                this.currentSwitch = { groupTitle, ...switchData };
+                this.overlay.style.display = 'block';
+                this.overlay.querySelector('.switch-name').textContent = switchData.name;
+                this.overlay.querySelector('.dsl-code').value = switchData.code;
+                this.overlay.querySelector('.pin-input').value = switchData.pin || '';
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentSwitch = null;
+            },
+
+            async performAction(action, button) {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const originalText = button.textContent;
+                button.innerHTML = '<span class="spinner"></span>' + action + '...';
+
+                try {
+                    const code = this.overlay.querySelector('.dsl-code').value;
+                    const pin = parseInt(this.overlay.querySelector('.pin-input').value);
+
+                    if (!pin || pin <= 0) {
+                        alert('You forgot to set the pin number.');
+                        return;
+                    }
+                    
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    
+                    if (action === 'Save') {
+                        // Update the data structure
+                        const group = data.switchGroups[this.currentSwitch.groupTitle];
+                        const switchIndex = group.findIndex(s => s.name === this.currentSwitch.name);
+                        if (switchIndex !== -1) {
+                            group[switchIndex] = {
+                                ...group[switchIndex],
+                                code: code,
+                                pin: pin
+                            };
+                        }
+                        
+                        // Update the UI
+                        const switchBoxes = document.querySelectorAll('.switch-columns .box');
+                        for (let box of switchBoxes) {
+                            const titleDiv = box.querySelector('.box-title');
+                            if (titleDiv && titleDiv.textContent === this.currentSwitch.groupTitle) {
+                                const newBox = createSwitchBox(this.currentSwitch.groupTitle, group, '');
+                                box.parentNode.replaceChild(newBox, box);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    this.showSuccess(`${action} successful!`);
+                    if (action === 'Save') {
+                        this.close();
+                    }
+                } catch (error) {
+                    alert(`Error during ${action.toLowerCase()}: ` + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    button.textContent = originalText;
+                }
+            },
+
+            async save() {
+                const saveBtn = this.overlay.querySelector('.save');
+                await this.performAction('Save', saveBtn);
+            },
+
+            async verify() {
+                const verifyBtn = this.overlay.querySelector('.verify');
+                await this.performAction('Verify', verifyBtn);
+            },
+
+            async runOnce() {
+                const runBtn = this.overlay.querySelector('.run-once');
+                await this.performAction('Run', runBtn);
+            },
+
+            showSuccess(message) {
+                const toast = document.createElement('div');
+                toast.className = 'success-toast';
+                toast.textContent = message;
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
+            }
+        };
+
+        // Initialize both editors after DOM is loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            cellEdit.init();
+            statusSwitchEdit.init();
+            switchConfig.init();
+        });
+    </script>
+</body>
+</html>

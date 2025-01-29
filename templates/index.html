@@ -118,6 +118,7 @@
                 <button onclick="makeApiCall('/restart')">Restart Pi</button>
                 <button onclick="makeApiCall('/pullrestart')">Kill Pull Start program</button>
                 <button onclick="makeApiCall('/pull')">Git Pull</button>
+                <button onclick="makeApiCall('/getlog')">Download Logs</button>
                 <button onclick="makeApiCall('/test')">Test</button>
             </div>
             <div class="response-area" id="responseArea">
@@ -151,6 +152,20 @@
             try {
                 const response = await fetch(endpoint);
                 console.log(response)
+                if (endpoint === '/getlog') {
+                    // Handle log file download directly
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'aquarium_logs.txt';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    responseArea.innerHTML = 'Log file downloaded!';
+                    return;
+                }
+                
                 const data = await response.json();
                 responseArea.innerHTML = JSON.stringify(data, null, 2);
             } catch (error) {
