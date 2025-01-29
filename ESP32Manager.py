@@ -225,6 +225,20 @@ class ESP32Manager:
 
                 if actual_actual["response"] == expected["response"]:
                     print(f"Command {index} succeeded")
+                    try:
+                        command = command_str.split(";")[index].split()
+                        if command[1] == "e":
+                            for slave in self.slaves:
+                                if not slave.get("wireless"):
+                                    continue
+                                if slave["id"] == expected["id"]:
+                                    slave["name"] = command[2]
+                                    slave["freq"] = int(command[3])
+                                    slave["res"] = int(command[4])
+                                    break
+                    except Exception as e:
+                        print(f"Error occurred while updating device name: {e}")
+                        
                     real_responses[index] = {"message": actual_actual["response"], "status": True}
                     notok = False
                     for index2 in expected_responses.keys():
