@@ -34,6 +34,10 @@
             cursor: pointer;
         }
 
+        .box-title:hover {
+            text-decoration: underline;
+        }
+
         .status-closed {
             background-color: #f5deb3;
             text-align: center;
@@ -89,13 +93,13 @@
             background-color: #88fb98;
         }
 
+        .switch-auto.no-code:not(.switch-overwritten) {
+            background-color: #d3d3d3;
+        }
+
         .switch-overwritten {
             background-color: #ff0000;
             color: white;
-        }
-
-        .switch-auto.no-code {
-            background-color: #d3d3d3;
         }
 
         .status-column {
@@ -141,6 +145,9 @@
         .sensor-table td {
             padding: 5px;
             text-align: left;
+            height: 18px;
+            line-height: 18px;
+            box-sizing: border-box;
         }
 
         .sensor-table td:last-child {
@@ -376,6 +383,46 @@
         .form-row {
             margin-bottom: 10px;
         }
+
+        .countdown-name {
+            cursor: pointer;
+            width: 50%;
+        }
+
+        .countdown-name:hover {
+            text-decoration: underline;
+        }
+
+        .countdown-status {
+            cursor: pointer;
+            text-align: center;
+            width: 50%;
+            height: 18px;
+            line-height: 18px;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        .countdown-status.inactive {
+            background-color: #88fb98;
+        }
+
+        .countdown-status.active {
+            background-color: #ff0000;
+            color: white;
+        }
+
+        .countdown-status .spinner {
+            margin: 4px auto;
+            width: 20px;
+            height: 20px;
+            border-color: rgba(255,255,255,0.1);
+            border-top-color: white;
+        }
+
+        .group-title-input {
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
@@ -429,7 +476,7 @@
                             <input type="number" class="pin-input" min="0">
                         </div>
                         <div class="form-row">
-                            <label>Open means OK:</label>
+                            <label>Alarm when closed:</label>
                             <input type="checkbox" class="open-desired-input">
                         </div>
                         <div class="form-row">
@@ -451,7 +498,7 @@
             <div class="popup">
                 <div class="popup-header">
                     <div class="header-content">
-                        <h3>Configure Switch: <span class="switch-name"></span></h3>
+                        <h3>Configure Row: <span class="switch-name"></span></h3>
                         <div class="help-tooltip">
                             ?
                             <div class="tooltip-content">
@@ -484,6 +531,27 @@
                 <div class="popup-buttons">
                     <button class="cancel">Cancel</button>
                     <button class="save">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="countdownPopupTemplate">
+        <div class="popup-overlay countdown-popup">
+            <div class="popup">
+                <div class="popup-header">
+                    <h3>Configure Countdown for <span class="countdown-name"></span></h3>
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div class="form-row">
+                        <label>Duration (minutes):</label>
+                        <input type="number" class="duration-input" min="1" value="30">
+                    </div>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save</button>
                 </div>
             </div>
         </div>
@@ -631,15 +699,15 @@
             ],
             additionalSensors: {
                 flowKills: [
-                    { name: "Main FlowKill", status: "Ok" },
-                    { name: "Frag FlowKill", status: "22min" },
-                    { name: "Bad FlowKill", status: "Ok" }
+                    { name: "Main FlowKill", countDownEnd: null},
+                    { name: "Frag FlowKill", countDownEnd:  "2025-02-02T01:30:00"},
+                    { name: "Bad FlowKill", countDownEnd:  null}
                 ],
                 feeds: [
-                    { type: "Feed A", device: "Light" },
-                    { type: "Feed B", device: "SeaSwirl" },
-                    { type: "Feed C", device: "Flow" },
-                    { type: "Feed D", device: "DosingPump" }
+                    { type: "Feed A", device: "Light", countDownEnd: null },
+                    { type: "Feed B", device: "SeaSwirl", countDownEnd: null },
+                    { type: "Feed C", device: "Flow", countDownEnd: null },
+                    { type: "Feed D", device: "DosingPump", countDownEnd: null }
                 ],
                 airTemps: [
                     { location: "Main", temp: "25,8" },
@@ -716,19 +784,22 @@
             return createBox(`
                 <div class="box-title">Flow Kill</div>
                 <table class="sensor-table">
-                    <tr>
-                        <td>Status</td>
-                        <td class="status-cell"><span class="status-alarm">ALARM</span></td>
-                    </tr>
                     ${data.additionalSensors.flowKills
                         .map(fk => `
                             <tr>
-                                <td>${fk.name}</td>
-                                <td class="status-cell"><span class="${fk.status === 'Ok' ? 'status-ok' : 'status-alarm'}">${fk.status}</span></td>
+                                <td class="countdown-name" 
+                                    onclick="countdownManager.open('flowkill', '${fk.name}')"
+                                >${fk.name}</td>
+                                <td class="countdown-status ${fk.countDownEnd && new Date(fk.countDownEnd) > new Date() ? 'active' : 'inactive'}" 
+                                    onclick="countdownManager.handleStatusClick(this)"
+                                    data-type="flowkill" 
+                                    data-name="${fk.name}" 
+                                    data-end="${fk.countDownEnd || ''}"
+                                >Ok</td>
                             </tr>
                         `).join('')}
                 </table>
-            `, 'first-column');
+            `, 'first-column feed-air-container');
         }
 
         function createFeedAirTempBox() {
@@ -736,16 +807,22 @@
                 <div class="box-title">Feed & Air</div>
                 <table class="sensor-table">
                     <tbody>
-                        ${data.additionalSensors.feeds.concat([{type: "", device: ""}])
+                        ${data.additionalSensors.feeds
                             .map(feed => `
                                 <tr>
-                                    <td>${feed.device}</td>
-                                    <td><span class="feed-type">${feed.type}</span></td>
+                                    <td class="countdown-name" 
+                                        onclick="countdownManager.open('feed', '${feed.type}')"
+                                    >${feed.device}</td>
+                                    <td class="countdown-status ${feed.countDownEnd && new Date(feed.countDownEnd) > new Date() ? 'active' : 'inactive'}"
+                                        onclick="countdownManager.handleStatusClick(this)"
+                                        data-type="feed" 
+                                        data-name="${feed.type}" 
+                                        data-end="${feed.countDownEnd || ''}"
+                                    >${feed.type}</td>
                                 </tr>
                             `).join('')}
                     </tbody>
-                    <tbody>
-                        ${data.additionalSensors.airTemps
+                    ${data.additionalSensors.airTemps
                             .map(temp => `
                                 <tr>
                                     <td>AirTemp ${temp.location}</td>
@@ -988,6 +1065,7 @@
             currentSwitch: null,
             overlay: null,
             isProcessing: false,
+            unsavedChanges: false,
 
             init() {
                 document.body.insertAdjacentHTML('beforeend', document.getElementById('switchConfigPopupTemplate').innerHTML);
@@ -1001,9 +1079,12 @@
                 this.overlay.querySelector('.save').addEventListener('click', () => this.save());
                 this.overlay.querySelector('.verify').addEventListener('click', () => this.verify());
                 this.overlay.querySelector('.run-once').addEventListener('click', () => this.runOnce());
+                this.overlay.querySelector('.dsl-code').addEventListener('input', () => this.unsavedChanges = true);
+                this.overlay.querySelector('.pin-input').addEventListener('input', () => this.unsavedChanges = true);
             },
 
             open(groupTitle, switchData) {
+                this.unsavedChanges = false;
                 this.currentSwitch = { groupTitle, ...switchData };
                 this.overlay.style.display = 'block';
                 this.overlay.querySelector('.switch-name').textContent = switchData.name;
@@ -1012,6 +1093,10 @@
             },
 
             close() {
+                if (this.unsavedChanges) {
+                    const proceed = confirm('You have unsaved changes. Are you sure you want to close?');
+                    if (!proceed) return;
+                }
                 this.overlay.style.display = 'none';
                 this.currentSwitch = null;
             },
@@ -1025,11 +1110,11 @@
 
                 try {
                     const code = this.overlay.querySelector('.dsl-code').value;
-                    const pin = parseInt(this.overlay.querySelector('.pin-input').value);
+                    const pin = parseInt(this.overlay.querySelector('.pin-input').value) || 0;
 
-                    if (!pin || pin <= 0) {
-                        alert('You forgot to set the pin number.');
-                        return;
+                    if (pin <= 0) {
+                        const proceed = confirm('No pin number set. This will disable the switch. Do you want to continue?');
+                        if (!proceed) return;
                     }
                     
                     // Simulate API call
@@ -1095,11 +1180,267 @@
             }
         };
 
+        const countdownManager = {
+            activeCountdowns: new Map(),
+            overlay: null,
+            currentItem: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('countdownPopupTemplate').innerHTML);
+                this.overlay = document.querySelector('.countdown-popup');
+                this.setupListeners();
+                this.startUpdating();
+                this.initializeExistingTimers();
+            },
+
+            initializeExistingTimers() {
+                // Initialize FlowKills
+                data.additionalSensors.flowKills.forEach(fk => {
+                    if (fk.countDownEnd && new Date(fk.countDownEnd) > new Date()) {
+                        this.startCountdown('flowkill', fk.name, new Date(fk.countDownEnd));
+                    }
+                });
+
+                // Initialize Feeds
+                data.additionalSensors.feeds.forEach(feed => {
+                    if (feed.countDownEnd && new Date(feed.countDownEnd) > new Date()) {
+                        this.startCountdown('feed', feed.type, new Date(feed.countDownEnd));
+                    }
+                });
+            },
+
+            setupListeners() {
+                // Only handle clicks on countdown-status elements
+                document.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('countdown-status')) {
+                        this.handleStatusClick(e.target);
+                    }
+                });
+
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+            },
+
+            handleStatusClick(element) {
+                const type = element.dataset.type;
+                const name = element.dataset.name;
+                const end = element.dataset.end;
+                
+                if (end && new Date(end) > new Date()) {
+                    this.stopCountdown(type, name);
+                } else {
+                    this.startTimer(type, name);
+                }
+            },
+
+            async startTimer(type, name) {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const element = document.querySelector(
+                    `.countdown-status[data-type="${type}"][data-name="${name}"]`
+                );
+                const originalContent = element.innerHTML;
+                element.innerHTML = '<div class="spinner"></div>';
+
+                try {
+                    // Prepare API payload
+                    const payload = this.prepareApiPayload(type, name, 'start');
+                    console.log('API payload for start:', payload);
+
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    const endTime = new Date(Date.now() + 30 * 60000); // Default 30 minutes
+                    this.startCountdown(type, name, endTime);
+
+                    // Update data structure
+                    const items = type === 'flowkill' 
+                        ? data.additionalSensors.flowKills
+                        : data.additionalSensors.feeds;
+                    
+                    const item = items.find(i => 
+                        (type === 'flowkill' ? i.name : i.type) === name
+                    );
+                    if (item) item.countDownEnd = endTime.toISOString();
+
+                    this.showSuccess();
+                } catch (error) {
+                    element.innerHTML = originalContent;
+                    alert('Error starting timer: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                }
+            },
+
+            open(type, name) {
+                this.currentItem = { type, name };
+                this.overlay.style.display = 'block';
+                this.overlay.querySelector('.countdown-name').textContent = name;
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentItem = null;
+            },
+
+            prepareApiPayload(type, name, action, duration = null) {
+                const payload = {
+                    action,
+                    type,
+                    name,
+                };
+
+                if (duration !== null) {
+                    payload.duration = duration;
+                }
+
+                return payload;
+            },
+
+            async save() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const saveBtn = this.overlay.querySelector('.save');
+                const originalText = saveBtn.textContent;
+                saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
+
+                try {
+                    const duration = parseInt(this.overlay.querySelector('.duration-input').value);
+                    if (isNaN(duration) || duration < 1) throw new Error('Invalid duration');
+
+                    // Prepare API payload
+                    const payload = this.prepareApiPayload(
+                        this.currentItem.type, 
+                        this.currentItem.name, 
+                        'configure',
+                        duration
+                    );
+                    console.log('API payload for save:', payload);
+
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    this.showSuccess();
+                    this.close();
+                } catch (error) {
+                    alert('Error saving configuration: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    saveBtn.textContent = originalText;
+                }
+            },
+
+            async stopCountdown(type, name) {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const element = document.querySelector(
+                    `.countdown-status[data-type="${type}"][data-name="${name}"]`
+                );
+                const originalContent = element.innerHTML;
+                element.innerHTML = '<div class="spinner"></div>';
+
+                try {
+                    // Prepare API payload
+                    const payload = this.prepareApiPayload(type, name, 'stop');
+                    console.log('API payload for stop:', payload);
+
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    const key = `${type}-${name}`;
+                    this.activeCountdowns.delete(key);
+
+                    // Update data structure
+                    const items = type === 'flowkill' 
+                        ? data.additionalSensors.flowKills
+                        : data.additionalSensors.feeds;
+                    
+                    const item = items.find(i => 
+                        (type === 'flowkill' ? i.name : i.type) === name
+                    );
+                    if (item) item.countDownEnd = null;
+
+                    element.textContent = type === 'flowkill' ? 'Ok' : name;
+                    element.dataset.end = '';
+                    element.className = 'countdown-status inactive';
+
+                    this.activeCountdowns.forEach((_, key) => {
+                        this.updateDisplay(key);
+                    });
+                    this.showSuccess();
+                } catch (error) {
+                    element.innerHTML = originalContent;
+                    alert('Error stopping countdown: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                }
+            },
+
+            startCountdown(type, name, endTime) {
+                const key = `${type}-${name}`;
+                this.activeCountdowns.set(key, endTime);
+                this.updateDisplay(key);
+            },
+
+            updateDisplay(key) {
+                const [type, name] = key.split('-');
+                const endTime = this.activeCountdowns.get(key);
+                const element = document.querySelector(
+                    `.countdown-status[data-type="${type}"][data-name="${name}"]`
+                );
+
+                if (element.querySelector('.spinner') && this.isProcessing) return;
+                
+                if (!element) return;
+
+                const now = new Date();
+                if (endTime <= now) {
+                    this.activeCountdowns.delete(key);
+                    element.textContent = type === 'flowkill' ? 'Ok' : name;
+                    element.dataset.end = '';
+                    element.className = 'countdown-status inactive';
+                    return;
+                }
+
+                const diff = Math.floor((endTime - now) / 1000);
+                const minutes = Math.floor(diff / 60);
+                const seconds = diff % 60;
+                
+                element.textContent = minutes > 0 
+                    ? `${minutes}m ${seconds}s`
+                    : `${seconds}s`;
+                element.dataset.end = endTime.toISOString();
+                element.className = 'countdown-status active';
+            },
+
+            startUpdating() {
+                setInterval(() => {
+                    this.activeCountdowns.forEach((_, key) => {
+                        this.updateDisplay(key);
+                    });
+                }, 1000);
+            },
+
+            showSuccess() {
+                const toast = document.createElement('div');
+                toast.className = 'success-toast';
+                toast.textContent = 'Success!';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
+            }
+        };
+
         // Initialize both editors after DOM is loaded
         document.addEventListener('DOMContentLoaded', () => {
             cellEdit.init();
             statusSwitchEdit.init();
             switchConfig.init();
+            countdownManager.init();
         });
     </script>
 </body>
