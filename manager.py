@@ -12,8 +12,9 @@ def main(task_queue, response_queue, test=False):
         logger = logging.getLogger(__name__)
 
         if not test:
-            from usb_listener import setup_usb_listener
-            from get_connected_arduinos import get_arduinos
+            pass
+            # from usb_listener import setup_usb_listener
+            # from get_connected_arduinos import get_arduinos
         
         from ESP32Manager import ESP32Manager
         esp_controller = ESP32Manager(slaves, test, logger)
@@ -334,11 +335,11 @@ def main(task_queue, response_queue, test=False):
 
             slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
             slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainPump", "status": "Responded", "lastused": int(time.time()), "error": ""})
-        else:
-            for device in get_arduinos():
-                logger.info(f"found already connected USB device: {device}")
-                start_initialization_timer(device)
-            usb_listener_process = multiprocessing.Process(target=setup_usb_listener, args=(on_connect, on_disconnect))
+        # else:
+        #     for device in get_arduinos():
+        #         logger.info(f"found already connected USB device: {device}")
+        #         start_initialization_timer(device)
+        #     usb_listener_process = multiprocessing.Process(target=setup_usb_listener, args=(on_connect, on_disconnect))
 
 
 
@@ -395,8 +396,8 @@ def main(task_queue, response_queue, test=False):
                 else:
                     logger.error("Error: esp_controller returned: " + str(responses))
 
-        if not test:
-            setup_usb_listener(on_connect, on_disconnect)
+        # if not test:
+        #     setup_usb_listener(on_connect, on_disconnect)
 
 
         def load_device_outputs(retries=4):

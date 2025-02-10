@@ -246,7 +246,7 @@ python3 app.py &
 
 @app.route('/test')
 @login_required
-def test():
+def test_func():
     app.logger.info("test request")
     return jsonify({"message": "Test Func"})
 
@@ -473,6 +473,14 @@ if __name__ == '__main__':
         print("raising")
         raise ValueError("AAAAAAAAAAAAAAAAAAA")
 
+    if len(sys.argv) > 1:
+        if sys.argv[0] == "test":
+            test = True
+        elif sys.argv[0] in ["notest", "no-test"]:
+            test = False
+        else:
+            raise ValueError("Invalid argument. Use 'test' or 'notest'")
+        
     if os.path.exists("test.json"):
         test = json.load(open("test.json", "r", encoding="utf-8"))["test"]
     else:
