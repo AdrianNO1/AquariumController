@@ -1,31 +1,5 @@
 {
-    "mainLys": [
-        {
-            "channel": "Uv",
-            "pin": 11
-        },
-        {
-            "channel": "Violet",
-            "pin": 6
-        },
-        {
-            "channel": "Royal Blue",
-            "pin": 10
-        },
-        {
-            "channel": "Blue",
-            "pin": 5
-        },
-        {
-            "channel": "White",
-            "pin": 9
-        },
-        {
-            "channel": "Red",
-            "pin": 3
-        }
-    ],
-    "mainLys70": [
+    "mainLys3": [
         {
             "channel": "Uv",
             "pin": 11
@@ -54,31 +28,41 @@
     "mainPump": [
         {
             "channel": "Pump 1",
-            "pin": 10
+            "pin": 1
         },
         {
             "channel": "Pump 2",
-            "pin": 9
-        },
-        {
-            "channel": "Pump 3",
             "pin": 3
         },
         {
-            "channel": "Pump 4",
-            "pin": 11
+            "channel": "Pump 3",
+            "pin": 22
         }
     ],
-    "jehh": [
+    "mainLys": [
         {
-            "channel": "Pump 1",
-            "pin": 33
-        }
-    ],
-    "ESP32": [
+            "channel": "Uv",
+            "pin": 12
+        },
         {
-            "channel": "Pump 5",
+            "channel": "Violet",
             "pin": 1
+        },
+        {
+            "channel": "Royal Blue",
+            "pin": 32
+        },
+        {
+            "channel": "Blue",
+            "pin": 14
+        },
+        {
+            "channel": "White",
+            "pin": 25
+        },
+        {
+            "channel": "Red",
+            "pin": 33
         }
     ]
 }
