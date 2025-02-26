@@ -7,6 +7,7 @@ def main(task_queue, response_queue, test=False):
         from datetime import datetime
         from custom_syntax import parse_code, get_current_strength
         from logging.handlers import TimedRotatingFileHandler
+        from utils import read_json_file
 
         slaves = []
         logger = logging.getLogger(__name__)
@@ -126,15 +127,6 @@ def main(task_queue, response_queue, test=False):
         def run_command(device, cmd, args=None): # legacy
             if device.get("wireless"):
                 return False
-                # logger.info(f"Executing function {cmd} with args {args} on {device['name']} (ESP: {device['id']})")
-                # command_map = {
-                #     "analogWrite": "s",
-                #     "editesp": "e"
-                # }
-                # if cmd not in command_map:
-                #     logger.error(f"Command {cmd} not found in command_map")
-                #     return False
-                # return esp_controller.run_command(device["name"], command_map[cmd], " ".join(map(str, args)))
             logger.info(f"Executing function {cmd} with args {args} on {device['name']} ({device['device']})")
             if cmd == "isOn" or cmd == "isOff":
                 command = "p\n"
@@ -265,7 +257,9 @@ def main(task_queue, response_queue, test=False):
                     cancelpreview()
                     return
                 elif task == "update":
-                    update_device_outputs()
+                    thread = threading.Thread(target=esp_controller.update_schedules)
+                    thread.start()
+                    thread.join()
                     response_queue.put("ok")
                     return
                 elif task == "temporaryoverwrite":
@@ -275,6 +269,9 @@ def main(task_queue, response_queue, test=False):
                 elif task == "update-channels":
                     response_queue.put("ok")
                     load_device_outputs()
+                    thread = threading.Thread(target=esp_controller.update_schedules)
+                    thread.start()
+                    thread.join()
                     return
                 
                 elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
@@ -290,9 +287,14 @@ def main(task_queue, response_queue, test=False):
                     if matches:
                         if matches[0].get("wireless"):
                             device = matches[0]
-                            res = esp_controller.run_command(f"{data['id']} e {data['name']} {data['freq']} {data['res']}")
+                            thread = threading.Thread(target=lambda: esp_controller.run_command(f"{data['id']} e {data['name']} {data['freq']} {data['res']}"))
+                            thread.start()
+                            res = thread.join()
                             if len(res) > 0 and res[0]["status"]:
                                 response = "ok"
+                                thread = threading.Thread(target=esp_controller.update_schedules)
+                                thread.start()
+                                thread.join()
                             else:
                                 logger.error(f"Error: not good. editesp something went wrong with wireless device")
                                 response = "Error: something went wrong with wireless device"
@@ -333,8 +335,8 @@ def main(task_queue, response_queue, test=False):
                     #print(self.written)
                     return bytes(self.written, encoding="utf-8")
 
-            slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
-            slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainPump", "status": "Responded", "lastused": int(time.time()), "error": ""})
+            # slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
+            # slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainPump", "status": "Responded", "lastused": int(time.time()), "error": ""})
         # else:
         #     for device in get_arduinos():
         #         logger.info(f"found already connected USB device: {device}")
@@ -346,9 +348,10 @@ def main(task_queue, response_queue, test=False):
         def update_device_outputs(temporaryoverwrite=False):
             nonlocal last_updated
             if temporaryoverwrite:
-                last_updated = time.time() + 120 # also change in lightpumps.js. ctrl + f "120000"
+                last_updated = time.time() + 120 # also change in lightpumps.js and ESP32Code.ino. ctrl + f "120000"
             else:
                 last_updated = time.time()
+                return
             nonlocal preview_start
 
             wireless_cmd_builder = ""
@@ -378,14 +381,16 @@ def main(task_queue, response_queue, test=False):
                                     logger.error(strength)
                                 else:
                                     if device.get("wireless"):
-                                        wireless_cmd_builder += f"{device['id']} s {info['pin']} {strength};"
+                                        wireless_cmd_builder += f"{device['id']} s {info['pin']} {strength} {1 if temporaryoverwrite else 0};"
                                         wireless_cmd_devices.append(device)
                                     else:
                                         run_command(device, "analogWrite", [info["pin"], strength])
                             
                             time.sleep(0.05)
             if wireless_cmd_builder:
-                responses = esp_controller.run_command(wireless_cmd_builder.strip(";"))
+                thread = threading.Thread(target=lambda: esp_controller.run_command(wireless_cmd_builder.strip(";")))
+                thread.start()
+                responses = thread.join()
                 if responses:
                     for key in responses:
                         r = responses[key]
@@ -403,8 +408,7 @@ def main(task_queue, response_queue, test=False):
         def load_device_outputs(retries=4):
             nonlocal device_outputs
             try:
-                with open(channels_path, "r", encoding="utf-8") as f:
-                    device_outputs = json.load(f)
+                device_outputs = read_json_file(channels_path)
             except Exception as e:
                 if retries > 0:
                     logger.warning(f"Failed to load device outputs, retrying... ({retries} attempts left)")
@@ -422,17 +426,22 @@ def main(task_queue, response_queue, test=False):
         default_update_frequency = 5
         update_frequency = default_update_frequency
         
+        last_sync = 0
+        
         time.sleep(3.5)
         while True:
             start = time.time()
 
-            #if not preview_start:
-            #    with open(os.path.join("data", "code.json"), "r", encoding="utf-8") as f:
-            #        code = json.load(f)["code"]
-            #
-            #    response = parse_code(code, verify=False, run_cmd_func=read_queue, arduinos=[x["name"] for x in serial_devices])
-            #    if response.startswith("Error"):
-            #        logger.error(response)
+            # Check if it's time for daily sync (5am UTC)
+            current_time = time.time()
+            current_hour_utc = datetime.utcfromtimestamp(current_time).hour
+            
+            if current_hour_utc == 5 and (current_time - last_sync) > 3600:  # Only sync once per hour
+                logger.info("Performing daily time sync at 5am UTC")
+                thread = threading.Thread(target=esp_controller.sync_time)
+                thread.start()
+                thread.join()
+                last_sync = current_time
 
             human_readable_last_updated = datetime.fromtimestamp(last_updated).strftime("%H:%M:%S")
             if (last_updated + update_frequency) < time.time():

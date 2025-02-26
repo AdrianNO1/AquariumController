@@ -64,5 +64,19 @@
             "channel": "Red",
             "pin": 33
         }
+    ],
+    "mainTest": [
+        {
+            "channel": "Red",
+            "pin": 33
+        },
+        {
+            "channel": "Royal Blue",
+            "pin": 14
+        },
+        {
+            "channel": "White",
+            "pin": 32
+        }
     ]
 }
