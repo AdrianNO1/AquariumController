@@ -27,6 +27,7 @@ from custom_syntax import parse_code
 import threading
 import queue, logging, glob, subprocess, signal#, vonage
 from werkzeug.security import check_password_hash
+from utils import read_json_file
 
 # run on pi: pip install flask_login flask_limiter
 
@@ -256,7 +257,7 @@ def load():
     app.logger.info("load request")
     data = request.json
     mode = data["type"]
-    nodes = json.load(open(links_path, "r", encoding="utf-8"))
+    nodes = read_json_file(links_path)
     avaliable_channels = []
     for key in nodes.keys():
         avaliable_channels.append(key)
@@ -269,9 +270,9 @@ def load():
             i += 1
         nodes[key] = nodes[key][1:]
 
-    code = json.load(open(code_path, "r", encoding="utf-8"))
-    throttle = json.load(open(throttle_path, "r", encoding="utf-8"))[mode + "throttle"]
-    outputs = json.load(open(channels_path, "r", encoding="utf-8"))
+    code = read_json_file(code_path)
+    throttle = read_json_file(throttle_path)[mode + "throttle"]
+    outputs = read_json_file(channels_path)
     
     limit = 10
     x = 0
@@ -312,13 +313,13 @@ def upload():
     data = request.json
     mode = data["type"]
     
-    links = json.load(open(links_path, "r", encoding="utf-8"))
+    links = read_json_file(links_path)
     for key in data["links_data"]:
         links[key] = data["links_data"][key]
     with open(links_path, "w", encoding="utf-8") as f:
         json.dump(links, f, indent=4)
 
-    throttle = json.load(open(throttle_path, "r", encoding="utf-8"))
+    throttle = read_json_file(throttle_path)
     throttle[mode + "throttle"] = data["throttle"]
     with open(throttle_path, "w", encoding="utf-8") as f:
         json.dump(throttle, f, indent=4)

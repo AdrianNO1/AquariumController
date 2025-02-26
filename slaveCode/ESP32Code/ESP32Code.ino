@@ -2,6 +2,12 @@
 #include <PubSubClient.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
+#include <map>
+#include <string>
+#include <vector>  // Added for std::vector
+#include <SPIFFS.h>
+#include <time.h>  // Added for time functions
+
 unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000; // 5 seconds
 const char* ssid = "ASUS+";
@@ -13,8 +19,30 @@ const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;		 // Default resolution in bits
 
-const char* VERSION = "2w";
-const bool TEST = false;
+const char* VERSION = "3w";
+const bool TEST = true;
+const char* ntpServer = "pool.ntp.org";  // NTP server for time sync
+const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
+const int daylightOffset_sec = 0;      // No daylight savings offset
+
+// Chunking configuration
+#define MAX_CHUNK_SIZE 200
+#define MAX_CHUNKS 50
+#define CHUNK_TIMEOUT 10000  // 10 seconds timeout for receiving all chunks
+
+struct ChunkInfo {
+    String data;
+    bool received;
+};
+
+struct ChunkedMessage {
+    ChunkInfo chunks[MAX_CHUNKS];
+    int totalChunks;
+    unsigned long lastChunkTime;
+    bool complete;
+};
+
+ChunkedMessage currentMessage;
 
 // EEPROM configuration
 #define EEPROM_SIZE 512
@@ -22,6 +50,16 @@ const bool TEST = false;
 #define ID_ADDR 64
 #define FREQ_ADDR 128
 #define RES_ADDR 132
+#define SCHEDULE_UPDATE_INTERVAL 1000  // Check schedule every 1000ms
+
+const unsigned long OVERWRITE_DURATION = 120000; // 120 seconds in milliseconds
+
+struct PinState {
+    int lastValue;
+    bool isOverwritten;
+    unsigned long overwriteExpiry;
+};
+std::map<int, PinState> pinStates;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -33,6 +71,33 @@ String deviceName;
 String deviceId;
 int freq;
 int resolution;
+
+unsigned long lastScheduleUpdate = 0;
+
+String currentSchedule = "";
+unsigned long syncTimeOffset = 0;
+
+// Update the struct to include channel type
+struct ChannelConfig {
+    int pin;
+    int currentValue;
+    int8_t type;  // 'p' for pump, 'l' for light - using int8_t instead of char
+};
+
+// Change from std::map to std::vector since we no longer use channel names as keys
+std::vector<ChannelConfig> activeChannels;
+
+// Time management
+struct TimeInfo {
+    time_t lastSyncTime;      // Last time we synced with NTP or received a sync command
+    time_t lastSavedTime;     // Last time we saved before reboot/power loss
+    unsigned long lastMillis; // millis() value when we last saved the time
+    bool timeInitialized;     // Whether time has been initialized
+};
+TimeInfo timeInfo;
+
+// EEPROM addresses for time management
+#define TIME_INFO_ADDR 200    // Start address for TimeInfo struct
 
 // Generate random ID if none exists
 String generateId() {
@@ -71,12 +136,33 @@ void writeToEEPROM(int startAddr, String data) {
         }
     }
     
+    // Write the data
     for (int i = 0; i < sanitized.length(); i++) {
         EEPROM.write(startAddr + i, sanitized[i]);
     }
     EEPROM.write(startAddr + sanitized.length(), '\0');
-    EEPROM.commit();
-    Serial.println("Wrote to EEPROM at address " + String(startAddr) + ": " + sanitized);
+    
+    // Commit and verify
+    bool commitSuccess = EEPROM.commit();
+    Serial.println("EEPROM commit " + String(commitSuccess ? "successful" : "failed"));
+    
+    if (commitSuccess) {
+        // Add a small delay to ensure write is complete
+        delay(10);
+        
+        // Verify the write
+        String verification = "";
+        for (int i = 0; i < sanitized.length(); i++) {
+            char c = EEPROM.read(startAddr + i);
+            verification += c;
+        }
+        
+        if (verification == sanitized) {
+            Serial.println("Wrote to EEPROM at address " + String(startAddr) + ": " + sanitized);
+        } else {
+            Serial.println("EEPROM verification failed! Written: " + sanitized + ", Read: " + verification);
+        }
+    }
 }
 
 void initializeEEPROM() {
@@ -119,6 +205,125 @@ void initializeEEPROM() {
 	Serial.println("Resolution: " + String(resolution) + " bits");
 }
 
+void storeSchedule(const String& schedule) {
+    // Open file for writing
+    File file = SPIFFS.open("/schedule.json", "w");
+    if (!file) {
+        Serial.println("Failed to open schedule file for writing");
+        return;
+    }
+    
+    // Write the schedule to the file
+    if (file.print(schedule)) {
+        Serial.println("Schedule saved to SPIFFS, size: " + String(schedule.length()) + " bytes");
+    } else {
+        Serial.println("Schedule write failed");
+    }
+    
+    file.close();
+}
+
+String loadSchedule() {
+    // Check if file exists
+    if (!SPIFFS.exists("/schedule.json")) {
+        Serial.println("No saved schedule found");
+        return "";
+    }
+    
+    // Open file for reading
+    File file = SPIFFS.open("/schedule.json", "r");
+    if (!file) {
+        Serial.println("Failed to open schedule file for reading");
+        return "";
+    }
+    
+    // Read the schedule from the file
+    String schedule = "";
+    while (file.available()) {
+        schedule += (char)file.read();
+    }
+    
+    file.close();
+    Serial.println("Schedule loaded from SPIFFS, size: " + String(schedule.length()) + " bytes");
+    return schedule;
+}
+
+int getScheduledValue(JsonArray& links, int currentMinute) {
+    for (JsonVariant link : links) {
+        int sourceTime = link["s"]["t"].as<int>();
+        int targetTime = link["d"]["t"].as<int>();
+        
+        if (currentMinute >= sourceTime && currentMinute <= targetTime) {
+            int sourcePercentage = link["s"]["p"].as<int>();
+            int targetPercentage = link["d"]["p"].as<int>();
+            
+            if (targetTime == sourceTime) return sourcePercentage;
+            
+            float progress = (float)(currentMinute - sourceTime) / (targetTime - sourceTime);
+            return sourcePercentage + (targetPercentage - sourcePercentage) * progress;
+        }
+    }
+    return 0;
+}
+
+void processSchedule(const String& schedule) {
+    StaticJsonDocument<4096> doc;
+    DeserializationError error = deserializeJson(doc, schedule);
+    
+    if (error) {
+        Serial.println("Failed to parse schedule");
+        return;
+    }
+
+    // Store the schedule
+    storeSchedule(schedule);
+    currentSchedule = schedule;
+    
+    // Get sync time from schedule
+    unsigned long scheduleTime = doc["syncTime"].as<unsigned long>();
+    
+    // Update our time if we have syncTime in the schedule
+    if (scheduleTime > 0) {
+        // Set current time based on syncTime
+        struct tm timeinfo;
+        time_t syncTime = scheduleTime;
+        localtime_r(&syncTime, &timeinfo);
+        
+        Serial.print("Syncing time to: ");
+        Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+        
+        timeInfo.lastSyncTime = syncTime;
+        timeInfo.lastSavedTime = syncTime;
+        timeInfo.lastMillis = millis();
+        timeInfo.timeInitialized = true;
+        
+        // Save to EEPROM
+        saveTimeInfo();
+    }
+    
+    // Clear existing channel configurations
+    activeChannels.clear();
+    
+    // Setup channels
+    JsonArray channels = doc["c"].as<JsonArray>();
+    for (JsonVariant channel : channels) {
+        int pin = channel["o"].as<int>();
+        // Use as<int>() instead of as<char>() and then cast to int8_t
+        int8_t type = (int8_t)channel["t"].as<int>();
+        
+        // Initialize channel
+        activeChannels.push_back({pin, 0, type});
+        
+        // Setup PWM for this pin
+        if (!attachedPins[pin]) {
+            if (ledcAttach(pin, freq, resolution)) {
+                attachedPins[pin] = true;
+                ledcWrite(pin, 0);
+            }
+        }
+    }
+}
+
 void setup_wifi() {
 	Serial.println("Connecting to WiFi...");
 	Serial.print("SSID: ");
@@ -143,6 +348,15 @@ void setup_wifi() {
 	}
 }
 
+// Calculate a simple hash from a string
+unsigned long calculateHash(const String& str) {
+    unsigned long hash = 5381;
+    for (size_t i = 0; i < str.length(); i++) {
+        hash = ((hash << 5) + hash) + str[i]; // hash * 33 + c
+    }
+    return hash;
+}
+
 void announcePresence() {
 	StaticJsonDocument<200> doc;
 	doc["name"] = deviceName;
@@ -150,7 +364,29 @@ void announcePresence() {
 	doc["res"] = resolution;
 	doc["id"] = deviceId;
 	doc["status"] = "online";
-  doc["version"] = VERSION;
+  	doc["version"] = VERSION;
+	
+	// Calculate and send a hash of the schedule instead of the entire schedule
+	if (currentSchedule.length() > 0) {
+		// Parse the schedule to remove syncTime before hashing
+		StaticJsonDocument<4096> scheduleDoc;
+		deserializeJson(scheduleDoc, currentSchedule);
+		
+		// Create a copy without syncTime for consistent hashing
+		StaticJsonDocument<4096> channelsOnlyDoc;
+		channelsOnlyDoc["c"] = scheduleDoc["c"];
+		
+		// Serialize back to a string and calculate hash
+		String channelsOnly;
+		serializeJson(channelsOnlyDoc, channelsOnly);
+		unsigned long scheduleHash = calculateHash(channelsOnly);
+		
+		doc["scheduleHash"] = String(scheduleHash);
+		Serial.println("Schedule hash (channels only): " + String(scheduleHash));
+	} else {
+		doc["scheduleHash"] = "0";
+		Serial.println("No schedule available, hash: 0");
+	}
 	
 	String message;
 	serializeJson(doc, message);
@@ -162,32 +398,89 @@ void announcePresence() {
 	Serial.println("Announced presence: " + message);
 }
 
+String handleScheduleCommand(const String& scheduleJson) {
+    // Verify JSON is valid
+    StaticJsonDocument<4096> doc;
+    DeserializationError error = deserializeJson(doc, scheduleJson);
+    if (error) {
+        return "E: Invalid JSON";
+    }
+    
+    // Store and process the schedule
+    storeSchedule(scheduleJson);
+    currentSchedule = scheduleJson;
+    
+    // Set time offset
+    syncTimeOffset = doc["syncTime"].as<unsigned long>() - (millis() / 1000);
+    
+    // Clear and setup channels
+    activeChannels.clear();
+    
+    // Setup channels
+    JsonArray channels = doc["c"].as<JsonArray>();
+    for (JsonVariant channel : channels) {
+        int pin = channel["o"].as<int>();
+        // Use as<int>() instead of as<char>() and then cast to int8_t
+        int8_t type = (int8_t)channel["t"].as<int>();
+        
+        // Initialize channel
+        activeChannels.push_back({pin, 0, type});
+        
+        // Setup PWM for this pin
+        if (!attachedPins[pin]) {
+            if (ledcAttach(pin, freq, resolution)) {
+                attachedPins[pin] = true;
+                ledcWrite(pin, 0);
+            }
+        }
+    }
+    
+    // Return a simple confirmation instead of the entire schedule
+    return "schedule_ok";
+}
+
 String handleCommand(String command, String args) {
 	Serial.println("Handling command: " + command + " with args: " + args);
 	String response = "E: Invalid command";
 	if (command == "s") {
-		int pin, value;
-		if (sscanf(args.c_str(), "%d %d", &pin, &value) == 2) {
+		int pin, value, overwrite;
+		if (sscanf(args.c_str(), "%d %d %d", &pin, &value, &overwrite) == 3) {
 				Serial.println("Pin: " + String(pin));
 				Serial.println("Value: " + String(value));
-				if (value >= 0 && value <= 255) {
+				Serial.println("Overwrite: " + String(overwrite));
+				if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
 						if (!attachedPins[pin]) {
 								if (ledcAttach(pin, freq, resolution)) {
 										attachedPins[pin] = true;
 										ledcWrite(pin, value);
 										lastPinValues[pin] = value;
 										
-										response = "s " + String(pin) + " " + String(value);
+										// Update pin state with overwrite information
+										if (overwrite == 1) {
+											pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
+										} else {
+											pinStates[pin] = {value, false, 0};
+										}
+										
+										response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
 								} else {
 										response = "E: LEDC attach failed";
 								}
 						} else {
 								ledcWrite(pin, value);
 								lastPinValues[pin] = value;
-								response = "s " + String(pin) + " " + String(value);
+								
+								// Update pin state with overwrite information
+								if (overwrite == 1) {
+									pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
+								} else {
+									pinStates[pin] = {value, false, 0};
+								}
+								
+								response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
 						}
 				} else {
-						response = "E: Invalid value";
+						response = "E: Invalid value or overwrite parameter";
 				}
 		} else {
 				response = "E: Invalid arguments";
@@ -223,7 +516,7 @@ String handleCommand(String command, String args) {
 			int newFreq = args_array[1].toInt();
 			int newRes = args_array[2].toInt();
 
-     Serial.println(deviceName + " " + newName + " " + String(newFreq) + " " + String(newRes));
+     		Serial.println(deviceName + " " + newName + " " + String(newFreq) + " " + String(newRes));
 			
 			if (true) {
 				bool needReattach = false;
@@ -268,6 +561,27 @@ String handleCommand(String command, String args) {
 			}
 		}
 	}
+	else if (command == "sync") {
+		unsigned long serverTime = args.toInt();
+		if (serverTime > 0) {
+			// Update our internal time
+			time_t syncTime = serverTime;
+			timeInfo.lastSyncTime = syncTime;
+			timeInfo.lastSavedTime = syncTime;
+			timeInfo.lastMillis = millis();
+			timeInfo.timeInitialized = true;
+			saveTimeInfo();
+			
+			struct tm timeinfo;
+			localtime_r(&syncTime, &timeinfo);
+			Serial.print("Time synchronized to: ");
+			Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+			
+			response = String(serverTime);
+		} else {
+			response = "E: Invalid time value";
+		}
+	}
 
 	return response;
 }
@@ -289,6 +603,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
 	Serial.println("Message content: " + message);
 
 	if (!TEST && String(topic) == "aquarium/command" || TEST && String(topic) == "test/aquarium/command") {
+		// Check if this is a chunked message
+		if (message.startsWith("chunk:")) {
+			handleChunkedMessage(message.substring(6));
+			return;
+		}
+		
 		if (message == "discover") {
 			Serial.println("Discover message received, announcing presence");
 			announcePresence();
@@ -342,9 +662,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
 			String responseStr;
 			serializeJson(responses, responseStr);
 			if (TEST) {
+				Serial.println("Publishing response to test/aquarium/response: " + responseStr);
 				client.publish("test/aquarium/response", responseStr.c_str());
+				Serial.println("Published to test/aquarium/response");
 			} else {
+				Serial.println("Publishing response to aquarium/response: " + responseStr);
 				client.publish("aquarium/response", responseStr.c_str());
+				Serial.println("Published to aquarium/response");
 			}
 		}
 	} else {
@@ -362,6 +686,12 @@ String processCommand(String message) {
 
 	// Get remaining part after device name
 	String remainder = message.substring(firstSpace + 1);
+
+  // Check if this is a schedule command
+  if (remainder.startsWith("sc ")) {
+      String scheduleJson = remainder.substring(3);
+      return handleScheduleCommand(scheduleJson);
+  }
 	
 	// Find command
 	int secondSpace = remainder.indexOf(' ');
@@ -379,14 +709,122 @@ String processCommand(String message) {
 	return handleCommand(command, args);
 }
 
+// Initialize time from NTP server
+void initializeTime() {
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("Initializing time via NTP");
+        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+        
+        struct tm timeinfo;
+        if (getLocalTime(&timeinfo)) {
+            time_t now;
+            time(&now);
+            timeInfo.lastSyncTime = now;
+            timeInfo.lastSavedTime = now;
+            timeInfo.lastMillis = millis();
+            timeInfo.timeInitialized = true;
+            saveTimeInfo();
+            Serial.println("Time initialized via NTP");
+            Serial.print("Current time: ");
+            Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+        } else {
+            Serial.println("Failed to obtain time from NTP");
+        }
+    } else {
+        Serial.println("WiFi not connected, can't initialize time via NTP");
+    }
+}
+
+// Save time information to EEPROM
+void saveTimeInfo() {
+    // Update lastSavedTime before saving
+    if (timeInfo.timeInitialized) {
+        // Calculate current time based on elapsed millis
+        unsigned long elapsed = millis() - timeInfo.lastMillis;
+        timeInfo.lastSavedTime = timeInfo.lastSavedTime + (elapsed / 1000);
+        timeInfo.lastMillis = millis();
+    }
+    
+    // Save to EEPROM
+    EEPROM.put(TIME_INFO_ADDR, timeInfo);
+    EEPROM.commit();
+    Serial.println("Time info saved to EEPROM");
+}
+
+// Load time information from EEPROM
+void loadTimeInfo() {
+    EEPROM.get(TIME_INFO_ADDR, timeInfo);
+    
+    // Verify if the loaded data makes sense
+    if (timeInfo.lastSavedTime < 1735689600) { // Jan 1, 2025 as a sanity check
+        Serial.println("Invalid time data in EEPROM, resetting");
+        timeInfo.timeInitialized = false;
+        return;
+    }
+    
+    // Update the time based on how long we've been powered off
+    // The difference between current millis() (which is near 0 after reboot)
+    // and lastMillis tells us how long the device was off
+    time_t currentTime = timeInfo.lastSavedTime;
+    timeInfo.lastMillis = millis();
+    timeInfo.timeInitialized = true;
+    
+    Serial.println("Time info loaded from EEPROM");
+    Serial.print("Current time estimate: ");
+    struct tm timeinfo;
+    localtime_r(&currentTime, &timeinfo);
+    Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
+}
+
+// Get current time in seconds since epoch, using best available source
+time_t getCurrentTime() {
+    if (!timeInfo.timeInitialized) {
+        return 0; // Time not initialized yet
+    }
+    
+    // Calculate time based on saved time and elapsed milliseconds
+    unsigned long elapsed = millis() - timeInfo.lastMillis;
+    time_t currentTime = timeInfo.lastSavedTime + (elapsed / 1000);
+    
+    return currentTime;
+}
+
+// Convert current time to minutes since midnight (0-1439)
+int getCurrentMinuteOfDay() {
+    time_t now = getCurrentTime();
+    if (now == 0) return 0; // Time not initialized
+    
+    struct tm timeinfo;
+    localtime_r(&now, &timeinfo);
+    return timeinfo.tm_hour * 60 + timeinfo.tm_min;
+}
+
 void setup() {
 	Serial.begin(115200);
 	Serial.println("\nStarting up...");
 	
-	EEPROM.begin(EEPROM_SIZE);
+	// Initialize EEPROM with proper partition verification
+	if (!EEPROM.begin(EEPROM_SIZE)) {
+		Serial.println("Failed to initialize EEPROM!");
+	}
+	
 	initializeEEPROM();
+	loadTimeInfo(); // Load time info from EEPROM
+
+    if (!SPIFFS.begin(true)) {
+        Serial.println("SPIFFS initialization failed!");
+    } else {
+        Serial.println("SPIFFS initialized successfully");
+    }
+
+  	// Load saved schedule if it exists
+	String savedSchedule = loadSchedule();
+	if (savedSchedule.length() > 0) {
+		processSchedule(savedSchedule);
+	}
 	
 	setup_wifi();
+	initializeTime();
 	
 	client.setServer(mqtt_server, mqtt_port);
 	client.setKeepAlive(60);	// Set keepalive to 60 seconds
@@ -441,5 +879,219 @@ void loop() {
 			}
 		}
 	}
+
+	// Check for chunked message timeout
+	checkChunkTimeout();
+	
+	// Save time periodically (every hour)
+	static unsigned long lastTimeSave = 0;
+	if (timeInfo.timeInitialized && millis() - lastTimeSave > 3600000) { // 1 hour
+		saveTimeInfo();
+		lastTimeSave = millis();
+	}
+
+	// Process schedule if active
+	if (currentSchedule.length() > 0) {
+		unsigned long currentMillis = millis();
+		
+		// Only update if SCHEDULE_UPDATE_INTERVAL has passed
+		if (currentMillis - lastScheduleUpdate >= SCHEDULE_UPDATE_INTERVAL) {
+			lastScheduleUpdate = currentMillis;
+			
+			// Get current minute of day (0-1439)
+			int currentMinute = getCurrentMinuteOfDay();
+			
+			if (currentMinute > 0 || timeInfo.timeInitialized) {
+				StaticJsonDocument<4096> doc;
+				deserializeJson(doc, currentSchedule);
+				
+				// Process each channel in the array
+				JsonArray channels = doc["c"].as<JsonArray>();
+				for (size_t i = 0; i < channels.size(); i++) {
+					JsonVariant channel = channels[i];
+					int pin = channel["o"].as<int>();
+					JsonArray links = channel["l"].as<JsonArray>();
+					// Get type as integer
+					int8_t type = (int8_t)channel["t"].as<int>();
+					
+					// Find the matching channel in our active channels
+					for (size_t j = 0; j < activeChannels.size(); j++) {
+						if (activeChannels[j].pin == pin) {
+							// Check if pin is currently overwritten
+							auto pinStateIt = pinStates.find(pin);
+							if (pinStateIt != pinStates.end() && pinStateIt->second.isOverwritten) {
+								// Check if overwrite has expired
+								if (currentMillis >= pinStateIt->second.overwriteExpiry) {
+									pinStateIt->second.isOverwritten = false;
+								} else {
+									continue; // Skip schedule update for this pin
+								}
+							}
+							
+							int targetValue = getScheduledValue(links, currentMinute);
+							
+							// Only update if value has changed
+							if (activeChannels[j].currentValue != targetValue) {
+								int pwmValue = (targetValue * ((1 << resolution) - 1)) / 100;
+								Serial.println("Schedule: Setting pin " + String(pin) + " to " + String(pwmValue) + 
+											  " (" + String(targetValue) + "%) at minute " + String(currentMinute) +
+											  " [Type: " + (type == 112 ? "pump" : "light") + "]");
+								ledcWrite(pin, pwmValue);
+								activeChannels[j].currentValue = targetValue;
+							}
+							break;
+						}
+					}
+				}
+			} else {
+				Serial.println("Skipping schedule update: Time not initialized");
+			}
+		}
+	}
+ 
 	client.loop();
+}
+
+void handleChunkedMessage(String chunkData) {
+    // Parse chunk data: format is "index:total:isLast:data"
+    int firstColon = chunkData.indexOf(':');
+    int secondColon = chunkData.indexOf(':', firstColon + 1);
+    int thirdColon = chunkData.indexOf(':', secondColon + 1);
+    
+    if (firstColon == -1 || secondColon == -1 || thirdColon == -1) {
+        Serial.println("Invalid chunk format: " + chunkData);
+        return;
+    }
+    
+    int chunkIndex = chunkData.substring(0, firstColon).toInt();
+    int totalChunks = chunkData.substring(firstColon + 1, secondColon).toInt();
+    bool isLast = chunkData.substring(secondColon + 1, thirdColon).toInt() == 1;
+    String data = chunkData.substring(thirdColon + 1);
+    
+    Serial.println("Received chunk " + String(chunkIndex + 1) + " of " + String(totalChunks) + 
+                  ", isLast: " + String(isLast) + ", size: " + String(data.length()) + " bytes");
+    
+    // Initialize or update chunked message
+    if (chunkIndex == 0 || currentMessage.lastChunkTime == 0 || 
+        millis() - currentMessage.lastChunkTime > CHUNK_TIMEOUT) {
+        // Reset current message if this is the first chunk or if timeout occurred
+        Serial.println("Initializing new chunked message with " + String(totalChunks) + " chunks");
+        for (int i = 0; i < MAX_CHUNKS; i++) {
+            currentMessage.chunks[i].data = "";
+            currentMessage.chunks[i].received = false;
+        }
+        currentMessage.totalChunks = totalChunks;
+        currentMessage.complete = false;
+        currentMessage.lastChunkTime = millis();
+    }
+    
+    // Store this chunk
+    if (chunkIndex < MAX_CHUNKS) {
+        currentMessage.chunks[chunkIndex].data = data;
+        currentMessage.chunks[chunkIndex].received = true;
+        currentMessage.lastChunkTime = millis();
+        
+        // Check if we have all chunks
+        bool allReceived = true;
+        int receivedCount = 0;
+        for (int i = 0; i < totalChunks; i++) {
+            if (currentMessage.chunks[i].received) {
+                receivedCount++;
+            } else {
+                allReceived = false;
+            }
+        }
+        
+        Serial.println("Received " + String(receivedCount) + " of " + String(totalChunks) + " chunks");
+        
+        // If all chunks received, process the complete message
+        if (allReceived) {
+            Serial.println("All chunks received, assembling complete message");
+            String completeMessage = "";
+            for (int i = 0; i < totalChunks; i++) {
+                completeMessage += currentMessage.chunks[i].data;
+            }
+            
+            Serial.println("Complete message size: " + String(completeMessage.length()) + " bytes");
+            Serial.println("Processing complete message: " + completeMessage);
+            
+            // Process the complete message
+            processCompleteMessage(completeMessage);
+            
+            // Reset for next chunked message
+            for (int i = 0; i < MAX_CHUNKS; i++) {
+                currentMessage.chunks[i].data = "";
+                currentMessage.chunks[i].received = false;
+            }
+            currentMessage.complete = true;
+            currentMessage.lastChunkTime = 0;
+            Serial.println("Chunked message processing complete");
+        }
+    } else {
+        Serial.println("Error: Chunk index " + String(chunkIndex) + " exceeds maximum chunks " + String(MAX_CHUNKS));
+    }
+}
+
+void processCompleteMessage(String message) {
+    // Create JSON document for responses
+    StaticJsonDocument<512> responses;
+    responses["id"] = deviceId;
+    responses["name"] = deviceName;
+    JsonArray commands = responses.createNestedArray("responses");
+    
+    // Handle multiple commands separated by semicolon
+    int startPos = 0;
+    int endPos;
+    int cmdIndex = 0;
+    while ((endPos = message.indexOf(';', startPos)) != -1) {
+        String response = processCommand(message.substring(startPos, endPos));
+        if (response.length() > 0) {
+            JsonObject cmd = commands.createNestedObject();
+            cmd["index"] = cmdIndex;
+            cmd["response"] = response;
+        }
+        startPos = endPos + 1;
+        cmdIndex++;
+    }
+    // Process the last or only command
+    if (startPos < message.length()) {
+        String response = processCommand(message.substring(startPos));
+        if (response.length() > 0) {
+            JsonObject cmd = commands.createNestedObject();
+            cmd["index"] = cmdIndex;
+            cmd["response"] = response;
+        }
+    }
+    
+    // Publish responses if any commands were processed
+    if (commands.size() > 0) {
+        String responseStr;
+        serializeJson(responses, responseStr);
+        if (TEST) {
+            Serial.println("Publishing response to test/aquarium/response: " + responseStr);
+            client.publish("test/aquarium/response", responseStr.c_str());
+            Serial.println("Published to test/aquarium/response");
+        } else {
+            Serial.println("Publishing response to aquarium/response: " + responseStr);
+            client.publish("aquarium/response", responseStr.c_str());
+            Serial.println("Published to aquarium/response");
+        }
+    }
+}
+
+void checkChunkTimeout() {
+    // Check if we have an incomplete chunked message that has timed out
+    if (!currentMessage.complete && currentMessage.lastChunkTime > 0) {
+        unsigned long currentTime = millis();
+        if (currentTime - currentMessage.lastChunkTime > CHUNK_TIMEOUT) {
+            Serial.println("Chunked message timed out, resetting");
+            // Reset the chunked message
+            for (int i = 0; i < MAX_CHUNKS; i++) {
+                currentMessage.chunks[i].data = "";
+                currentMessage.chunks[i].received = false;
+            }
+            currentMessage.complete = false;
+            currentMessage.lastChunkTime = 0;
+        }
+    }
 }

@@ -4,5 +4,5 @@ data/*
 test.json
 secret.json
 key.pem
-test[0-9]*.py
+test*.py
 todo.txt
