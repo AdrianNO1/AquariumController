@@ -6,3 +6,4 @@ secret.json
 key.pem
 test*.py
 todo.txt
+cert.pem
