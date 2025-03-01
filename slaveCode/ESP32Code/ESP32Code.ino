@@ -20,7 +20,7 @@ const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;		 // Default resolution in bits
 
 const char* VERSION = "3w";
-const bool TEST = true;
+const bool TEST = false;
 const char* ntpServer = "pool.ntp.org";  // NTP server for time sync
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
