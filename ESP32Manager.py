@@ -44,16 +44,21 @@ class ESP32Manager:
         return str(hash_val)
 
     def update_schedules(self):
+        print("updating schedules")
         channels = read_json_file('data/channels.json')
         command_builder = ""
         for channel in channels:
             schedule = create_esp32_schedule(channel)
             schedule_hash = self.calculate_hash(schedule)
-
+            print(f"Channel: {channel}, Schedule hash: {schedule_hash}")
             for slave in self.slaves:
                 if slave.get("wireless") and slave["name"].startswith(channel):
                     # Compare schedule hashes instead of full schedules
                     current_hash = slave.get("scheduleHash", "0")
+                    if slave["version"] in ["0", "1", "2w"]:
+                        print(f"Skipping schedule update for {slave['name']} (ID: {slave['id']})")
+                    if current_hash == schedule_hash:
+                        print(f"Schedule for {slave['name']} (ID: {slave['id']}) is already up to date")
                     if current_hash != schedule_hash and slave["version"] not in ["0", "1", "2w"]:
                         print(f"Updating schedule for {slave['name']} (ID: {slave['id']})")
                         print(f"Current hash: {current_hash}, New hash: {schedule_hash}")
