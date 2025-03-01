@@ -289,17 +289,11 @@ def main(task_queue, response_queue, test=False):
                             device = matches[0]
                             thread = threading.Thread(target=lambda: esp_controller.run_command(f"{data['id']} e {data['name']} {data['freq']} {data['res']}"))
                             thread.start()
-                            res = thread.join()
-                            if res is not None and len(res) > 0 and res[0]["status"]:
-                                response = "ok"
-                                print("starting update schedule thread")
-                                thread = threading.Thread(target=esp_controller.update_schedules)
-                                thread.start()
-                                thread.join()
-                            else:
-                                print("Error: not good. editesp something went wrong with wireless device")
-                                logger.error(f"Error: not good. editesp something went wrong with wireless device")
-                                response = "Error: something went wrong with wireless device"
+                            thread.join()
+                            
+                            thread = threading.Thread(target=esp_controller.update_schedules)
+                            thread.start()
+                            thread.join()
                         else:
                             res = run_command(matches[0], "editesp", [data["id"], data["name"], data["freq"], data["res"]])
                             if res:
