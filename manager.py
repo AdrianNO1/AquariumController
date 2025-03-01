@@ -290,7 +290,7 @@ def main(task_queue, response_queue, test=False):
                             thread = threading.Thread(target=lambda: esp_controller.run_command(f"{data['id']} e {data['name']} {data['freq']} {data['res']}"))
                             thread.start()
                             res = thread.join()
-                            if len(res) > 0 and res[0]["status"]:
+                            if res is not None and len(res) > 0 and res[0]["status"]:
                                 response = "ok"
                                 thread = threading.Thread(target=esp_controller.update_schedules)
                                 thread.start()

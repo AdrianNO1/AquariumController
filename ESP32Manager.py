@@ -382,6 +382,7 @@ class ESP32Manager:
                 self.responses = {}
                 self.response_events = {}
 
+                print("manager run_command returning", real_responses)
                 return real_responses
         
             except Exception as e:
