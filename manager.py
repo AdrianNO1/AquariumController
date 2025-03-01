@@ -292,10 +292,12 @@ def main(task_queue, response_queue, test=False):
                             res = thread.join()
                             if res is not None and len(res) > 0 and res[0]["status"]:
                                 response = "ok"
+                                print("starting update schedule thread")
                                 thread = threading.Thread(target=esp_controller.update_schedules)
                                 thread.start()
                                 thread.join()
                             else:
+                                print("Error: not good. editesp something went wrong with wireless device")
                                 logger.error(f"Error: not good. editesp something went wrong with wireless device")
                                 response = "Error: something went wrong with wireless device"
                         else:

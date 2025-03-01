@@ -46,7 +46,6 @@ class ESP32Manager:
     def update_schedules(self):
         print("updating schedules")
         channels = read_json_file('data/channels.json')
-        command_builder = ""
         for channel in channels:
             schedule = create_esp32_schedule(channel)
             schedule_hash = self.calculate_hash(schedule)
@@ -75,10 +74,6 @@ class ESP32Manager:
                             slave["scheduleHash"] = schedule_hash
                         else:
                             print(f"Failed to update schedule for {slave['name']}")
-        
-        # Run any other non-schedule commands together
-        if command_builder:
-            self.run_command(command_builder)
         
     def discover_devices(self):
         """Request all ESP32s to announce themselves"""
