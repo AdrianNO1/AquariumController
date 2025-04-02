@@ -83,7 +83,6 @@ app.logger.setLevel(logging.INFO)
 
 
 links_path = os.path.join("data", "links.json")
-code_path = os.path.join("data", "code.json")
 throttle_path = os.path.join("data", "throttle.json")
 switches_path = os.path.join("data", "switches.json")
 channels_path = os.path.join("data", "channels.json")
@@ -143,6 +142,11 @@ def lights():
 @app.route('/pumps')
 @login_required
 def pumps():
+    return render_template('lightpumps.html')
+
+@app.route('/testlights')
+@login_required
+def testlights():
     return render_template('lightpumps.html')
 
 @app.route('/kill')
@@ -257,7 +261,47 @@ def load():
     app.logger.info("load request")
     data = request.json
     mode = data["type"]
+    expected_channels = data["expected_channels"]
     nodes = read_json_file(links_path)
+    did_something = False
+    for expected_channel in expected_channels:
+        if expected_channel not in nodes:
+            nodes[expected_channel] = {}
+            nodes[expected_channel]["type"] = mode
+            nodes[expected_channel]["links"] = [
+            {
+                "source": {
+                    "time": 0,
+                    "percentage": 0,
+                    "x": 0,
+                    "y": 250
+                },
+                "target": {
+                    "time": 43,
+                    "percentage": 0,
+                    "x": 28,
+                    "y": 250
+                }
+            },
+            {
+                "source": {
+                    "time": 43,
+                    "percentage": 0,
+                    "x": 28,
+                    "y": 250
+                },
+                "target": {
+                    "time": 274,
+                    "percentage": 0,
+                    "x": 177,
+                    "y": 250
+                }
+            }]
+
+            did_something = True
+    if did_something:
+        with open(links_path, "w", encoding="utf-8") as f:
+            json.dump(nodes, f, indent=4)
     avaliable_channels = []
     for key in nodes.keys():
         avaliable_channels.append(key)
@@ -270,8 +314,11 @@ def load():
             i += 1
         nodes[key] = nodes[key][1:]
 
-    code = read_json_file(code_path)
-    throttle = read_json_file(throttle_path)[mode + "throttle"]
+    try:
+        throttle = read_json_file(throttle_path)[mode + "throttle"]
+    except KeyError:
+        app.logger.info("throttle not found. using default. Mode: " + str(mode))
+        throttle = 100
     outputs = read_json_file(channels_path)
     
     limit = 10
@@ -288,7 +335,7 @@ def load():
     #                break
 
 
-    return jsonify({"data": json.dumps(nodes), "code": json.dumps(code["code"]), "throttle": throttle, "error_lines": error_lines, "avaliable_channels": avaliable_channels, "outputs": json.dumps(outputs)})
+    return jsonify({"data": json.dumps(nodes), "throttle": throttle, "error_lines": error_lines, "avaliable_channels": avaliable_channels, "outputs": json.dumps(outputs)})
 
 @app.route('/loadarduinoinfo', methods=['POST'])
 @login_required

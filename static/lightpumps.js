@@ -49,7 +49,6 @@ let selected
 let svg_name
 let svg
 let current_minutes
-let codeText
 let arduinos
 let preview_start = 0
 let preview_interval_id
@@ -68,8 +67,8 @@ let overwriteStatusTimeout = null;
 
 // check if the current page is /lights
 if (window.location.pathname === "/lights"){
-    channels_type = "light"
     console.log("lights")
+    channels_type = "light"
     channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
     channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
 } else if (window.location.pathname === "/pumps"){
@@ -77,6 +76,11 @@ if (window.location.pathname === "/lights"){
     channels_type = "pump"
     channels_names = ["Pump 1", "Pump 2", "Pump 3"]//, "Pump 4", "Pump 5", "Pump 6"]
     channels_colors = ["purple", "violet", "blue"]//, "cyan", "white", "red"]
+} else if (window.location.pathname === "/testlights"){
+    console.log("testlights")
+    channels_type = "testlight"
+    channels_names = ["Test Uv", "Test Violet", "Test Royal Blue", "Test Blue", "Test White", "Test Red"]
+    channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
 } else {
     document.getElementById("error").textContent = "Unknown page"
     throw new Error("Unknown page")
@@ -232,10 +236,9 @@ if (overwriteNodesWithExample){
         type: 'POST',
         async: false,
         contentType: 'application/json',
-        data: JSON.stringify({"type": channels_type}),
+        data: JSON.stringify({"type": channels_type, "expected_channels": channels_names}),
         success: function(response) {
             nodes = JSON.parse(response.data)
-            codeText = JSON.parse(response.code)
             slider.value = JSON.parse(response.throttle)
             output.value = JSON.parse(response.throttle) + "%"
             avaliableChannels = response.avaliable_channels
