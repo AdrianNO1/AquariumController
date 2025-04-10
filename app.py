@@ -134,19 +134,9 @@ def login():
     else:
         return render_template('login.html')
 
-@app.route('/lights')
+@app.route('/control/<device_type>')
 @login_required
-def lights():
-    return render_template('lightpumps.html')
-
-@app.route('/pumps')
-@login_required
-def pumps():
-    return render_template('lightpumps.html')
-
-@app.route('/testlights')
-@login_required
-def testlights():
+def control(device_type):
     return render_template('lightpumps.html')
 
 @app.route('/kill')
