@@ -66,20 +66,26 @@ let sliderTimeout = null;
 let overwriteStatusTimeout = null;
 
 // check if the current page is /lights
-if (window.location.pathname === "/lights"){
-    console.log("lights")
+const pathParts = window.location.pathname.split('/');
+const deviceType = pathParts[2]; // Get the device type from /control/<device_type>
+
+console.log(deviceType)
+if (deviceType === "lights"){
     channels_type = "light"
     channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
     channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
-} else if (window.location.pathname === "/pumps"){
-    console.log("pumps")
+} else if (deviceType === "pumps"){
     channels_type = "pump"
-    channels_names = ["Pump 1", "Pump 2", "Pump 3"]//, "Pump 4", "Pump 5", "Pump 6"]
-    channels_colors = ["purple", "violet", "blue"]//, "cyan", "white", "red"]
-} else if (window.location.pathname === "/testlights"){
-    console.log("testlights")
+    channels_names = ["Pump 1", "Pump 2", "Pump 3", "Pump 4", "Pump 5", "Pump 6"]
+    channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
+} else if (deviceType === "testlights"){
     channels_type = "testlight"
     channels_names = ["Test Uv", "Test Violet", "Test Royal Blue", "Test Blue", "Test White", "Test Red"]
+    channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
+} else if (["bad", "loft", "biljard", "frag", "qt1", "qt2", "qt3", "qt4"].includes(deviceType)){
+    channels_type = deviceType
+    channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
+    channels_names = channels_names.map(name => `${deviceType.slice(0, 1).toUpperCase()}${deviceType.slice(1)} ${name}`)
     channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
 } else {
     document.getElementById("error").textContent = "Unknown page"
