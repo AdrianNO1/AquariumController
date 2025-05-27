@@ -173,23 +173,28 @@ function initializeSliders() {
         console.log(values.join(' | '));
     }
 
-    sliders.forEach(slider => {
-        // Set a unique color for each slider thumb
-        const hue = (channels_names.indexOf(slider.dataset.name) * 360 / channels_names.length);
-        slider.style.setProperty('--thumb-color', `hsl(${hue}, 70%, 60%)`);
+    document.getElementById("upload-sliders").addEventListener("click", function(){
+        console.log("uploading sliders")
+        uploadSliderValues()
+    })
 
-        slider.addEventListener('input', (e) => {
-            updateSliderValue(e.target);
+    // sliders.forEach(slider => {
+    //     // Set a unique color for each slider thumb
+    //     const hue = (channels_names.indexOf(slider.dataset.name) * 360 / channels_names.length);
+    //     slider.style.setProperty('--thumb-color', `hsl(${hue}, 70%, 60%)`);
+
+    //     slider.addEventListener('input', (e) => {
+    //         updateSliderValue(e.target);
             
-            if (sliderTimeout) {
-                clearTimeout(sliderTimeout);
-            }
-            sliderTimeout = setTimeout(() => {
-                uploadSliderValues()
-                sliderTimeout = null;
-            }, 1000);
-        });
-    });
+    //         if (sliderTimeout) {
+    //             clearTimeout(sliderTimeout);
+    //         }
+    //         sliderTimeout = setTimeout(() => {
+    //             uploadSliderValues()
+    //             sliderTimeout = null;
+    //         }, 1000);
+    //     });
+    // });
 }
 
 function createSlider(name) {
