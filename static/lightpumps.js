@@ -132,15 +132,6 @@ function initializeSliders() {
         const value = slider.value;
         const valueDisplay = slider.parentElement.querySelector('.slider-value');
         valueDisplay.textContent = value + '%';
-
-        if (overwriteStatusTimeout) {
-            clearTimeout(overwriteStatusTimeout);
-        }
-        overwriteStatusTimeout = setTimeout(() => {
-            overwriteStatusTimeout = null;
-            disableOverwrite()
-        }, 120000);
-        document.getElementById("sliders-status").innerText = "Overwrite: enabled"
     }
 
     function uploadSliderValues() {
@@ -178,23 +169,11 @@ function initializeSliders() {
         uploadSliderValues()
     })
 
-    // sliders.forEach(slider => {
-    //     // Set a unique color for each slider thumb
-    //     const hue = (channels_names.indexOf(slider.dataset.name) * 360 / channels_names.length);
-    //     slider.style.setProperty('--thumb-color', `hsl(${hue}, 70%, 60%)`);
-
-    //     slider.addEventListener('input', (e) => {
-    //         updateSliderValue(e.target);
-            
-    //         if (sliderTimeout) {
-    //             clearTimeout(sliderTimeout);
-    //         }
-    //         sliderTimeout = setTimeout(() => {
-    //             uploadSliderValues()
-    //             sliderTimeout = null;
-    //         }, 1000);
-    //     });
-    // });
+    sliders.forEach(slider => {
+        slider.addEventListener('input', (e) => {
+            updateSliderValue(e.target);
+        });
+    });
 }
 
 function createSlider(name) {
