@@ -7,6 +7,8 @@
 #include <vector>  // Added for std::vector
 #include <SPIFFS.h>
 #include <time.h>  // Added for time functions
+#include <esp_wifi.h>
+#include <cstring>  // for strlcpy, strlen
 
 unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000; // 5 seconds
@@ -25,13 +27,15 @@ const char* ntpServer = "pool.ntp.org";  // NTP server for time sync
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
 
+StaticJsonDocument<4096> globalDoc;
+
 // Chunking configuration
 #define MAX_CHUNK_SIZE 200
 #define MAX_CHUNKS 50
 #define CHUNK_TIMEOUT 10000  // 10 seconds timeout for receiving all chunks
 
 struct ChunkInfo {
-    String data;
+    char data[MAX_CHUNK_SIZE + 1]; // fixed-size buffer per chunk
     bool received;
 };
 
@@ -74,7 +78,12 @@ int resolution;
 
 unsigned long lastScheduleUpdate = 0;
 
-String currentSchedule = "";
+// Fixed-size buffer holding the active schedule JSON; avoids dynamic heap usage
+char currentSchedule[4096] = {0};
+
+// Track last day we performed the daily 4 AM restart
+int lastRestartDayOfYear = -1;
+
 unsigned long syncTimeOffset = 0;
 
 // Update the struct to include channel type
@@ -277,7 +286,7 @@ void processSchedule(const String& schedule) {
 
     // Store the schedule
     storeSchedule(schedule);
-    currentSchedule = schedule;
+    strlcpy(currentSchedule, schedule.c_str(), sizeof(currentSchedule));
     
     // Get sync time from schedule
     unsigned long scheduleTime = doc["syncTime"].as<unsigned long>();
@@ -324,13 +333,38 @@ void processSchedule(const String& schedule) {
     }
 }
 
+const int MAX_RETRIES = 3;
+const int RETRY_DELAY_MS = 1000;
+bool publishWithRetry(const char* topic, const char* payload) {
+    int attempt = 0;
+    while (attempt < MAX_RETRIES) {
+        if (client.publish(topic, payload)) {
+            Serial.printf("Publish succeeded on attempt %d\n", attempt + 1);
+            return true;  // Success
+        } else {
+            Serial.printf("Publish failed on attempt %d, retrying...\n", attempt + 1);
+            attempt++;
+            delay(RETRY_DELAY_MS);
+            client.loop();  // Allow MQTT client to process incoming/outgoing packets
+        }
+    }
+
+    Serial.println("Publish failed after maximum retries, disconnecting MQTT client");
+    client.disconnect();  // Force reconnection on next loop iteration
+    return false;         // Failed after retries
+}
+
+
 void setup_wifi() {
 	Serial.println("Connecting to WiFi...");
 	Serial.print("SSID: ");
 	Serial.println(ssid);
 	
 	WiFi.begin(ssid, password);
-	
+
+	WiFi.setSleep(false);           // Arduino-style call
+    esp_wifi_set_ps(WIFI_PS_NONE);  // IDF-style call, does the same
+
 	int attempts = 0;
 	while (WiFi.status() != WL_CONNECTED && attempts < 20) {
 		delay(500);
@@ -367,7 +401,7 @@ void announcePresence() {
   	doc["version"] = VERSION;
 	
 	// Calculate and send a hash of the schedule instead of the entire schedule
-	if (currentSchedule.length() > 0) {
+	if (strlen(currentSchedule) > 0) {
 		// Parse the schedule to remove syncTime before hashing
 		StaticJsonDocument<4096> scheduleDoc;
 		deserializeJson(scheduleDoc, currentSchedule);
@@ -391,9 +425,9 @@ void announcePresence() {
 	String message;
 	serializeJson(doc, message);
 	if (TEST) {
-		client.publish("test/aquarium/announce", message.c_str());
+		publishWithRetry("test/aquarium/announce", message.c_str());
 	} else {
-		client.publish("aquarium/announce", message.c_str());
+		publishWithRetry("aquarium/announce", message.c_str());
 	}
 	Serial.println("Announced presence: " + message);
 }
@@ -408,7 +442,7 @@ String handleScheduleCommand(const String& scheduleJson) {
     
     // Store and process the schedule
     storeSchedule(scheduleJson);
-    currentSchedule = scheduleJson;
+    strlcpy(currentSchedule, scheduleJson.c_str(), sizeof(currentSchedule));
     
     // Set time offset
     syncTimeOffset = doc["syncTime"].as<unsigned long>() - (millis() / 1000);
@@ -620,9 +654,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
 			clearEEPROM();
 			initializeEEPROM();
 			if (TEST) {
-				client.publish("test/aquarium/response", "EEPROM cleared");
+				publishWithRetry("test/aquarium/response", "EEPROM cleared");
 			} else {
-				client.publish("aquarium/response", "EEPROM cleared");
+				publishWithRetry("aquarium/response", "EEPROM cleared");
 			}
 			return;
 		}
@@ -663,11 +697,11 @@ void callback(char* topic, byte* payload, unsigned int length) {
 			serializeJson(responses, responseStr);
 			if (TEST) {
 				Serial.println("Publishing response to test/aquarium/response: " + responseStr);
-				client.publish("test/aquarium/response", responseStr.c_str());
+				publishWithRetry("test/aquarium/response", responseStr.c_str());
 				Serial.println("Published to test/aquarium/response");
 			} else {
 				Serial.println("Publishing response to aquarium/response: " + responseStr);
-				client.publish("aquarium/response", responseStr.c_str());
+				publishWithRetry("aquarium/response", responseStr.c_str());
 				Serial.println("Published to aquarium/response");
 			}
 		}
@@ -827,13 +861,18 @@ void setup() {
 	initializeTime();
 	
 	client.setServer(mqtt_server, mqtt_port);
-	client.setKeepAlive(60);	// Set keepalive to 60 seconds
+	client.setKeepAlive(15);
 	client.setCallback(callback);
 	
 	Serial.println("Setup complete");
 }
 
 void loop() {
+	if (WiFi.status() != WL_CONNECTED) {
+		WiFi.reconnect();
+		delay(200);
+	}
+
 	if (!client.connected()) {
 		unsigned long currentMillis = millis();
 		if (currentMillis - lastReconnectAttempt >= reconnectInterval) {
@@ -891,7 +930,7 @@ void loop() {
 	}
 
 	// Process schedule if active
-	if (currentSchedule.length() > 0) {
+	if (strlen(currentSchedule) > 0) {
 		unsigned long currentMillis = millis();
 		
 		// Only update if SCHEDULE_UPDATE_INTERVAL has passed
@@ -902,11 +941,10 @@ void loop() {
 			int currentMinute = getCurrentMinuteOfDay();
 			
 			if (currentMinute > 0 || timeInfo.timeInitialized) {
-				StaticJsonDocument<4096> doc;
-				deserializeJson(doc, currentSchedule);
+				deserializeJson(globalDoc, currentSchedule);
 				
 				// Process each channel in the array
-				JsonArray channels = doc["c"].as<JsonArray>();
+				JsonArray channels = globalDoc["c"].as<JsonArray>();
 				for (size_t i = 0; i < channels.size(); i++) {
 					JsonVariant channel = channels[i];
 					int pin = channel["o"].as<int>();
@@ -950,6 +988,34 @@ void loop() {
 	}
  
 	client.loop();
+
+    // ------------------------------------------------------------------
+    // Daily maintenance: restart WiFi and MQTT at 04:00 to reclaim memory
+    // ------------------------------------------------------------------
+    if (timeInfo.timeInitialized) {
+        time_t now = getCurrentTime();
+        struct tm timeinfo;
+        localtime_r(&now, &timeinfo);
+
+        if (timeinfo.tm_hour == 4 && timeinfo.tm_min == 0 && lastRestartDayOfYear != timeinfo.tm_yday) {
+            Serial.println("Daily 04:00 restart: Disconnecting WiFi and MQTT to reclaim memory");
+
+            // Disconnect MQTT cleanly
+            if (client.connected()) {
+                client.disconnect();
+            }
+
+            // Reconnect WiFi
+            WiFi.disconnect(true);
+            delay(500);
+            setup_wifi();
+
+            // Force immediate MQTT reconnect attempt
+            lastReconnectAttempt = 0;
+
+            lastRestartDayOfYear = timeinfo.tm_yday;
+        }
+    }
 }
 
 void handleChunkedMessage(String chunkData) {
@@ -977,7 +1043,7 @@ void handleChunkedMessage(String chunkData) {
         // Reset current message if this is the first chunk or if timeout occurred
         Serial.println("Initializing new chunked message with " + String(totalChunks) + " chunks");
         for (int i = 0; i < MAX_CHUNKS; i++) {
-            currentMessage.chunks[i].data = "";
+            currentMessage.chunks[i].data[0] = '\0';
             currentMessage.chunks[i].received = false;
         }
         currentMessage.totalChunks = totalChunks;
@@ -987,7 +1053,7 @@ void handleChunkedMessage(String chunkData) {
     
     // Store this chunk
     if (chunkIndex < MAX_CHUNKS) {
-        currentMessage.chunks[chunkIndex].data = data;
+        strlcpy(currentMessage.chunks[chunkIndex].data, data.c_str(), sizeof(currentMessage.chunks[chunkIndex].data));
         currentMessage.chunks[chunkIndex].received = true;
         currentMessage.lastChunkTime = millis();
         
@@ -1020,7 +1086,7 @@ void handleChunkedMessage(String chunkData) {
             
             // Reset for next chunked message
             for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data = "";
+                currentMessage.chunks[i].data[0] = '\0';
                 currentMessage.chunks[i].received = false;
             }
             currentMessage.complete = true;
@@ -1069,11 +1135,11 @@ void processCompleteMessage(String message) {
         serializeJson(responses, responseStr);
         if (TEST) {
             Serial.println("Publishing response to test/aquarium/response: " + responseStr);
-            client.publish("test/aquarium/response", responseStr.c_str());
+            publishWithRetry("test/aquarium/response", responseStr.c_str());
             Serial.println("Published to test/aquarium/response");
         } else {
             Serial.println("Publishing response to aquarium/response: " + responseStr);
-            client.publish("aquarium/response", responseStr.c_str());
+            publishWithRetry("aquarium/response", responseStr.c_str());
             Serial.println("Published to aquarium/response");
         }
     }
@@ -1087,7 +1153,7 @@ void checkChunkTimeout() {
             Serial.println("Chunked message timed out, resetting");
             // Reset the chunked message
             for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data = "";
+                currentMessage.chunks[i].data[0] = '\0';
                 currentMessage.chunks[i].received = false;
             }
             currentMessage.complete = false;

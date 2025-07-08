@@ -3,30 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aquarium Computer</title>
+    <title>Aquarium Dashboard</title>
     <style>
         body {
-            margin: 0;
-            padding: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            font-family: Arial, sans-serif;
-            background-color: #f0f0f0;
+            font-family: sans-serif;
+            background-color: #e0f2f7;
+            color: #212529;
+            margin: 20px;
         }
 
-        .button-container {
+        .error {
+            color: red;
+        }
+
+        .nav-buttons {
             display: flex;
-            flex-wrap: wrap;
             gap: 20px;
-            justify-content: center;
-            padding: 20px;
+            margin-bottom: 5px;
+            height: 30px;
         }
 
-        .main-button {
-            padding: 20px 40px;
-            font-size: 24px;
+        .nav-button {
+            padding: 0 20px;
+            font-size: 16px;
             cursor: pointer;
             border: none;
             border-radius: 8px;
@@ -35,14 +34,12 @@
             transition: background-color 0.3s;
         }
 
-        .main-button:hover {
+        .nav-button:hover {
             background-color: #45a049;
         }
 
         .debug-button {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
+            margin-top: 20px;
             padding: 10px 20px;
             background-color: #72299d;
             box-shadow: 0 0 25px #72299d;
@@ -50,6 +47,7 @@
             border: none;
             border-radius: 4px;
             cursor: pointer;
+            float: right;
         }
 
         .modal {
@@ -101,22 +99,442 @@
             cursor: pointer;
             font-size: 20px;
         }
+
+        .container {
+            display: grid;
+            grid-template-columns: 250px 350px 350px 300px;
+            gap: 10px;
+            align-items: start;
+        }
+
+        .box {
+            background-color: #fff;
+            border: 1px solid #a7d9ed;
+            padding: 9px;
+            border-radius: 5px;
+        }
+
+        .box-title {
+            font-weight: bold;
+            padding-bottom: 10px;
+            color: #228b22;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .box-title:hover {
+            text-decoration: underline;
+        }
+
+        .status-closed {
+            background-color: #f5deb3;
+            text-align: center;
+        }
+
+        .status-open {
+            background-color: #88fb98;
+            text-align: center;
+        }
+
+        .status-ok {
+            background-color: #88fb98;
+            text-align: center;
+        }
+
+        .status-alarm {
+            background-color: #ff0000;
+            color: white;
+            text-align: center;
+        }
+
+        .switch-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .switch-table td {
+            padding: 5px;
+            text-align: center;
+        }
+
+        .switch-off {
+            background-color: #d3d3d3;
+            width: 50px;
+            cursor: pointer;
+        }
+        .switch-off.switch-enabled {
+            background-color: #f5deb3;
+        }
+
+        .switch-auto {
+            background-color: #f5deb3;
+            width: 100px;
+            cursor: pointer;
+        }
+        .switch-auto.switch-enabled {
+            background-color: #88fb98;
+        }
+
+        .switch-on {
+            background-color: #d3d3d3;
+            width: 50px;
+            cursor: pointer;
+        }
+        .switch-on.switch-enabled {
+            background-color: #88fb98;
+        }
+
+        .switch-auto.no-code:not(.switch-overwritten) {
+            background-color: #d3d3d3;
+        }
+
+        .switch-overwritten {
+            background-color: #ff0000;
+            color: white;
+        }
+
+        .status-column {
+            grid-column: 4;
+            align-self: start;
+        }
+
+        .first-column {
+            grid-column: 1;
+        }
+
+        .switch-columns {
+            grid-column: 2 / span 2;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .sensor-spacing {
+            margin-bottom: 20px;
+        }
+
+        .feed-air-container p:nth-child(4) {
+            margin-bottom: 30px;
+        }
+
+        .sensor-boxes {
+            grid-column: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .sensor-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .sensor-table tr {
+            height: 28px;
+        }
+
+        .sensor-table td {
+            padding: 5px;
+            text-align: left;
+            height: 18px;
+            line-height: 18px;
+            box-sizing: border-box;
+        }
+
+        .sensor-table td:last-child {
+            text-align: right;
+        }
+
+        .sensor-value {
+            font-weight: normal;
+        }
+
+        .sensor-table td.date-cell {
+            width: 50%;
+        }
+
+        .sensor-table td.status-cell {
+            width: 30%;
+            padding: 0;
+        }
+
+        .sensor-table td.status-cell span {
+            display: block;
+            width: 100%;
+            height: 28px;
+            line-height: 28px;
+        }
+
+        .status-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 15px;
+            transition: background-color 0.3s ease;
+        }
+
+        .status-bar.alarm {
+            background-color: #ff0000;
+        }
+
+        .status-bar.ok {
+            background-color: #90ee90;
+        }
+
+        .popup-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+        }
+
+        .popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            padding-top: 0;
+            border-radius: 8px;
+            width: 400px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .switch-config-popup .popup {
+            width: 800px;
+            height: 600px;
+        }
+
+        .switch-config-popup .popup-content {
+            max-height: 460px;
+            height: 100%;
+            margin-bottom: 55px;
+            overflow: visible;
+        }
+
+        .popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .popup-close {
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        .popup-content {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .switch-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .popup-buttons {
+            margin-top: 20px;
+            text-align: right;
+        }
+
+        .popup-buttons button {
+            margin-left: 10px;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .popup-buttons button.save {
+            background: #228b22;
+            color: white;
+        }
+
+        .popup-buttons button.cancel {
+            background: #ccc;
+        }
+
+        .success-toast {
+            position: fixed;
+            top: -50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #228b22;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            animation: slideDown 0.3s forwards, slideUp 0.3s forwards 1s;
+            z-index: 2000;
+        }
+
+        @keyframes slideDown {
+            to { top: 20px; }
+        }
+
+        @keyframes slideUp {
+            to { top: -50px; }
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0,0,0,0.1);
+            border-radius: 50%;
+            border-top-color: #228b22;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .help-tooltip {
+            position: relative;
+            display: inline-block;
+            margin-left: 10px;
+            width: 20px;
+            height: 20px;
+            background: #eee;
+            border-radius: 50%;
+            text-align: center;
+            cursor: help;
+        }
+
+        .tooltip-content {
+            display: none;
+            position: absolute;
+            left: 30px;
+            top: 0;
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            width: 200px;
+            z-index: 1000;
+        }
+
+        .help-tooltip:hover .tooltip-content {
+            display: block;
+        }
+
+        .dsl-code {
+            width: 100%;
+            height: 100%;
+            font-family: monospace;
+            padding: 10px;
+            margin-bottom: 10px;
+            box-sizing: border-box;
+            resize: none;
+        }
+
+        .button-row {
+            margin: 10px 0;
+            display: flex;
+            gap: 10px;
+        }
+
+        .button-row button {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background: #4CAF50;
+            color: white;
+        }
+
+        .button-row button:hover {
+            opacity: 0.9;
+        }
+
+        .header-content {
+            display: flex;
+            align-items: center;
+        }
+
+        .switch-name-cell {
+            cursor: pointer;
+        }
+        .switch-name-cell:hover {
+            text-decoration: underline;
+        }
+
+        .form-row {
+            margin-bottom: 10px;
+        }
+
+        .countdown-name {
+            cursor: pointer;
+            width: 50%;
+        }
+
+        .countdown-name:hover {
+            text-decoration: underline;
+        }
+
+        .countdown-status {
+            cursor: pointer;
+            text-align: center;
+            width: 50%;
+            height: 18px;
+            line-height: 18px;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        .countdown-status.inactive {
+            background-color: #88fb98;
+        }
+
+        .countdown-status.active {
+            background-color: #ff0000;
+            color: white;
+        }
+
+        .countdown-status .spinner {
+            margin: 4px auto;
+            width: 20px;
+            height: 20px;
+            border-color: rgba(255,255,255,0.1);
+            border-top-color: white;
+        }
+
+        .group-title-input {
+            margin-top: 20px;
+        }
     </style>
 </head>
 <body>
-    <div class="button-container">
-        <button class="main-button" onclick="navigate('/control/lights')">Lys</button>
-        <button class="main-button" onclick="navigate('/control/pumps')">Pumper</button>
-        <button class="main-button" onclick="navigate('/control/testlights')">Test Lys</button>
-        <button class="main-button" onclick="navigate('/control/bad')">Bad</button>
-        <button class="main-button" onclick="navigate('/control/loft')">Loft</button>
-        <button class="main-button" onclick="navigate('/control/biljard')">Biljard</button>
-        <button class="main-button" onclick="navigate('/control/frag')">Frag</button>
-        <button class="main-button" onclick="navigate('/control/qt1')">Qt1</button>
-        <button class="main-button" onclick="navigate('/control/qt2')">Qt2</button>
-        <button class="main-button" onclick="navigate('/control/qt3')">Qt3</button>
-        <button class="main-button" onclick="navigate('/control/qt4')">Qt4</button>
+    <div class="status-bar" id="statusBar"></div>
+    <div class="nav-buttons">
+        <button class="nav-button" onclick="navigate('/control/lights')">Lys</button>
+        <button class="nav-button" onclick="navigate('/control/pumps')">Pumper</button>
+        <button class="nav-button" onclick="navigate('/control/testlights')">Test Lys</button>
+        <button class="nav-button" onclick="navigate('/control/bad')">Bad</button>
+        <button class="nav-button" onclick="navigate('/control/loft')">Loft</button>
+        <button class="nav-button" onclick="navigate('/control/biljard')">Biljard</button>
+        <button class="nav-button" onclick="navigate('/control/frag')">Frag</button>
+        <button class="nav-button" onclick="navigate('/control/qt1')">Qt1</button>
+        <button class="nav-button" onclick="navigate('/control/qt2')">Qt2</button>
+        <button class="nav-button" onclick="navigate('/control/qt3')">Qt3</button>
+        <button class="nav-button" onclick="navigate('/control/qt4')">Qt4</button>
     </div>
+
+    <div class="container" id="dashboard"></div>
 
     <button class="debug-button" onclick="toggleDebugModal()">Adrian sine knapper</button>
 
@@ -139,7 +557,1167 @@
         </div>
     </div>
 
+    <template id="popupTemplate">
+        <div class="popup-overlay">
+            <div class="popup">
+                <div class="popup-header">
+                    <input type="text" class="group-title-input">
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div class="switches-list"></div>
+                    <button onclick="cellEdit.addSwitch()">Add Switch</button>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="statusSwitchPopupTemplate">
+        <div class="popup-overlay status-switch-popup">
+            <div class="popup">
+                <div class="popup-header">
+                    <h3>Edit Status Switch</h3>
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div class="switch-form">
+                        <div class="form-row">
+                            <label>Name:</label>
+                            <input type="text" class="switch-name-input">
+                        </div>
+                        <div class="form-row">
+                            <label>Device:</label>
+                            <select class="device-select">
+                                <option value="">None</option>
+                                <option value="Device 1">Device 1</option>
+                                <option value="Device 2">Device 2</option>
+                                <option value="Device 3">Device 3</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Pin:</label>
+                            <input type="number" class="pin-input" min="0">
+                        </div>
+                        <div class="form-row">
+                            <label>Alarm when closed:</label>
+                            <input type="checkbox" class="alarm-when-closed-input">
+                        </div>
+                        <div class="form-row">
+                            <label>Alarm when open:</label>
+                            <input type="checkbox" class="alarm-when-open-input">
+                        </div>
+                        <div class="form-row">
+                            <label>Alarm Delay (minutes):</label>
+                            <input type="number" min="0" class="alarm-delay-input">
+                        </div>
+                    </div>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="switchConfigPopupTemplate">
+        <div class="popup-overlay switch-config-popup">
+            <div class="popup">
+                <div class="popup-header">
+                    <div class="header-content">
+                        <h3>Configure Row: <span class="switch-name"></span></h3>
+                        <div class="help-tooltip">
+                            ?
+                            <div class="tooltip-content">
+                                <h4>Available DSL Functions:</h4>
+                                <ul>
+                                    <li>turnOn()</li>
+                                    <li>turnOff()</li>
+                                    <li>readTemp("sensor")</li>
+                                    <li>delay(minutes)</li>
+                                    <li>ifOpen("switch")</li>
+                                    <li>setTimer(time, action)</li>
+                                    <!-- Add more placeholder functions -->
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div style="margin-top: -20px;" class="form-row">
+                        <label>Pin:</label>
+                        <input type="number" class="pin-input" min="1">
+                    </div>
+                    <textarea class="dsl-code" rows="10" placeholder="Code here..."></textarea>
+                    <div class="button-row">
+                        <button class="verify">Verify</button>
+                        <button class="run-once">Run Once</button>
+                    </div>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save Changes</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+    <template id="countdownPopupTemplate">
+        <div class="popup-overlay countdown-popup">
+            <div class="popup">
+                <div class="popup-header">
+                    <h3>Configure Countdown for <span class="countdown-name"></span></h3>
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div class="form-row">
+                        <label>Duration (minutes):</label>
+                        <input type="number" class="duration-input" min="1" value="30">
+                    </div>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save</button>
+                </div>
+            </div>
+        </div>
+    </template>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/mode-python.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.js"></script>
     <script>
+        const data = {
+            devices: [
+                {"name": "Main", "error": ""},
+                {"name": "Main 2", "error": ""},
+                {"name": "Main 1b", "error": ""},
+                {"name": "Main 2b", "error": ""},
+                {"name": "Kjeller", "error": ""},
+                {"name": "Kjeller 2", "error": ""},
+                {"name": "Biljard", "error": ""},
+                {"name": "Biljard 2", "error": ""},
+                
+            ],
+            sensors: {
+                date: "25",
+                month: "January",
+                year: "2025",
+                time: "20:34",
+                readings: [
+                    ["Ph", "8,4"], ["Redox", "320"], ["Temp Main", "26"], ["Temp Main2", "26"],
+                    ["Temp Sump", "25,6"], ["Temp Biljard", "25,8"], ["Temp Loft", "26"], ["Temp Bad", "26,1"]
+                ]
+            },
+            switchGroups: {
+                "Main": [
+                    { name: "Heat 1", status: "auto off", code: "", pin: 0 },
+                    { name: "Pumpe loft", status: "auto on", code: "", pin: 0 },
+                    { name: "Chiller", status: "auto off", code: "", pin: 0 },
+                    { name: "Light1", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 1", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 2", status: "auto off", code: "", pin: 0 },
+                    { name: "SeaSwirl1", status: "auto on", code: "", pin: 0 },
+                    { name: "ATO", status: "auto off", code: "", pin: 0 }
+                ],
+                "Main 2": [
+                    { name: "Heat 2", status: "auto off", code: "", pin: 0 },
+                    { name: "SeaSwirl2", status: "auto on", code: "", pin: 0 },
+                    { name: "SeaSwirl3", status: "off", code: "", pin: 0 },
+                    { name: "Ventilasjn", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 3", status: "on", code: "", pin: 0 },
+                    { name: "Pump 4", status: "auto off", code: "", pin: 0 },
+                    { name: "Frontlys", status: "off", code: "", pin: 0 },
+                    { name: "Surge", status: "auto on", code: "", pin: 0 }
+                ],
+                "Main 1b": [
+                    { name: "Heat 3", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 5", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 6", status: "auto off", code: "", pin: 0 },
+                    { name: "Ventilasjn 2", status: "auto off", code: "", pin: 0 }
+                ],
+                "Main 2b": [
+                    { name: "Heat 4", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 7", status: "auto off", code: "", pin: 0 },
+                    { name: "Pump 8", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 9", status: "auto off", code: "", pin: 0 }
+                ],
+                "Kjeller": [
+                    { name: "MainReturn", status: "auto on", code: "", pin: 0 },
+                    { name: "Return1", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 11", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 12", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 5", status: "on", code: "", pin: 0 },
+                    { name: "Pump 11", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 12", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 13", status: "auto on", code: "", pin: 0 }
+                ],
+                "Kjeller 2": [
+                    { name: "MainReturn2", status: "auto on", code: "", pin: 0 },
+                    { name: "Return2", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 13", status: "auto on", code: "", pin: 0 },
+                    { name: "Biljard", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 6", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 14", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 15", status: "off", code: "", pin: 0 },
+                    { name: "Pump 16", status: "auto on", code: "", pin: 0 }
+                ],
+                "Biljard": [
+                    { name: "MainReturn", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 7", status: "auto on", code: "", pin: 0 },
+                    { name: "Skimmer", status: "auto on", code: "", pin: 0 },
+                    { name: "Luft", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 20", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 21", status: "auto off", code: "", pin: 0 },
+                    { name: "ReturnATO", status: "auto on", code: "", pin: 0 },
+                    { name: "ATO4", status: "auto on", code: "", pin: 0 }
+                ],
+                "Biljard 2": [
+                    { name: "ReturnBad", status: "auto on", code: "", pin: 0 },
+                    { name: "Heat 8", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 20", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 21", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 32", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 22", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 23", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 24", status: "auto on", code: "", pin: 0 }
+                ],
+                "Bad": [
+                    { name: "Heat 9", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 30", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 30", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 31", status: "auto on", code: "", pin: 0 }
+                ],
+                "Loft": [
+                    { name: "Heat 10", status: "auto on", code: "", pin: 0 },
+                    { name: "Light 40", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 40", status: "auto on", code: "", pin: 0 },
+                    { name: "Pump 41", status: "auto on", code: "", pin: 0 }
+                ]
+            },
+            statusSwitches: [
+                { name: "Main High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Main Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Loft High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Loft Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Bad High", open: true, status: "ALARM", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Bad Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Sump High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Sump Med", open: true, status: "Ok", alarm_when_closed: true, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Sump Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Frag High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
+                { name: "Frag Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt2 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt2 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt3 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt3 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt4 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Qt4 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Biljard High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Biljard Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Sump2 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Sump2 Med", open: true, status: "Ok", alarm_when_closed: true, alarm_delay: 30, device: null, pin: null },
+                { name: "Sump2 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "ATO High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "ATO Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Ca Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kh Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Mg Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Lys 1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Lys 2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Lys 3", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Akvarium 1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Akvarium 2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kjeller 1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kjeller 2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Kjeller 3", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Loft", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Aux1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+                { name: "Aux2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
+            ],
+            additionalSensors: {
+                flowKills: [
+                    { name: "Main FlowKill", countDownEnd: null},
+                    { name: "Frag FlowKill", countDownEnd:  "2025-02-02T01:30:00"},
+                    { name: "Bad FlowKill", countDownEnd:  null},
+                    { name: "Good FlowKill", countDownEnd:  null}
+                ],
+                feeds: [
+                    { type: "Feed A", device: "Light", countDownEnd: null },
+                    { type: "Feed B", device: "SeaSwirl", countDownEnd: null },
+                    { type: "Feed C", device: "Flow", countDownEnd: null },
+                    { type: "Feed D", device: "DosingPump", countDownEnd: null }
+                ],
+                airTemps: [
+                    { location: "Main", temp: "25,8" },
+                    { location: "Kjeller", temp: "26" },
+                    { location: "Loft", temp: "26,1" }
+                ]
+            }
+        };
+
+        const statusSwitchesOrdering = ["Main High", "Main Low", "Loft High", "Loft Low", "Bad High", "Bad Low", "Sump High", "Sump Med", "Sump Low", "Frag High", "Frag Low", "Qt High", "Qt Low", "Qt2 High", "Qt2 Low", "Qt3 High", "Qt3 Low", "Qt4 High", "Qt4 Low", "Biljard High", "Biljard Low", "Sump2 High", "Sump2 Med", "Sump2 Low", "ATO High", "ATO Low", "Ca Low", "Kh Low", "Mg Low", "Lys 1", "Lys 2", "Lys 3", "Akvarium 1", "Akvarium 2", "Kjeller 1", "Kjeller 2", "Kjeller 3", "Loft", "Aux1", "Aux2"]
+        const switchGroupsOrdering = ["Main", "Main 2", "Main 1b", "Main 2b", "Kjeller", "Kjeller 2", "Biljard", "Biljard 2", "Bad", "Loft"]
+        
+        console.log(data)
+        $.ajax({
+            url: '/loadmainpageinfo',
+            type: 'GET',
+            async: false,
+            success: function(response) {
+                console.log(response)
+                let statusSwitches = response.main.switches
+                for (let [name, status] of Object.entries(statusSwitches)) {
+                    statusSwitches[name].name = name
+                    if (response.espstatuses.switches[name]) {
+                        statusSwitches[name].open = response.espstatuses.switches[name].is_open
+                        statusSwitches[name].status = status.alarm_when_closed && !statusSwitches[name].open || status.alarm_when_open && statusSwitches[name].open ? "ALARM" : "Ok"
+                    }
+                }
+                statusSwitches = Object.values(statusSwitches)
+                statusSwitches.sort((a, b) => statusSwitchesOrdering.indexOf(a.name) - statusSwitchesOrdering.indexOf(b.name))
+                data.statusSwitches = statusSwitches
+
+                let switchGroups = response.main.codegroups
+                for (let [name, switches] of Object.entries(switchGroups)) {
+                    switchGroups[name] = Object.keys(switches.rows).map(row => {
+                        const rowObj = switches.rows[row]
+                        let status = rowObj.mode
+                        if (rowObj.mode == "auto") {
+                            const statusObj = response.espstatuses.codegroups[name]?.[row]
+                            if (statusObj) {
+                                status = "auto " + (statusObj.is_open ? "on" : "off")
+                            } else {
+                                status = "auto ???"
+                            }
+                        }
+                        return {name: row, status, code: rowObj.code, pin: rowObj.pin}
+                    })
+                    
+                }
+
+                switchGroups = Object.fromEntries(Object.entries(switchGroups).sort((a, b) => switchGroupsOrdering.indexOf(a[0]) - switchGroupsOrdering.indexOf(b[0])))
+                console.log(switchGroups)
+                data.switchGroups = switchGroups
+            },
+            error: function(response) {
+                console.error(response)
+            }
+        });
+
+        function createBox(content, className) {
+            const box = document.createElement('div');
+            box.className = `box ${className}`;
+            box.innerHTML = content;
+            return box;
+        }
+
+        function createSensorBox() {
+            return createBox(
+                `<table class="sensor-table">
+                    <tr>
+                        <td class="date-cell">${data.sensors.date} ${data.sensors.month}</td>
+                        <td class="date-cell">${data.sensors.time}</td>
+                    </tr>
+                    ${data.sensors.readings.map(([label, value]) => `
+                        <tr>
+                            <td>${label === "Ph" || label === "Redox" || label.includes("Main") ? '<b>' + label + '</b>' : label}</td>
+                            <td class="sensor-value">${value}</td>
+                        </tr>
+                    `).join('')}
+                </table>`,
+                'first-column'
+            );
+        }
+
+        function createSwitchBox(title, switches, className) {
+            return createBox(
+                `<div class="box-title" onclick="cellEdit.open('${title}')"><span>${title}</span><span class="${data.devices.filter(d => d.name === title).length == 0 || data.devices.find(d => d.name === title && d.error) ? 'error' : ''}">${data.devices.filter(d => d.name === title).length}</span></div>
+                <table class="switch-table">
+                    ${switches.map(sw => `
+                        <tr>
+                            <td class="switch-name-cell" onclick="switchConfig.open('${title}', ${JSON.stringify(sw).replace(/"/g, '&quot;')})">
+                                ${sw.name}
+                            </td>
+                            <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'off')" class="switch-off ${sw.status === 'off' ? 'switch-enabled' : ''}">Off</td>
+                            <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'auto')" class="switch-auto ${sw.status == "auto on" ? 'switch-enabled' : sw.status != "auto off" ? 'switch-overwritten' : ''} ${!sw.code || !sw.pin ? 'no-code' : ''}">${sw.status == "auto on" ? 'Auto On' : sw.status == "auto off" ? 'Auto Off' : sw.status == "auto ???" ? 'Auto ???' : 'Auto'}</td>
+                            <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'on')" class="switch-on ${sw.status === 'on' ? 'switch-enabled' : ''}">On</td>
+                        </tr>
+                    `).join('')}
+                </table>`,
+                className
+            );
+        }
+
+        function createStatusSwitchBox() {
+            return createBox(
+                `<div class="box-title">Switches</div>
+                <table class="switch-table">
+                    ${data.statusSwitches.map(sw => `
+                        <tr style="${!sw.device ? 'background-color: #d3d3d3;' : ''}">
+                            <td class="switch-name-cell" onclick="statusSwitchEdit.open(${JSON.stringify(sw).replace(/"/g, '&quot;')})">${sw.name}</td>
+                            ${sw.device ? `
+                                <td class="${sw.open ? 'status-open' : 'status-closed'}">${sw.open ? 'Open' : 'Closed'}</td>
+                                <td class="${sw.status === 'Ok' ? 'status-ok' : 'status-alarm'}">${sw.status}</td>
+                            ` : '<td colspan="2"></td>'}
+                        </tr>
+                    `).join('')}
+                </table>`,
+                'status-column'
+            );
+        }
+
+        function createFlowKillBox() {
+            return createBox(`
+                <div class="box-title">Flow Kill</div>
+                <table class="sensor-table">
+                    ${data.additionalSensors.flowKills
+                        .map(fk => `
+                            <tr>
+                                <td class="countdown-name" 
+                                    onclick="countdownManager.open('flowkill', '${fk.name}')"
+                                >${fk.name}</td>
+                                <td class="countdown-status ${fk.countDownEnd && new Date(fk.countDownEnd) > new Date() ? 'active' : 'inactive'}" 
+                                    onclick="countdownManager.handleStatusClick(this)"
+                                    data-type="flowkill" 
+                                    data-name="${fk.name}" 
+                                    data-end="${fk.countDownEnd || ''}"
+                                >Ok</td>
+                            </tr>
+                        `).join('')}
+                </table>
+            `, 'first-column feed-air-container');
+        }
+
+        function createFeedAirTempBox() {
+            return createBox(`
+                <div class="box-title">Feed & Air</div>
+                <table class="sensor-table">
+                    <tbody>
+                        ${data.additionalSensors.feeds
+                            .map(feed => `
+                                <tr>
+                                    <td class="countdown-name" 
+                                        onclick="countdownManager.open('feed', '${feed.type}')"
+                                    >${feed.device}</td>
+                                    <td class="countdown-status ${feed.countDownEnd && new Date(feed.countDownEnd) > new Date() ? 'active' : 'inactive'}"
+                                        onclick="countdownManager.handleStatusClick(this)"
+                                        data-type="feed" 
+                                        data-name="${feed.type}" 
+                                        data-end="${feed.countDownEnd || ''}"
+                                    >${feed.type}</td>
+                                </tr>
+                            `).join('')}
+                    </tbody>
+                    ${data.additionalSensors.airTemps
+                            .map(temp => `
+                                <tr>
+                                    <td>AirTemp ${temp.location}</td>
+                                    <td>${temp.temp}</td>
+                                </tr>
+                            `).join('')}
+                    </tbody>
+                </table>
+            `, 'first-column');
+        }
+
+        function checkForAlarms() {
+            // remember the data.devices errors
+            return true;
+        }
+
+        const statusBar = document.getElementById('statusBar');
+        statusBar.className = `status-bar ${checkForAlarms() ? 'alarm' : 'ok'}`;
+
+        const dashboard = document.getElementById('dashboard');
+
+        // Wrap all first-column boxes in a container
+        const sensorBoxesContainer = document.createElement('div');
+        sensorBoxesContainer.className = 'sensor-boxes';
+        sensorBoxesContainer.appendChild(createSensorBox());
+        sensorBoxesContainer.appendChild(createFlowKillBox());
+        sensorBoxesContainer.appendChild(createFeedAirTempBox());
+        dashboard.appendChild(sensorBoxesContainer);
+
+        // Create & append switch groups container
+        const switchContainer = document.createElement('div');
+        switchContainer.className = 'switch-columns';
+        Object.entries(data.switchGroups).forEach(([title, switches]) => {
+            switchContainer.appendChild(createSwitchBox(title, switches, ''));
+        });
+        dashboard.appendChild(switchContainer);
+
+        // Finally, add status switches on the right
+        dashboard.appendChild(createStatusSwitchBox());
+
+        const cellEdit = {
+            currentGroup: null,
+            overlay: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('popupTemplate').innerHTML);
+                this.overlay = document.querySelector('.popup-overlay');
+                this.setupListeners();
+            },
+
+            setupListeners() {
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+            },
+
+            open(groupTitle) {
+                const switches = data.switchGroups[groupTitle];
+                console.log(data)
+                this.currentGroup = { title: groupTitle, switches: [...switches] };
+                this.overlay.style.display = 'block';
+                
+                const titleInput = this.overlay.querySelector('.group-title-input');
+                titleInput.value = groupTitle;
+
+                this.renderSwitches();
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentGroup = null;
+            },
+
+            renderSwitches() {
+                const list = this.overlay.querySelector('.switches-list');
+                list.innerHTML = this.currentGroup.switches.map((sw, idx) => `
+                    <div class="switch-item">
+                        <input type="text" value="${sw.name}">
+                        <button onclick="cellEdit.removeSwitch(${idx})">Remove</button>
+                    </div>
+                `).join('');
+            },
+
+            addSwitch() {
+                this.currentGroup.switches.push({ name: "New Switch", status: "auto off" });
+                this.renderSwitches();
+            },
+
+            removeSwitch(index) {
+                this.currentGroup.switches.splice(index, 1);
+                this.renderSwitches();
+            },
+
+            async save() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const saveBtn = this.overlay.querySelector('.save');
+                const originalText = saveBtn.textContent;
+                saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
+
+                try {
+                    const newSwitches = this.currentGroup.switches
+                    const newTitle = this.overlay.querySelector('.group-title-input').value;
+                    const originalGroupTitle = this.currentGroup.title;
+
+                    console.log("API call for cell edit save:", {
+                        action: 'saveGroup',
+                        originalTitle: originalGroupTitle,
+                        newTitle: newTitle,
+                        switches: newSwitches
+                    });
+
+                    // Simulate API call returning the updated group data
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    const apiResponse = { newTitle, newSwitches } // Simulated API response
+
+                    // Update the data structure
+                    delete data.switchGroups[originalGroupTitle];
+                    data.switchGroups[newTitle] = apiResponse.newSwitches;
+
+                    // Find and update the corresponding switch box in the UI
+                    const switchBoxes = document.querySelectorAll('.switch-columns .box');
+                    for (let box of switchBoxes) {
+                        const titleDiv = box.querySelector('.box-title');
+                        if (titleDiv && titleDiv.textContent === originalGroupTitle) {
+                            const newBox = createSwitchBox(apiResponse.newTitle, apiResponse.newSwitches, '');
+                            box.parentNode.replaceChild(newBox, box);
+                            break;
+                        }
+                    }
+                    
+                    showSuccess();
+                    this.close();
+                } catch (error) {
+                    alert('Error saving changes: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    saveBtn.textContent = originalText;
+                }
+            },
+        };
+
+        const statusSwitchEdit = {
+            currentSwitch: null,
+            overlay: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('statusSwitchPopupTemplate').innerHTML);
+                this.overlay = document.querySelector('.status-switch-popup');
+                this.setupListeners();
+            },
+
+            setupListeners() {
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+            },
+
+            open(switchData) {
+                this.currentSwitch = { ...switchData };
+                this.overlay.style.display = 'block';
+                
+                const nameInput = this.overlay.querySelector('.switch-name-input');
+                const deviceSelect = this.overlay.querySelector('.device-select');
+                const pinInput = this.overlay.querySelector('.pin-input');
+                const alarmWhenClosedInput = this.overlay.querySelector('.alarm-when-closed-input');
+                const alarmWhenOpenInput = this.overlay.querySelector('.alarm-when-open-input');
+                const alarmDelayInput = this.overlay.querySelector('.alarm-delay-input');
+
+                nameInput.value = switchData.name;
+                deviceSelect.value = switchData.device || '';
+                pinInput.value = switchData.pin || '';
+                alarmWhenClosedInput.checked = switchData.alarm_when_closed;
+                alarmWhenOpenInput.checked = switchData.alarm_when_open;
+                alarmDelayInput.value = switchData.alarm_delay;
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentSwitch = null;
+            },
+
+            async save() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const saveBtn = this.overlay.querySelector('.save');
+                const originalText = saveBtn.textContent;
+                saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
+
+                try {
+                    const nameInput = this.overlay.querySelector('.switch-name-input');
+                    const deviceSelect = this.overlay.querySelector('.device-select');
+                    const pinInput = this.overlay.querySelector('.pin-input');
+                    const alarmWhenClosedInput = this.overlay.querySelector('.alarm-when-closed-input');
+                    const alarmWhenOpenInput = this.overlay.querySelector('.alarm-when-open-input');
+                    const alarmDelayInput = this.overlay.querySelector('.alarm-delay-input');
+
+                    const payload = {
+                        originalName: this.currentSwitch.name,
+                        name: nameInput.value,
+                        device: deviceSelect.value || null,
+                        pin: pinInput.value ? parseInt(pinInput.value) : null,
+                        alarm_when_closed: alarmWhenClosedInput.checked,
+                        alarm_when_open: alarmWhenOpenInput.checked,
+                        alarm_delay: parseInt(alarmDelayInput.value)
+                    };
+                    console.log("API call for status switch save:", payload);
+
+                    const response = await $.ajax({
+                        url: '/saveswitch',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify(payload),
+                        error: function(error) {
+                            console.error(error);
+                            alert("Error: " + error.responseText)
+                        }
+                    });
+                    
+
+                    // Update the data structure
+                    const switchIndex = data.statusSwitches.findIndex(s => s.name === this.currentSwitch.name);
+                    if (switchIndex !== -1) {
+                        const newStatus = alarmWhenClosedInput.checked && !this.currentSwitch.open || alarmWhenOpenInput.checked && this.currentSwitch.open ? "ALARM" : "Ok"
+                        data.statusSwitches[switchIndex] = {
+                            ...data.statusSwitches[switchIndex],
+                            name: nameInput.value,
+                            device: deviceSelect.value || null,
+                            pin: pinInput.value ? parseInt(pinInput.value) : null,
+                            alarm_when_closed: alarmWhenClosedInput.checked,
+                            alarm_when_open: alarmWhenOpenInput.checked,
+                            alarm_delay: parseInt(alarmDelayInput.value),
+                            status: newStatus
+                        };
+
+                        data.statusSwitches.sort((a, b) => statusSwitchesOrdering.indexOf(a.name) - statusSwitchesOrdering.indexOf(b.name))
+
+                        // Update the UI
+                        const statusBox = document.querySelector('.status-column');
+                        const newStatusBox = createStatusSwitchBox();
+                        statusBox.parentNode.replaceChild(newStatusBox, statusBox);
+                    }
+
+                    showSuccess();
+                    this.close();
+                } catch (error) {
+                    alert('Error saving changes: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    saveBtn.textContent = originalText;
+                }
+            },
+        };
+
+        const switchConfig = {
+            currentSwitch: null,
+            overlay: null,
+            isProcessing: false,
+            unsavedChanges: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('switchConfigPopupTemplate').innerHTML);
+                this.overlay = document.querySelector('.switch-config-popup');
+                this.setupListeners();
+            },
+
+            setupListeners() {
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+                this.overlay.querySelector('.verify').addEventListener('click', () => this.verify());
+                this.overlay.querySelector('.run-once').addEventListener('click', () => this.runOnce());
+                this.overlay.querySelector('.dsl-code').addEventListener('input', () => this.unsavedChanges = true);
+                this.overlay.querySelector('.pin-input').addEventListener('input', () => this.unsavedChanges = true);
+            },
+
+            open(groupTitle, switchData) {
+                this.unsavedChanges = false;
+                this.currentSwitch = { groupTitle, ...switchData };
+                this.overlay.style.display = 'block';
+                this.overlay.querySelector('.switch-name').textContent = switchData.name;
+                this.overlay.querySelector('.dsl-code').value = switchData.code;
+                this.overlay.querySelector('.pin-input').value = switchData.pin || '';
+            },
+
+            close() {
+                if (this.unsavedChanges) {
+                    const proceed = confirm('You have unsaved changes. Are you sure you want to close?');
+                    if (!proceed) return;
+                }
+                this.overlay.style.display = 'none';
+                this.currentSwitch = null;
+            },
+
+            async performAction(action, button) {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const originalText = button.textContent;
+                button.innerHTML = '<span class="spinner"></span>' + action + '...';
+
+                try {
+                    const code = this.overlay.querySelector('.dsl-code').value;
+                    const pin = parseInt(this.overlay.querySelector('.pin-input').value) || null;
+                    const switchName = this.currentSwitch.name;
+                    const groupTitle = this.currentSwitch.groupTitle;
+
+                    if (pin && pin <= 0 && action == "Save") {
+                        const proceed = confirm('No pin number set. This will disable the switch. Do you want to continue?');
+                        if (!proceed) {
+                            this.isProcessing = false;
+                            button.textContent = originalText;
+                            return;
+                        }
+                    }
+
+                    if (pin && pin <= 0 && action == "Run") {
+                        alert("No pin number set.")
+                        this.isProcessing = false;
+                        button.textContent = originalText;
+                        return;
+                    }
+                    
+                    const payload = {
+                        action: action.toLowerCase(),
+                        groupTitle,
+                        switchName,
+                        pin: pin,
+                        code
+                    };
+                    console.log(`API call for switch config ${action}:`, payload);
+
+                    const response = await $.ajax({
+                        url: '/savecoderow',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify(payload),
+                        error: function(error) {
+                            console.error(error);
+                            alert("Error: " + error.responseText)
+                        }
+                    });
+                    
+                    console.log(response)
+                    
+
+                    if (action === 'Verify' || action === 'Run') {
+                        if (response.verify_status) {
+                            if (action === 'Verify') {
+                                showSuccess("Code verified successfully!");
+                            } else {
+                                showSuccess("Code run successfully!");
+                            }
+                        } else {
+                            console.log(response.code_error)
+                            alert("Error with code: " + response.code_error || response.error)
+                        }
+                    }
+                    
+                    if (action === 'Save') {
+                        // Update the data structure
+                        const group = data.switchGroups[groupTitle];
+                        const switchIndex = group.findIndex(s => s.name === switchName);
+                        if (switchIndex !== -1) {
+                            group[switchIndex] = {
+                                ...group[switchIndex],
+                                code: code,
+                                pin: pin
+                            };
+                        }
+                        
+                        // Update the UI
+                        const switchBoxes = document.querySelectorAll('.switch-columns .box');
+                        for (let box of switchBoxes) {
+                            const titleDiv = box.querySelector('.box-title');
+                            if (titleDiv && titleDiv.textContent === groupTitle) {
+                                const newBox = createSwitchBox(groupTitle, group, '');
+                                box.parentNode.replaceChild(newBox, box);
+                                break;
+                            }
+                        }
+                        this.unsavedChanges = false;
+                        showSuccess(`${action} successful!`);
+                        this.close();
+                    }
+                    
+                } catch (error) {
+                    alert(`Error during ${action.toLowerCase()}: ` + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    button.textContent = originalText;
+                }
+            },
+
+            async save() {
+                const saveBtn = this.overlay.querySelector('.save');
+                await this.performAction('Save', saveBtn);
+            },
+
+            async verify() {
+                const verifyBtn = this.overlay.querySelector('.verify');
+                await this.performAction('Verify', verifyBtn);
+            },
+
+            async runOnce() {
+                const runBtn = this.overlay.querySelector('.run-once');
+                await this.performAction('Run', runBtn);
+            },
+        };
+
+        const countdownManager = {
+            activeCountdowns: new Map(),
+            overlay: null,
+            currentItem: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('countdownPopupTemplate').innerHTML);
+                this.overlay = document.querySelector('.countdown-popup');
+                this.setupListeners();
+                this.startUpdating();
+                this.initializeExistingTimers();
+            },
+
+            initializeExistingTimers() {
+                // Initialize FlowKills
+                data.additionalSensors.flowKills.forEach(fk => {
+                    if (fk.countDownEnd && new Date(fk.countDownEnd) > new Date()) {
+                        this.startCountdown('flowkill', fk.name, new Date(fk.countDownEnd));
+                    }
+                });
+
+                // Initialize Feeds
+                data.additionalSensors.feeds.forEach(feed => {
+                    if (feed.countDownEnd && new Date(feed.countDownEnd) > new Date()) {
+                        this.startCountdown('feed', feed.type, new Date(feed.countDownEnd));
+                    }
+                });
+            },
+
+            setupListeners() {
+                // Only handle clicks on countdown-status elements
+                document.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('countdown-status')) {
+                        this.handleStatusClick(e.target);
+                    }
+                });
+
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+            },
+
+            handleStatusClick(element) {
+                const type = element.dataset.type;
+                const name = element.dataset.name;
+                const end = element.dataset.end;
+                
+                if (end && new Date(end) > new Date()) {
+                    this.stopCountdown(type, name);
+                } else {
+                    this.startTimer(type, name);
+                }
+            },
+
+            async startTimer(type, name) {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const element = document.querySelector(
+                    `.countdown-status[data-type="${type}"][data-name="${name}"]`
+                );
+                const originalContent = element.innerHTML;
+                element.innerHTML = '<div class="spinner"></div>';
+
+                try {
+                    // Prepare API payload
+                    const payload = this.prepareApiPayload(type, name, 'start');
+                    console.log('API call for start timer:', payload);
+
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    const endTime = new Date(Date.now() + 30 * 60000); // Default 30 minutes
+                    this.startCountdown(type, name, endTime);
+
+                    // Update data structure
+                    const items = type === 'flowkill' 
+                        ? data.additionalSensors.flowKills
+                        : data.additionalSensors.feeds;
+                    
+                    const item = items.find(i => 
+                        (type === 'flowkill' ? i.name : i.type) === name
+                    );
+                    if (item) item.countDownEnd = endTime.toISOString();
+
+                    showSuccess();
+                } catch (error) {
+                    element.innerHTML = originalContent;
+                    alert('Error starting timer: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                }
+            },
+
+            open(type, name) {
+                this.currentItem = { type, name };
+                this.overlay.style.display = 'block';
+                this.overlay.querySelector('.countdown-name').textContent = name;
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentItem = null;
+            },
+
+            prepareApiPayload(type, name, action, duration = null) {
+                const payload = {
+                    action,
+                    type,
+                    name,
+                };
+
+                if (duration !== null) {
+                    payload.duration = duration;
+                }
+
+                return payload;
+            },
+
+            async save() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const saveBtn = this.overlay.querySelector('.save');
+                const originalText = saveBtn.textContent;
+                saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
+
+                try {
+                    const duration = parseInt(this.overlay.querySelector('.duration-input').value);
+                    if (isNaN(duration) || duration < 1) throw new Error('Invalid duration');
+
+                    // Prepare API payload
+                    const payload = this.prepareApiPayload(
+                        this.currentItem.type,
+                        this.currentItem.name,
+                        'configure',
+                        duration
+                    );
+                    console.log('API call for save countdown configuration:', payload);
+
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    showSuccess();
+                    this.close();
+                } catch (error) {
+                    alert('Error saving configuration: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    saveBtn.textContent = originalText;
+                }
+            },
+
+            async stopCountdown(type, name) {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+
+                const element = document.querySelector(
+                    `.countdown-status[data-type="${type}"][data-name="${name}"]`
+                );
+                const originalContent = element.innerHTML;
+                element.innerHTML = '<div class="spinner"></div>';
+
+                try {
+                    // Prepare API payload
+                    const payload = this.prepareApiPayload(type, name, 'stop');
+                    console.log('API call for stop countdown:', payload);
+
+                    // Simulate API call
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+
+                    const key = `${type}-${name}`;
+                    this.activeCountdowns.delete(key);
+
+                    // Update data structure
+                    const items = type === 'flowkill' 
+                        ? data.additionalSensors.flowKills
+                        : data.additionalSensors.feeds;
+                    
+                    const item = items.find(i => 
+                        (type === 'flowkill' ? i.name : i.type) === name
+                    );
+                    if (item) item.countDownEnd = null;
+
+                    element.textContent = type === 'flowkill' ? 'Ok' : name;
+                    element.dataset.end = '';
+                    element.className = 'countdown-status inactive';
+
+                    this.activeCountdowns.forEach((_, key) => {
+                        this.updateDisplay(key);
+                    });
+                    showSuccess();
+                } catch (error) {
+                    element.innerHTML = originalContent;
+                    alert('Error stopping countdown: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                }
+            },
+
+            startCountdown(type, name, endTime) {
+                const key = `${type}-${name}`;
+                this.activeCountdowns.set(key, endTime);
+                this.updateDisplay(key);
+            },
+
+            updateDisplay(key) {
+                const [type, name] = key.split('-');
+                const endTime = this.activeCountdowns.get(key);
+                const element = document.querySelector(
+                    `.countdown-status[data-type="${type}"][data-name="${name}"]`
+                );
+
+                if (element.querySelector('.spinner') && this.isProcessing) return;
+                
+                if (!element) return;
+
+                const now = new Date();
+                if (endTime <= now) {
+                    this.activeCountdowns.delete(key);
+                    element.textContent = type === 'flowkill' ? 'Ok' : name;
+                    element.dataset.end = '';
+                    element.className = 'countdown-status inactive';
+                    return;
+                }
+
+                const diff = Math.floor((endTime - now) / 1000);
+                const minutes = Math.floor(diff / 60);
+                const seconds = diff % 60;
+                
+                element.textContent = minutes > 0 
+                    ? `${minutes}m ${seconds}s`
+                    : `${seconds}s`;
+                element.dataset.end = endTime.toISOString();
+                element.className = 'countdown-status active';
+            },
+
+            startUpdating() {
+                setInterval(() => {
+                    this.activeCountdowns.forEach((_, key) => {
+                        this.updateDisplay(key);
+                    });
+                }, 1000);
+            },
+        };
+
+        function showSuccess(message) {
+            const toast = document.createElement('div');
+            toast.className = 'success-toast';
+            toast.textContent = message || 'Success!';
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 2000);
+        }
+
+        async function setSwitchOverwrite(element, groupTitle, switchName, action) {
+            const originalContent = element.innerHTML;
+            element.innerHTML = '<span class="spinner" style="width: 10px; height: 10px; margin: auto; border-width: 2px;"></span>'; // Adjust spinner size
+            element.style.pointerEvents = 'none'; // Disable clicks during processing
+            
+            try {
+                const response = await $.ajax({
+                    url: '/setswitchoverwrite',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        groupTitle,
+                        switchName,
+                        action
+                    }),
+                });
+                console.log('Switch overwrite set successfully:', response);
+                // Note: The UI state (color, text) isn't updated here based on the response.
+                // It relies on the next data refresh or manual page reload.
+                // If immediate UI feedback is needed, the response should contain the new state,
+                // and the element's classes/content should be updated accordingly here.
+                showSuccess();
+            } catch (xhr) {
+                const error = xhr.responseText || xhr.statusText || 'Unknown error';
+                console.error('Error setting switch overwrite:', error);
+                alert('Error setting switch overwrite: ' + error);
+            } finally {
+                element.innerHTML = originalContent; // Restore original content
+                element.style.pointerEvents = 'auto'; // Re-enable clicks
+            }
+        }
+
         function navigate(route) {
             window.location.href = route;
         }
@@ -162,6 +1740,7 @@
             responseArea.innerHTML = 'Loading...';
 
             try {
+                console.log(`Making API call to endpoint: ${endpoint}`);
                 const response = await fetch(endpoint);
                 console.log(response)
                 if (endpoint === '/getlog') {
@@ -184,6 +1763,25 @@
                 responseArea.innerHTML = `Error: ${error.message}\n${error.stack}`;
             }
         }
+
+        // Initialize both editors after DOM is loaded
+        document.addEventListener('DOMContentLoaded', async () => {
+            cellEdit.init();
+            statusSwitchEdit.init();
+            switchConfig.init();
+            countdownManager.init();
+
+            // const switchNameCells = document.querySelectorAll('.switch-name-cell');
+            // console.log(switchNameCells)
+            
+            // for (const cell of Array.from(switchNameCells).slice(62)) {
+            //     cell.click();
+            //     const popup = document.querySelector('.status-switch-popup');
+            //     const saveButton = popup.querySelector('.save');
+            //     saveButton.click();
+            //     await new Promise(resolve => setTimeout(resolve, 200));
+            // }
+        });
     </script>
 </body>
 </html>
