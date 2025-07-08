@@ -1,4 +1,5 @@
 import json, os, sys, re, time
+from DSL import verify_code
 
 if len(sys.argv) > 1 and sys.argv[1] == "restart":
     print("waiting 10")
@@ -84,9 +85,18 @@ app.logger.setLevel(logging.INFO)
 
 links_path = os.path.join("data", "links.json")
 throttle_path = os.path.join("data", "throttle.json")
-switches_path = os.path.join("data", "switches.json")
 channels_path = os.path.join("data", "channels.json")
 temporaryoverwritesliders_path = os.path.join("data", "temporaryoverwritesliders.json")
+homepagedata_path = os.path.join("data", "homepagedata.json")
+espstatuses_path = os.path.join("data", "espstatuses.json")
+
+if not os.path.exists(homepagedata_path):
+    with open(homepagedata_path, "w", encoding="utf-8") as f:
+        json.dump({"codegroups": {}, "switches": {}, "timers": {}}, f, indent=4)
+
+if not os.path.exists(espstatuses_path):
+    with open(espstatuses_path, "w", encoding="utf-8") as f:
+        json.dump({"codegroups": {}, "switches": {}, "timers": {}}, f, indent=4)
 
 def clear_res_queue():
     while not response_queue.empty():
@@ -331,7 +341,6 @@ def load():
 @login_required
 def load_arduino_info():
     app.logger.info("loadarduinoinfo request")
-    data = request.json
     
     clear_res_queue()
     task_queue.put("get_arduinos")
@@ -498,6 +507,94 @@ def getlog():
         app.logger.error(f"Error in getlog: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
+
+
+
+
+# home page routes
+
+@app.route("/savecoderow", methods=['POST'])
+@login_required
+def savecoderow():
+    app.logger.info("save code row request")
+    data = request.json # {'action': 'verify', 'groupTitle': 'Main 2', 'switchName': 'Ventilasjn', 'pin': 4, 'code': 'coeeee'}
+    
+    if data["action"] == "save":
+        existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
+        if not data["groupTitle"] in existing_json["codegroups"]:
+            existing_json["codegroups"][data["groupTitle"]] = {"rows": {}}
+        existing_json["codegroups"][data["groupTitle"]]["rows"][data["switchName"]] = {
+            "pin": data["pin"],
+            "code": data["code"],
+            "updated_at": datetime.now().isoformat()
+        }
+        with open(homepagedata_path, "w", encoding="utf-8") as f:
+            json.dump(existing_json, f, indent=4)
+
+    elif data["action"] == "verify":
+        is_valid, code_error = verify_code(data["code"])
+        return jsonify({"verify_status": is_valid, "code_error": code_error})
+    
+    elif data["action"] == "run":
+        is_valid, code_error = verify_code(data["code"])
+        if not is_valid:
+            return jsonify({"verify_status": is_valid, "code_error": code_error})
+        
+        
+        return jsonify({"message": "ok"})
+    else:
+        return jsonify({"error": "invalid action"})
+
+@app.route("/saveswitch", methods=['POST'])
+@login_required
+def saveswitch():
+    app.logger.info("saveswitch request")
+    data = request.json # {'originalName': 'Sump High', 'name': 'Sump High', 'device': 'Device 1', 'pin': 33, 'alarm_when_closed': False, 'alarm_delay': 30}
+
+    existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
+    if data["originalName"] != data["name"]:
+        if data["originalName"] in existing_json["switches"]:
+            del existing_json["switches"][data["originalName"]]
+    existing_json["switches"][data["name"]] = {
+        "pin": data["pin"],
+        "alarm_when_closed": data["alarm_when_closed"],
+        "alarm_delay": data["alarm_delay"],
+        "device": data["device"]
+    }
+    with open(homepagedata_path, "w", encoding="utf-8") as f:
+        json.dump(existing_json, f, indent=4)
+    return jsonify({"message": "ok"})
+
+@app.route("/setswitchoverwrite", methods=['POST'])
+@login_required
+def setswitchoverwrite():
+    app.logger.info("setswitchoverwrite request")
+    data = request.json
+    print(data) # {'groupTitle': 'Main 2', 'switchName': 'Ventilasjn', 'action': 'on'}
+    existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
+    if not data["groupTitle"] in existing_json["codegroups"]:
+        existing_json["codegroups"][data["groupTitle"]] = {"rows": {}}
+    if not data["switchName"] in existing_json["codegroups"][data["groupTitle"]]["rows"]:
+        existing_json["codegroups"][data["groupTitle"]]["rows"][data["switchName"]] = {
+            "pin": None,
+            "code": "",
+            "updated_at": datetime.now().isoformat()
+        }
+    existing_json["codegroups"][data["groupTitle"]]["rows"][data["switchName"]]["mode"] = data["action"]
+
+    with open(homepagedata_path, "w", encoding="utf-8") as f:
+        json.dump(existing_json, f, indent=4)
+
+    return jsonify({"message": "ok"})
+
+@app.route("/loadmainpageinfo")
+@login_required
+def loadmainpageinfo():
+    app.logger.info("load main page info request")
+    existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
+    espstatuses = json.load(open(espstatuses_path, "r", encoding="utf-8"))
+    return jsonify({"main": existing_json, "espstatuses": espstatuses})
 
 if __name__ == '__main__':
     # Create queues for communication

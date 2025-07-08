@@ -870,7 +870,6 @@
         }
 
         function createSwitchBox(title, switches, className) {
-            console.log(switches)
             return createBox(
                 `<div class="box-title" onclick="cellEdit.open('${title}')"><span>${title}</span><span class="${data.devices.filter(d => d.name === title).length == 0 || data.devices.find(d => d.name === title && d.error) ? 'error' : ''}">${data.devices.filter(d => d.name === title).length}</span></div>
                 <table class="switch-table">
@@ -1055,10 +1054,17 @@
                 try {
                     const newSwitches = this.currentGroup.switches
                     const newTitle = this.overlay.querySelector('.group-title-input').value;
+                    const originalGroupTitle = this.currentGroup.title;
+
+                    console.log("API call for cell edit save:", {
+                        action: 'saveGroup',
+                        originalTitle: originalGroupTitle,
+                        newTitle: newTitle,
+                        switches: newSwitches
+                    });
 
                     // Simulate API call returning the updated group data
                     await new Promise(resolve => setTimeout(resolve, 2000));
-                    const originalGroupTitle = this.currentGroup.title;
                     const apiResponse = { newTitle, newSwitches } // Simulated API response
 
                     // Update the data structure
@@ -1148,6 +1154,17 @@
                     const pinInput = this.overlay.querySelector('.pin-input');
                     const openDesiredInput = this.overlay.querySelector('.open-desired-input');
                     const alarmDelayInput = this.overlay.querySelector('.alarm-delay-input');
+
+                    const payload = {
+                        action: 'saveStatusSwitch',
+                        originalName: this.currentSwitch.name,
+                        name: nameInput.value,
+                        device: deviceSelect.value || null,
+                        pin: pinInput.value ? parseInt(pinInput.value) : null,
+                        open_desired: openDesiredInput.checked,
+                        alarm_delay: parseInt(alarmDelayInput.value)
+                    };
+                    console.log("API call for status switch save:", payload);
 
                     // Simulate API call
                     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -1239,19 +1256,34 @@
                 try {
                     const code = this.overlay.querySelector('.dsl-code').value;
                     const pin = parseInt(this.overlay.querySelector('.pin-input').value) || 0;
+                    const switchName = this.currentSwitch.name;
+                    const groupTitle = this.currentSwitch.groupTitle;
 
                     if (pin <= 0) {
                         const proceed = confirm('No pin number set. This will disable the switch. Do you want to continue?');
-                        if (!proceed) return;
+                        if (!proceed) {
+                            this.isProcessing = false;
+                            button.textContent = originalText;
+                            return;
+                        }
                     }
                     
+                    const payload = {
+                        action: action.toLowerCase() + 'SwitchConfig',
+                        groupTitle: groupTitle,
+                        switchName: switchName,
+                        pin: pin,
+                        code: action !== 'Verify' ? code : undefined
+                    };
+                    console.log(`API call for switch config ${action}:`, payload);
+
                     // Simulate API call
                     await new Promise(resolve => setTimeout(resolve, 1000));
                     
                     if (action === 'Save') {
                         // Update the data structure
-                        const group = data.switchGroups[this.currentSwitch.groupTitle];
-                        const switchIndex = group.findIndex(s => s.name === this.currentSwitch.name);
+                        const group = data.switchGroups[groupTitle];
+                        const switchIndex = group.findIndex(s => s.name === switchName);
                         if (switchIndex !== -1) {
                             group[switchIndex] = {
                                 ...group[switchIndex],
@@ -1264,12 +1296,13 @@
                         const switchBoxes = document.querySelectorAll('.switch-columns .box');
                         for (let box of switchBoxes) {
                             const titleDiv = box.querySelector('.box-title');
-                            if (titleDiv && titleDiv.textContent === this.currentSwitch.groupTitle) {
-                                const newBox = createSwitchBox(this.currentSwitch.groupTitle, group, '');
+                            if (titleDiv && titleDiv.textContent === groupTitle) {
+                                const newBox = createSwitchBox(groupTitle, group, '');
                                 box.parentNode.replaceChild(newBox, box);
                                 break;
                             }
                         }
+                        this.unsavedChanges = false;
                     }
                     
                     this.showSuccess(`${action} successful!`);
@@ -1376,7 +1409,7 @@
                 try {
                     // Prepare API payload
                     const payload = this.prepareApiPayload(type, name, 'start');
-                    console.log('API payload for start:', payload);
+                    console.log('API call for start timer:', payload);
 
                     // Simulate API call
                     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1442,12 +1475,12 @@
 
                     // Prepare API payload
                     const payload = this.prepareApiPayload(
-                        this.currentItem.type, 
-                        this.currentItem.name, 
+                        this.currentItem.type,
+                        this.currentItem.name,
                         'configure',
                         duration
                     );
-                    console.log('API payload for save:', payload);
+                    console.log('API call for save countdown configuration:', payload);
 
                     // Simulate API call
                     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1475,7 +1508,7 @@
                 try {
                     // Prepare API payload
                     const payload = this.prepareApiPayload(type, name, 'stop');
-                    console.log('API payload for stop:', payload);
+                    console.log('API call for stop countdown:', payload);
 
                     // Simulate API call
                     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1585,6 +1618,7 @@
             responseArea.innerHTML = 'Loading...';
 
             try {
+                console.log(`Making API call to endpoint: ${endpoint}`);
                 const response = await fetch(endpoint);
                 console.log(response)
                 if (endpoint === '/getlog') {
