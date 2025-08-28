@@ -47,6 +47,11 @@ class ESP32Manager:
         print("updating schedules")
         channels = read_json_file('data/channels.json')
         for channel in channels:
+            # For some reason a channel ended up with an empty key, so skip it.
+            if not channel or not str(channel).strip():
+                print("Skipping empty channel name in channels.json")
+                continue
+
             schedule = create_esp32_schedule(channel)
             schedule_hash = self.calculate_hash(schedule)
             print(f"Channel: {channel}, Schedule hash: {schedule_hash}")
