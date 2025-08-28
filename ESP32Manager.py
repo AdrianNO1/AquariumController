@@ -8,6 +8,7 @@ import sys
 from schedulemaker import create_esp32_schedule
 from utils import read_json_file
 import math
+from smsalert import sms_alert
 
 class ESP32Manager:
     def __init__(self, slaves, test, logger=None):
@@ -46,6 +47,7 @@ class ESP32Manager:
     def update_schedules(self):
         print("updating schedules")
         channels = read_json_file('data/channels.json')
+        already_processed_slaves = []
         for channel in channels:
             # For some reason a channel ended up with an empty key, so skip it.
             if not channel or not str(channel).strip():
@@ -57,6 +59,10 @@ class ESP32Manager:
             print(f"Channel: {channel}, Schedule hash: {schedule_hash}")
             for slave in self.slaves:
                 if slave.get("wireless") and slave["name"].startswith(channel):
+                    if slave["id"] in already_processed_slaves:
+                        sms_alert(f"Slave {slave['id']} already processed. Now being reprocessed on channel '{channel}'.")
+                        continue
+                    already_processed_slaves.append(slave["id"])
                     # Compare schedule hashes instead of full schedules
                     current_hash = slave.get("scheduleHash", "0")
                     if slave["version"] in ["0", "1", "2w"]:

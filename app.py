@@ -1,4 +1,5 @@
-import json, os, sys, re, time
+import json, os, sys, re, time, requests, dotenv
+dotenv.load_dotenv()
 
 if len(sys.argv) > 1 and sys.argv[1] == "restart":
     print("waiting 10")
@@ -25,9 +26,10 @@ from datetime import datetime, timedelta
 from manager import main
 from custom_syntax import parse_code
 import threading
-import queue, logging, glob, subprocess, signal#, vonage
+import queue, logging, glob, subprocess, signal
 from werkzeug.security import check_password_hash
 from utils import read_json_file
+from smsalert import sms_alert
 
 # run on pi: pip install flask_login flask_limiter
 
@@ -539,36 +541,11 @@ if __name__ == '__main__':
                 print("MANAGER IS DEAD!!!!")
                 if test:
                     break
-                time.sleep(10)
-                now = datetime.now()
-                minutes = now.hour*60+now.minute
-                # if 0:#if minutes < 900 or minutes > 1080 and time.time()-start > 15:
-                #     print("sending sms")
-                #     client = vonage.Client(key="8a5d61ed", secret="Ylf6nHiJ9VJkPj5E")
-                #     sms = vonage.Sms(client)
-
-                #     responseData = sms.send_message(
-                #         {
-                #             "from": "Vonage APIs",
-                #             "to": "4798035320",
-                #             "text": "abnormal crash time\n",
-                #         }
-                #     )
-
-                #     if responseData["messages"][0]["status"] == "0":
-                #         print("Message sent successfully.")
-                #         app.logger.info("Message sent successfully.")
-                #     else:
-                #         print(f"Message failed with error: {responseData['messages'][0]['error-text']}")
-                #         app.logger.warning(f"Message failed with error: {responseData['messages'][0]['error-text']}")
-
-                #     print("waiting 2 hours")
-                #     time.sleep(2*60*60)
-                #else:
-                #    print("waiting untill 20:30")
-                #    time.sleep(max((1230-minutes)*60, 2*60*60))
                 
+                if num < 3:
+                    sms_alert("MANAGER HAS DIED!!!! :(")
 
+                time.sleep(10)
                 
                 subprocess.Popen(f"lxterminal -e python3 /home/adrian/Desktop/Coding/AquariumController/app.py restart {num}", shell=True)
                 print("restarting in 60")
