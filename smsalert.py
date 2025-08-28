@@ -10,9 +10,10 @@ def sms_alert(message):
         from_number = os.environ.get("TWILIO_FROM_NUMBER")
         to_number = os.environ.get("TWILIO_TO_NUMBER")
 
-        print(account_sid, auth_token)
         if not account_sid or not auth_token:
             raise Exception("TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN not set")
+        if not from_number or not to_number:
+            raise Exception("TWILIO_FROM_NUMBER or TWILIO_TO_NUMBER not set")
         else:
             url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
 
