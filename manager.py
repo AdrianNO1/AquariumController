@@ -347,7 +347,6 @@ def main(task_queue, response_queue, test=False):
                 last_updated = time.time() + 120 # also change in lightpumps.js and ESP32Code.ino. ctrl + f "120000"
             else:
                 last_updated = time.time()
-                return
             nonlocal preview_start
 
             wireless_cmd_builder = ""
@@ -357,6 +356,7 @@ def main(task_queue, response_queue, test=False):
                 
                 if matches:
                     for device in matches:
+                        print("building command for", device["name"])
                         for info in device_outputs[name]:
                             if preview_start != 0:
                                 if time.time() - preview_start >= preview_duration:
@@ -383,6 +383,7 @@ def main(task_queue, response_queue, test=False):
                                         run_command(device, "analogWrite", [info["pin"], strength])
                             
                             time.sleep(0.05)
+            print("built wireless cmd:", wireless_cmd_builder)
             if wireless_cmd_builder:
                 thread = threading.Thread(target=lambda: esp_controller.run_command(wireless_cmd_builder.strip(";")))
                 thread.start()
