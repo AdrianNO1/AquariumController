@@ -341,13 +341,12 @@ def main(task_queue, response_queue, test=False):
 
 
 
-        def update_device_outputs(temporaryoverwrite=False):
+        def update_device_outputs(temporaryoverwrite=False, overwrite_schedule=False):
             nonlocal last_updated
             if temporaryoverwrite:
                 last_updated = time.time() + 120 # also change in lightpumps.js and ESP32Code.ino. ctrl + f "120000"
             else:
                 last_updated = time.time()
-                return
             nonlocal preview_start
 
             wireless_cmd_builder = ""
@@ -377,7 +376,7 @@ def main(task_queue, response_queue, test=False):
                                     logger.error(strength)
                                 else:
                                     if device.get("wireless"):
-                                        wireless_cmd_builder += f"{device['id']} s {info['pin']} {strength} {1 if temporaryoverwrite else 0};"
+                                        wireless_cmd_builder += f"{device['id']} s {info['pin']} {strength} {1 if temporaryoverwrite or overwrite_schedule else 0};"
                                         wireless_cmd_devices.append(device)
                                     else:
                                         run_command(device, "analogWrite", [info["pin"], strength])
@@ -432,7 +431,7 @@ def main(task_queue, response_queue, test=False):
             current_time = time.time()
             current_hour_utc = datetime.utcfromtimestamp(current_time).hour
             
-            if current_hour_utc == 5 and (current_time - last_sync) > 3600:  # Only sync once per hour
+            if current_hour_utc == 5 and (current_time - last_sync) > 3600:
                 logger.info("Performing daily time sync at 5am UTC")
                 thread = threading.Thread(target=esp_controller.sync_time)
                 thread.start()
@@ -442,7 +441,7 @@ def main(task_queue, response_queue, test=False):
             human_readable_last_updated = datetime.fromtimestamp(last_updated).strftime("%H:%M:%S")
             if (last_updated + update_frequency) < time.time():
                 last_updated = time.time()
-                update_device_outputs()
+                update_device_outputs(overwrite_schedule=True)
 
 
 

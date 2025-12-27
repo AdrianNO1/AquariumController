@@ -17,7 +17,7 @@ const int mqtt_port = 1883;
 const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 
 const int DEFAULT_FREQ = 5000; // Default frequency in Hz
-const int DEFAULT_RES = 8;		 // Default resolution in bits
+const int DEFAULT_RES = 8;    // Don't change without altering manager.py
 
 const char* VERSION = "3w";
 const bool TEST = false;
