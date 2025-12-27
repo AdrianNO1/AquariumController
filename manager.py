@@ -347,6 +347,7 @@ def main(task_queue, response_queue, test=False):
                 last_updated = time.time() + 120 # also change in lightpumps.js and ESP32Code.ino. ctrl + f "120000"
             else:
                 last_updated = time.time()
+                return
             nonlocal preview_start
 
             wireless_cmd_builder = ""
