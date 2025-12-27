@@ -518,8 +518,19 @@ def setswitchoverwrite():
 @app.route("/loadmainpageinfo")
 def loadmainpageinfo():
     app.logger.info("load main page info request")
-    existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
-    espstatuses = json.load(open(espstatuses_path, "r", encoding="utf-8"))
+    existing_json = read_json_file(homepagedata_path)
+    espstatuses = read_json_file(espstatuses_path)
+    
+    # Construct dummy codegroups status
+    espstatuses["codegroups"] = {}
+    if "codegroups" in existing_json:
+        for group_name, group_data in existing_json["codegroups"].items():
+            espstatuses["codegroups"][group_name] = {}
+            if "rows" in group_data:
+                for row_name in group_data["rows"]:
+                    # Always return False for now as per instructions
+                    espstatuses["codegroups"][group_name][row_name] = {"is_open": False}
+
     return jsonify({"main": existing_json, "espstatuses": espstatuses})
 
 if __name__ == '__main__':

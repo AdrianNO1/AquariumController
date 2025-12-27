@@ -207,7 +207,7 @@ class ESP32Manager:
         return None
 
     def run_command(self, command_str: str, timeout: float = 5):
-        print("run_command", command_str[:10])
+        print("run_command command_str[:10]:", command_str[:10])
         with self.command_lock:
             # Split and parse commands to build batches
             raw_commands = [cmd.strip() for cmd in command_str.split(';') if cmd.strip()]

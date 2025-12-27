@@ -383,8 +383,8 @@ def main(task_queue, response_queue, test=False):
                                         run_command(device, "analogWrite", [info["pin"], strength])
                             
                             time.sleep(0.05)
-            print("built wireless cmd:", wireless_cmd_builder)
             if wireless_cmd_builder:
+                print("built wireless cmd:", wireless_cmd_builder)
                 thread = threading.Thread(target=lambda: esp_controller.run_command(wireless_cmd_builder.strip(";")))
                 thread.start()
                 responses = thread.join()

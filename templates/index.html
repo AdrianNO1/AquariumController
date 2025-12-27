@@ -748,16 +748,18 @@
                 console.log(response)
 
                 // Load Sensors and Timers
-                if (response.main.sensors) {
-                    data.sensors = response.main.sensors;
-                    // Add date/time if not present in response
-                    if (!data.sensors.date) {
-                        const now = new Date();
-                        data.sensors.date = now.getDate();
-                        data.sensors.month = now.toLocaleString('default', { month: 'long' });
-                        data.sensors.year = now.getFullYear();
-                        data.sensors.time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    }
+                if (response.espstatuses.sensors) {
+                    const rawSensors = response.espstatuses.sensors;
+                    data.sensors.readings = rawSensors.filter(s => s.type !== 'temp_air');
+                    data.sensors.airTemps = rawSensors.filter(s => s.type === 'temp_air');
+
+                    // Add date/time if not present in response (it won't be in the new sensors structure)
+                    // We'll manage date locally for now as it was before
+                    const now = new Date();
+                    data.sensors.date = now.getDate();
+                    data.sensors.month = now.toLocaleString('default', { month: 'long' });
+                    data.sensors.year = now.getFullYear();
+                    data.sensors.time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 }
 
                 if (response.main.timers) {
@@ -766,9 +768,12 @@
                 let statusSwitches = response.main.switches
                 for (let [name, status] of Object.entries(statusSwitches)) {
                     statusSwitches[name].name = name
-                    if (response.espstatuses.switches[name]) {
+                    if (response.espstatuses.switches && response.espstatuses.switches[name]) {
                         statusSwitches[name].open = response.espstatuses.switches[name].is_open
                         statusSwitches[name].status = status.alarm_when_closed && !statusSwitches[name].open || status.alarm_when_open && statusSwitches[name].open ? "ALARM" : "Ok"
+                    } else {
+                        statusSwitches[name].open = null;
+                        statusSwitches[name].status = "ALARM";
                     }
                 }
                 statusSwitches = Object.values(statusSwitches)
@@ -816,10 +821,10 @@
                         <td class="date-cell">${data.sensors.date} ${data.sensors.month}</td>
                         <td class="date-cell">${data.sensors.time}</td>
                     </tr>
-                    ${data.sensors.readings.map(([label, value]) => `
+                    ${data.sensors.readings.map(s => `
                         <tr>
-                            <td>${label === "Ph" || label === "Redox" || label.includes("Main") ? '<b>' + label + '</b>' : label}</td>
-                            <td class="sensor-value">${value}</td>
+                            <td>${s.name === "Ph" || s.name === "Redox" || s.name.includes("Main") ? '<b>' + s.name + '</b>' : s.name}</td>
+                            <td class="sensor-value">${s.value}</td>
                         </tr>
                     `).join('')}
                 </table>`,
@@ -854,7 +859,7 @@
                         <tr style="${!sw.device ? 'background-color: #d3d3d3;' : ''}">
                             <td class="switch-name-cell" onclick="statusSwitchEdit.open(${JSON.stringify(sw).replace(/"/g, '&quot;')})">${sw.name}</td>
                             ${sw.device ? `
-                                <td class="${sw.open ? 'status-open' : 'status-closed'}">${sw.open ? 'Open' : 'Closed'}</td>
+                                <td class="${sw.open === null ? 'status-alarm' : sw.open ? 'status-open' : 'status-closed'}">${sw.open === null ? 'Unknown' : sw.open ? 'Open' : 'Closed'}</td>
                                 <td class="${sw.status === 'Ok' ? 'status-ok' : 'status-alarm'}">${sw.status}</td>
                             ` : '<td colspan="2"></td>'}
                         </tr>
@@ -907,10 +912,10 @@
                             `).join('')}
                     </tbody>
                     ${data.sensors.airTemps
-                    .map(temp => `
+                    .map(s => `
                                 <tr>
-                                    <td>AirTemp ${temp.location}</td>
-                                    <td>${temp.temp}</td>
+                                    <td>${s.name}</td>
+                                    <td>${s.value}</td>
                                 </tr>
                             `).join('')}
                     </tbody>
