@@ -31,6 +31,7 @@ class ESP32Manager:
         self.TEST = test
         # Chunking configuration
         self.MAX_CHUNK_SIZE = 200
+        self.BATCH_SIZE = 3
         if test:
             print("IS TESTING MODE---------------------------------")
         self.client.loop_start()
@@ -199,209 +200,273 @@ class ESP32Manager:
             return self.run_command(command_builder)
         return None
 
+    def _get_slave_id(self, target):
+        for slave in self.slaves:
+            if slave.get("wireless") and (slave["name"] == target or slave["id"] == target):
+                return slave["id"]
+        return None
+
     def run_command(self, command_str: str, timeout: float = 5):
         print("run_command", command_str[:10])
         with self.command_lock:
-            print("actually running run_command", command_str[:10])
-            try:
-                command_str = command_str.strip(";")
-                print(len(command_str))
-                print(f"\nRunning commands: {command_str}")
-                
-                # Split the command string on semicolons
-                commands = [cmd.strip() for cmd in command_str.split(';') if cmd.strip()]
-                if not commands:
-                    print("No commands to run.")
-                    return []
+            # Split and parse commands to build batches
+            raw_commands = [cmd.strip() for cmd in command_str.split(';') if cmd.strip()]
+            if not raw_commands:
+                return []
 
-                expected_responses = {}
-                for slave in self.slaves:
-                    if not slave.get("wireless"):
-                        continue
-                    i = 0
-                    for cmd in command_str.split(";"):
-                        parts = cmd.strip().split()
-                        if len(parts) < 2:
+            batches = []
+            current_batch = []
+            current_batch_indices = [] # Map local batch index to original index
+            device_counts = {} # device_id -> count
+
+            for i, cmd in enumerate(raw_commands):
+                parts = cmd.split()
+                if len(parts) < 2:
+                    # Invalid command, just include it, _execute_internal will handle error
+                    target = "unknown"
+                else:
+                    target = parts[0]
+                
+                device_id = self._get_slave_id(target)
+                # If device not found, treat as unique per target string or just count it?
+                # If not found, it won't generate a response anyway (filtered by slaves check in _execute_internal)
+                # But we should count it to be safe.
+                key = device_id if device_id else target
+                
+                count = device_counts.get(key, 0)
+                if count >= self.BATCH_SIZE:
+                    # Batch full for this device, push current batch
+                    batches.append((current_batch, current_batch_indices))
+                    current_batch = []
+                    current_batch_indices = []
+                    device_counts = {}
+                    count = 0
+                
+                current_batch.append(cmd)
+                current_batch_indices.append(i)
+                device_counts[key] = count + 1
+            
+            if current_batch:
+                batches.append((current_batch, current_batch_indices))
+
+            all_responses = {}
+            
+            for batch_cmds, batch_indices in batches:
+                batch_str = ";".join(batch_cmds)
+                print(f"Executing batch: {batch_str}")
+                # Call internal execute (without lock)
+                batch_results = self._execute_internal(batch_str, timeout)
+                
+                if batch_results:
+                    for local_idx, result in batch_results.items():
+                        # Map local index back to original index
+                        if local_idx < len(batch_indices):
+                            original_idx = batch_indices[local_idx]
+                            all_responses[original_idx] = result
+            
+            return all_responses
+
+    def _execute_internal(self, command_str: str, timeout: float = 5):
+        print("actually running _execute_internal", command_str[:10])
+        try:
+            command_str = command_str.strip(";")
+            print(len(command_str))
+            print(f"\nRunning commands: {command_str}")
+            
+            # Split the command string on semicolons
+            commands = [cmd.strip() for cmd in command_str.split(';') if cmd.strip()]
+            if not commands:
+                print("No commands to run.")
+                return []
+
+            expected_responses = {}
+            for slave in self.slaves:
+                if not slave.get("wireless"):
+                    continue
+                i = 0
+                for cmd in command_str.split(";"):
+                    parts = cmd.strip().split()
+                    if len(parts) < 2:
+                        print(f"Invalid command: {cmd}")
+                        return
+                    target = parts[0]
+                    command = parts[1]
+                    args = ' '.join(parts[2:])
+                    print(slave)
+                    if target == slave["name"] or target == slave["id"]:
+                        if command == "s":
+                            res = f"s {args}"
+                        elif command == "e":
+                            res = args
+                        elif command == "p":
+                            res = "o"
+                        elif command == "clear":
+                            res = "EEPROM cleared"
+                        elif command == "sc":
+                            res = "schedule_ok"  # Updated to match the new response from ESP32
+                        elif command == "sync":
+                            res = args
+                        else:
                             print(f"Invalid command: {cmd}")
                             return
-                        target = parts[0]
-                        command = parts[1]
-                        args = ' '.join(parts[2:])
-                        print(slave)
-                        if target == slave["name"] or target == slave["id"]:
-                            if command == "s":
-                                res = f"s {args}"
-                            elif command == "e":
-                                res = args
-                            elif command == "p":
-                                res = "o"
-                            elif command == "clear":
-                                res = "EEPROM cleared"
-                            elif command == "sc":
-                                res = "schedule_ok"  # Updated to match the new response from ESP32
-                            elif command == "sync":
-                                res = args
-                            else:
-                                print(f"Invalid command: {cmd}")
-                                return
-                            expected_responses[i] = {
-                                "id": slave["id"],
-                                "response": res
-                            }
-                            self.response_events[slave["id"]] = threading.Event()
+                        expected_responses[i] = {
+                            "id": slave["id"],
+                            "response": res
+                        }
+                        self.response_events[slave["id"]] = threading.Event()
 
-                        i += 1
+                    i += 1
 
-                # Determine if we need to use chunking
-                message_size = len(command_str.encode('utf-8'))
-                use_chunking = message_size > 256  # Use chunking for messages larger than 256 bytes
+            # Determine if we need to use chunking
+            message_size = len(command_str.encode('utf-8'))
+            use_chunking = message_size > 256  # Use chunking for messages larger than 256 bytes
+            
+            if use_chunking:
+                print(f"Message size ({message_size} bytes) exceeds limit, using chunking")
+                # Use a longer timeout when chunking
+                timeout = 5
                 
-                if use_chunking:
-                    print(f"Message size ({message_size} bytes) exceeds limit, using chunking")
-                    # Use a longer timeout when chunking
-                    timeout = 5
-                    
-                    # Send the chunked message
-                    if self.TEST:
-                        self.send_chunked_message(command_str, "test/aquarium/command")
-                    else:
-                        self.send_chunked_message(command_str, "aquarium/command")
+                # Send the chunked message
+                if self.TEST:
+                    self.send_chunked_message(command_str, "test/aquarium/command")
                 else:
-                    # Publish the combined command string directly
-                    print(f"Publishing commands to topic: aquarium/command")
-                    if self.TEST:
-                        self.client.publish("test/aquarium/command", command_str)
+                    self.send_chunked_message(command_str, "aquarium/command")
+            else:
+                # Publish the combined command string directly
+                print(f"Publishing commands to topic: aquarium/command")
+                if self.TEST:
+                    self.client.publish("test/aquarium/command", command_str)
+                else:
+                    self.client.publish("aquarium/command", command_str)
+    
+            # Wait for responses
+            print(f"Waiting for responses (timeout: {timeout}s)...")
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                all_events_set = all(self.response_events[expected_responses[key]["id"]].is_set() for key in expected_responses)
+                if all_events_set:
+                    break
+                time.sleep(0.1)
+
+            real_responses = {}
+
+            for index in expected_responses.keys():
+                expected = expected_responses[index]
+                actual = self.responses.get(expected["id"])
+
+                def do_error_stuff(error):
+                    print(error)
+                    for slave in self.slaves:
+                        if not slave.get("wireless"):
+                            continue
+                        if slave["id"] == expected["id"]:
+                            slave["status"] = "error"
+                            slave["error"] = error
+                            slave["lastused"] = int(time.time())
+                            break
                     else:
-                        self.client.publish("aquarium/command", command_str)
-        
-                # Wait for responses
-                print(f"Waiting for responses (timeout: {timeout}s)...")
-                start_time = time.time()
-                while time.time() - start_time < timeout:
-                    all_events_set = all(self.response_events[expected_responses[key]["id"]].is_set() for key in expected_responses)
-                    if all_events_set:
-                        break
-                    time.sleep(0.1)
+                        print(f"Error: Could not update status for device {expected['id']}. It is missing from the slaves list.")
 
-                real_responses = {}
+                if actual is None:
+                    error = f"Command {index} failed: No response received"
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
 
-                for index in expected_responses.keys():
-                    expected = expected_responses[index]
-                    actual = self.responses.get(expected["id"])
+                if "responses" not in actual:
+                    error = f"Command {index} failed: Invalid response received", actual
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
 
-                    def do_error_stuff(error):
-                        print(error)
+                actual_actual = [x for x in actual["responses"] if x["index"] == index]
+                if not actual_actual:
+                    error = f"Command {index} failed: No response received for that specific index"
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
+
+                actual_actual = actual_actual[0]
+                if "response" not in actual_actual:
+                    error = f"Command {index} failed: Invalid response received", actual
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
+
+                if actual_actual["response"] == expected["response"]:
+                    print(f"Command {index} succeeded")
+                    try:
+                        command = command_str.split(";")[index].split()
+                        if command[1] == "e":
+                            for slave in self.slaves:
+                                if not slave.get("wireless"):
+                                    continue
+                                if slave["id"] == expected["id"]:
+                                    slave["name"] = command[2]
+                                    slave["freq"] = int(command[3])
+                                    slave["res"] = int(command[4])
+                                    break
+                        elif command[1] == "sc":
+                            for slave in self.slaves:
+                                if not slave.get("wireless"):
+                                    continue
+                                if slave["id"] == expected["id"]:
+                                    # Parse the schedule JSON from the command
+                                    schedule_json = ' '.join(command[2:])
+                                    try:
+                                        # Parse the full schedule with syncTime
+                                        full_schedule = json.loads(schedule_json)
+                                        # Remove syncTime to calculate hash consistently
+                                        if "syncTime" in full_schedule:
+                                            del full_schedule["syncTime"]
+                                        # Calculate hash from the schedule without syncTime
+                                        channels_only = json.dumps(full_schedule, separators=(',', ':'))
+                                        slave["scheduleHash"] = self.calculate_hash(channels_only)
+                                    except json.JSONDecodeError:
+                                        print(f"Error: Failed to parse schedule JSON for hash calculation")
+                                    break
+                    except Exception as e:
+                        print(f"Error occurred while updating device name: {e}")
+                        
+                    real_responses[index] = {"message": actual_actual["response"], "status": True}
+                    notok = False
+                    for index2 in expected_responses.keys():
+                        expected2 = expected_responses[index2]
+                        if expected2["id"] == expected["id"] and real_responses.get(index2) is not None and real_responses[index2]["status"] is not True:
+                            notok = True
+                            break
+
+                    if not notok:
                         for slave in self.slaves:
                             if not slave.get("wireless"):
                                 continue
                             if slave["id"] == expected["id"]:
-                                slave["status"] = "error"
-                                slave["error"] = error
+                                slave["status"] = "ok"
+                                slave["error"] = ""
                                 slave["lastused"] = int(time.time())
                                 break
                         else:
                             print(f"Error: Could not update status for device {expected['id']}. It is missing from the slaves list.")
 
-                    if actual is None:
-                        error = f"Command {index} failed: No response received"
-                        do_error_stuff(error)
-                        real_responses[index] = {"message": error, "status": False}
-                        continue
+                else:
+                    error = f"Command {index} failed: Expected {expected['response']}, got {actual_actual['response']}"
+                    do_error_stuff(error)
+                    real_responses[index] = {"message": error, "status": False}
+                    continue
+            
+            # cleanup
+            self.responses = {}
+            self.response_events = {}
 
-                    if "responses" not in actual:
-                        error = f"Command {index} failed: Invalid response received", actual
-                        do_error_stuff(error)
-                        real_responses[index] = {"message": error, "status": False}
-                        continue
-
-                    actual_actual = [x for x in actual["responses"] if x["index"] == index]
-                    if not actual_actual:
-                        error = f"Command {index} failed: No response received for that specific index"
-                        do_error_stuff(error)
-                        real_responses[index] = {"message": error, "status": False}
-                        continue
-
-                    actual_actual = actual_actual[0]
-                    if "response" not in actual_actual:
-                        error = f"Command {index} failed: Invalid response received", actual
-                        do_error_stuff(error)
-                        real_responses[index] = {"message": error, "status": False}
-                        continue
-
-                    if actual_actual["response"] == expected["response"]:
-                        print(f"Command {index} succeeded")
-                        try:
-                            command = command_str.split(";")[index].split()
-                            if command[1] == "e":
-                                for slave in self.slaves:
-                                    if not slave.get("wireless"):
-                                        continue
-                                    if slave["id"] == expected["id"]:
-                                        slave["name"] = command[2]
-                                        slave["freq"] = int(command[3])
-                                        slave["res"] = int(command[4])
-                                        break
-                            elif command[1] == "sc":
-                                for slave in self.slaves:
-                                    if not slave.get("wireless"):
-                                        continue
-                                    if slave["id"] == expected["id"]:
-                                        # Parse the schedule JSON from the command
-                                        schedule_json = ' '.join(command[2:])
-                                        try:
-                                            # Parse the full schedule with syncTime
-                                            full_schedule = json.loads(schedule_json)
-                                            # Remove syncTime to calculate hash consistently
-                                            if "syncTime" in full_schedule:
-                                                del full_schedule["syncTime"]
-                                            # Calculate hash from the schedule without syncTime
-                                            channels_only = json.dumps(full_schedule, separators=(',', ':'))
-                                            slave["scheduleHash"] = self.calculate_hash(channels_only)
-                                        except json.JSONDecodeError:
-                                            print(f"Error: Failed to parse schedule JSON for hash calculation")
-                                        break
-                        except Exception as e:
-                            print(f"Error occurred while updating device name: {e}")
-                            
-                        real_responses[index] = {"message": actual_actual["response"], "status": True}
-                        notok = False
-                        for index2 in expected_responses.keys():
-                            expected2 = expected_responses[index2]
-                            if expected2["id"] == expected["id"] and real_responses.get(index2) is not None and real_responses[index2]["status"] is not True:
-                                notok = True
-                                break
-
-                        if not notok:
-                            for slave in self.slaves:
-                                if not slave.get("wireless"):
-                                    continue
-                                if slave["id"] == expected["id"]:
-                                    slave["status"] = "ok"
-                                    slave["error"] = ""
-                                    slave["lastused"] = int(time.time())
-                                    break
-                            else:
-                                print(f"Error: Could not update status for device {expected['id']}. It is missing from the slaves list.")
-
-                    else:
-                        error = f"Command {index} failed: Expected {expected['response']}, got {actual_actual['response']}"
-                        do_error_stuff(error)
-                        real_responses[index] = {"message": error, "status": False}
-                        continue
-                
-                # cleanup
-                self.responses = {}
-                self.response_events = {}
-
-                print("manager run_command returning", real_responses)
-                return real_responses
-        
-            except Exception as e:
-                exc_type, exc_value, exc_traceback = sys.exc_info()
-                tb_str = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-                print(f"Error occurred:\n{tb_str}")
-                self.logger.error(f"Command execution failed:\n{tb_str}")
-                return None
+            print("manager _execute_internal returning", real_responses)
+            return real_responses
+    
+        except Exception as e:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            tb_str = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+            print(f"Error occurred:\n{tb_str}")
+            self.logger.error(f"Command execution failed:\n{tb_str}")
+            return None
 
     def send_chunked_message(self, message, topic):
         """Split a message into chunks and send them to the specified topic."""
