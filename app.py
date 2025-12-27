@@ -445,7 +445,6 @@ def getlog():
 # home page routes
 
 @app.route("/savecoderow", methods=['POST'])
-@login_required
 def savecoderow():
     app.logger.info("save code row request")
     data = request.json # {'action': 'verify', 'groupTitle': 'Main 2', 'switchName': 'Ventilasjn', 'pin': 4, 'code': 'coeeee'}
@@ -477,7 +476,6 @@ def savecoderow():
         return jsonify({"error": "invalid action"})
 
 @app.route("/saveswitch", methods=['POST'])
-@login_required
 def saveswitch():
     app.logger.info("saveswitch request")
     data = request.json # {'originalName': 'Sump High', 'name': 'Sump High', 'device': 'Device 1', 'pin': 33, 'alarm_when_closed': False, 'alarm_delay': 30}
@@ -497,7 +495,6 @@ def saveswitch():
     return jsonify({"message": "ok"})
 
 @app.route("/setswitchoverwrite", methods=['POST'])
-@login_required
 def setswitchoverwrite():
     app.logger.info("setswitchoverwrite request")
     data = request.json
@@ -519,7 +516,6 @@ def setswitchoverwrite():
     return jsonify({"message": "ok"})
 
 @app.route("/loadmainpageinfo")
-@login_required
 def loadmainpageinfo():
     app.logger.info("load main page info request")
     existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))

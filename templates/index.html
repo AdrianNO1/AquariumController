@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -164,6 +165,7 @@
             width: 50px;
             cursor: pointer;
         }
+
         .switch-off.switch-enabled {
             background-color: #f5deb3;
         }
@@ -173,6 +175,7 @@
             width: 100px;
             cursor: pointer;
         }
+
         .switch-auto.switch-enabled {
             background-color: #88fb98;
         }
@@ -182,6 +185,7 @@
             width: 50px;
             cursor: pointer;
         }
+
         .switch-on.switch-enabled {
             background-color: #88fb98;
         }
@@ -381,18 +385,22 @@
         }
 
         @keyframes slideDown {
-            to { top: 20px; }
+            to {
+                top: 20px;
+            }
         }
 
         @keyframes slideUp {
-            to { top: -50px; }
+            to {
+                top: -50px;
+            }
         }
 
         .spinner {
             display: inline-block;
             width: 20px;
             height: 20px;
-            border: 3px solid rgba(0,0,0,0.1);
+            border: 3px solid rgba(0, 0, 0, 0.1);
             border-radius: 50%;
             border-top-color: #228b22;
             animation: spin 1s linear infinite;
@@ -400,7 +408,9 @@
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         .help-tooltip {
@@ -423,7 +433,7 @@
             background: white;
             padding: 15px;
             border-radius: 5px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
             width: 200px;
             z-index: 1000;
         }
@@ -469,6 +479,7 @@
         .switch-name-cell {
             cursor: pointer;
         }
+
         .switch-name-cell:hover {
             text-decoration: underline;
         }
@@ -509,7 +520,7 @@
             margin: 4px auto;
             width: 20px;
             height: 20px;
-            border-color: rgba(255,255,255,0.1);
+            border-color: rgba(255, 255, 255, 0.1);
             border-top-color: white;
         }
 
@@ -518,6 +529,7 @@
         }
     </style>
 </head>
+
 <body>
     <div class="status-bar" id="statusBar"></div>
     <div class="nav-buttons">
@@ -693,186 +705,64 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.js"></script>
     <script>
         const data = {
-            devices: [
-                {"name": "Main", "error": ""},
-                {"name": "Main 2", "error": ""},
-                {"name": "Main 1b", "error": ""},
-                {"name": "Main 2b", "error": ""},
-                {"name": "Kjeller", "error": ""},
-                {"name": "Kjeller 2", "error": ""},
-                {"name": "Biljard", "error": ""},
-                {"name": "Biljard 2", "error": ""},
-                
-            ],
+            devices: [],
             sensors: {
-                date: "25",
-                month: "January",
-                year: "2025",
-                time: "20:34",
-                readings: [
-                    ["Ph", "8,4"], ["Redox", "320"], ["Temp Main", "26"], ["Temp Main2", "26"],
-                    ["Temp Sump", "25,6"], ["Temp Biljard", "25,8"], ["Temp Loft", "26"], ["Temp Bad", "26,1"]
-                ]
+                date: "",
+                month: "",
+                year: "",
+                time: "",
+                readings: [],
+                airTemps: []
             },
-            switchGroups: {
-                "Main": [
-                    { name: "Heat 1", status: "auto off", code: "", pin: 0 },
-                    { name: "Pumpe loft", status: "auto on", code: "", pin: 0 },
-                    { name: "Chiller", status: "auto off", code: "", pin: 0 },
-                    { name: "Light1", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 1", status: "auto off", code: "", pin: 0 },
-                    { name: "Pump 2", status: "auto off", code: "", pin: 0 },
-                    { name: "SeaSwirl1", status: "auto on", code: "", pin: 0 },
-                    { name: "ATO", status: "auto off", code: "", pin: 0 }
-                ],
-                "Main 2": [
-                    { name: "Heat 2", status: "auto off", code: "", pin: 0 },
-                    { name: "SeaSwirl2", status: "auto on", code: "", pin: 0 },
-                    { name: "SeaSwirl3", status: "off", code: "", pin: 0 },
-                    { name: "Ventilasjn", status: "auto off", code: "", pin: 0 },
-                    { name: "Pump 3", status: "on", code: "", pin: 0 },
-                    { name: "Pump 4", status: "auto off", code: "", pin: 0 },
-                    { name: "Frontlys", status: "off", code: "", pin: 0 },
-                    { name: "Surge", status: "auto on", code: "", pin: 0 }
-                ],
-                "Main 1b": [
-                    { name: "Heat 3", status: "auto off", code: "", pin: 0 },
-                    { name: "Pump 5", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 6", status: "auto off", code: "", pin: 0 },
-                    { name: "Ventilasjn 2", status: "auto off", code: "", pin: 0 }
-                ],
-                "Main 2b": [
-                    { name: "Heat 4", status: "auto off", code: "", pin: 0 },
-                    { name: "Pump 7", status: "auto off", code: "", pin: 0 },
-                    { name: "Pump 8", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 9", status: "auto off", code: "", pin: 0 }
-                ],
-                "Kjeller": [
-                    { name: "MainReturn", status: "auto on", code: "", pin: 0 },
-                    { name: "Return1", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 11", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 12", status: "auto on", code: "", pin: 0 },
-                    { name: "Heat 5", status: "on", code: "", pin: 0 },
-                    { name: "Pump 11", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 12", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 13", status: "auto on", code: "", pin: 0 }
-                ],
-                "Kjeller 2": [
-                    { name: "MainReturn2", status: "auto on", code: "", pin: 0 },
-                    { name: "Return2", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 13", status: "auto on", code: "", pin: 0 },
-                    { name: "Biljard", status: "auto on", code: "", pin: 0 },
-                    { name: "Heat 6", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 14", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 15", status: "off", code: "", pin: 0 },
-                    { name: "Pump 16", status: "auto on", code: "", pin: 0 }
-                ],
-                "Biljard": [
-                    { name: "MainReturn", status: "auto on", code: "", pin: 0 },
-                    { name: "Heat 7", status: "auto on", code: "", pin: 0 },
-                    { name: "Skimmer", status: "auto on", code: "", pin: 0 },
-                    { name: "Luft", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 20", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 21", status: "auto off", code: "", pin: 0 },
-                    { name: "ReturnATO", status: "auto on", code: "", pin: 0 },
-                    { name: "ATO4", status: "auto on", code: "", pin: 0 }
-                ],
-                "Biljard 2": [
-                    { name: "ReturnBad", status: "auto on", code: "", pin: 0 },
-                    { name: "Heat 8", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 20", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 21", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 32", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 22", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 23", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 24", status: "auto on", code: "", pin: 0 }
-                ],
-                "Bad": [
-                    { name: "Heat 9", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 30", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 30", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 31", status: "auto on", code: "", pin: 0 }
-                ],
-                "Loft": [
-                    { name: "Heat 10", status: "auto on", code: "", pin: 0 },
-                    { name: "Light 40", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 40", status: "auto on", code: "", pin: 0 },
-                    { name: "Pump 41", status: "auto on", code: "", pin: 0 }
-                ]
-            },
-            statusSwitches: [
-                { name: "Main High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Main Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Loft High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Loft Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Bad High", open: true, status: "ALARM", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Bad Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Sump High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Sump Med", open: true, status: "Ok", alarm_when_closed: true, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Sump Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Frag High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: "Device 1", pin: 33 },
-                { name: "Frag Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt2 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt2 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt3 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt3 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt4 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Qt4 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Biljard High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Biljard Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Sump2 High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Sump2 Med", open: true, status: "Ok", alarm_when_closed: true, alarm_delay: 30, device: null, pin: null },
-                { name: "Sump2 Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "ATO High", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "ATO Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Ca Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Kh Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Mg Low", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Lys 1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Lys 2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Lys 3", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Akvarium 1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Akvarium 2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Kjeller 1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Kjeller 2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Kjeller 3", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Loft", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Aux1", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-                { name: "Aux2", open: false, status: "Ok", alarm_when_closed: false, alarm_delay: 30, device: null, pin: null },
-            ],
-            additionalSensors: {
-                flowKills: [
-                    { name: "Main FlowKill", countDownEnd: null},
-                    { name: "Frag FlowKill", countDownEnd:  "2025-02-02T01:30:00"},
-                    { name: "Bad FlowKill", countDownEnd:  null},
-                    { name: "Good FlowKill", countDownEnd:  null}
-                ],
-                feeds: [
-                    { type: "Feed A", device: "Light", countDownEnd: null },
-                    { type: "Feed B", device: "SeaSwirl", countDownEnd: null },
-                    { type: "Feed C", device: "Flow", countDownEnd: null },
-                    { type: "Feed D", device: "DosingPump", countDownEnd: null }
-                ],
-                airTemps: [
-                    { location: "Main", temp: "25,8" },
-                    { location: "Kjeller", temp: "26" },
-                    { location: "Loft", temp: "26,1" }
-                ]
+            switchGroups: {},
+            statusSwitches: [],
+            timers: {
+                flowKills: [],
+                feeds: []
             }
         };
 
         const statusSwitchesOrdering = ["Main High", "Main Low", "Loft High", "Loft Low", "Bad High", "Bad Low", "Sump High", "Sump Med", "Sump Low", "Frag High", "Frag Low", "Qt High", "Qt Low", "Qt2 High", "Qt2 Low", "Qt3 High", "Qt3 Low", "Qt4 High", "Qt4 Low", "Biljard High", "Biljard Low", "Sump2 High", "Sump2 Med", "Sump2 Low", "ATO High", "ATO Low", "Ca Low", "Kh Low", "Mg Low", "Lys 1", "Lys 2", "Lys 3", "Akvarium 1", "Akvarium 2", "Kjeller 1", "Kjeller 2", "Kjeller 3", "Loft", "Aux1", "Aux2"]
         const switchGroupsOrdering = ["Main", "Main 2", "Main 1b", "Main 2b", "Kjeller", "Kjeller 2", "Biljard", "Biljard 2", "Bad", "Loft"]
-        
+
         console.log(data)
+        $.ajax({
+            url: '/loadarduinoinfo',
+            type: 'POST',
+            async: false,
+            success: function (response) {
+                if (response.data) {
+                    data.devices = JSON.parse(response.data);
+                }
+            },
+            error: function (response) {
+                console.error("Error loading arduino info:", response);
+            }
+        });
+
         $.ajax({
             url: '/loadmainpageinfo',
             type: 'GET',
             async: false,
-            success: function(response) {
+            success: function (response) {
                 console.log(response)
+
+                // Load Sensors and Timers
+                if (response.main.sensors) {
+                    data.sensors = response.main.sensors;
+                    // Add date/time if not present in response
+                    if (!data.sensors.date) {
+                        const now = new Date();
+                        data.sensors.date = now.getDate();
+                        data.sensors.month = now.toLocaleString('default', { month: 'long' });
+                        data.sensors.year = now.getFullYear();
+                        data.sensors.time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    }
+                }
+
+                if (response.main.timers) {
+                    data.timers = response.main.timers;
+                }
                 let statusSwitches = response.main.switches
                 for (let [name, status] of Object.entries(statusSwitches)) {
                     statusSwitches[name].name = name
@@ -898,16 +788,16 @@
                                 status = "auto ???"
                             }
                         }
-                        return {name: row, status, code: rowObj.code, pin: rowObj.pin}
+                        return { name: row, status, code: rowObj.code, pin: rowObj.pin }
                     })
-                    
+
                 }
 
                 switchGroups = Object.fromEntries(Object.entries(switchGroups).sort((a, b) => switchGroupsOrdering.indexOf(a[0]) - switchGroupsOrdering.indexOf(b[0])))
                 console.log(switchGroups)
                 data.switchGroups = switchGroups
             },
-            error: function(response) {
+            error: function (response) {
                 console.error(response)
             }
         });
@@ -978,8 +868,8 @@
             return createBox(`
                 <div class="box-title">Flow Kill</div>
                 <table class="sensor-table">
-                    ${data.additionalSensors.flowKills
-                        .map(fk => `
+                    ${data.timers.flowKills
+                    .map(fk => `
                             <tr>
                                 <td class="countdown-name" 
                                     onclick="countdownManager.open('flowkill', '${fk.name}')"
@@ -1001,8 +891,8 @@
                 <div class="box-title">Feed & Air</div>
                 <table class="sensor-table">
                     <tbody>
-                        ${data.additionalSensors.feeds
-                            .map(feed => `
+                        ${data.timers.feeds
+                    .map(feed => `
                                 <tr>
                                     <td class="countdown-name" 
                                         onclick="countdownManager.open('feed', '${feed.type}')"
@@ -1016,8 +906,8 @@
                                 </tr>
                             `).join('')}
                     </tbody>
-                    ${data.additionalSensors.airTemps
-                            .map(temp => `
+                    ${data.sensors.airTemps
+                    .map(temp => `
                                 <tr>
                                     <td>AirTemp ${temp.location}</td>
                                     <td>${temp.temp}</td>
@@ -1079,7 +969,7 @@
                 console.log(data)
                 this.currentGroup = { title: groupTitle, switches: [...switches] };
                 this.overlay.style.display = 'block';
-                
+
                 const titleInput = this.overlay.querySelector('.group-title-input');
                 titleInput.value = groupTitle;
 
@@ -1149,7 +1039,7 @@
                             break;
                         }
                     }
-                    
+
                     showSuccess();
                     this.close();
                 } catch (error) {
@@ -1181,7 +1071,7 @@
             open(switchData) {
                 this.currentSwitch = { ...switchData };
                 this.overlay.style.display = 'block';
-                
+
                 const nameInput = this.overlay.querySelector('.switch-name-input');
                 const deviceSelect = this.overlay.querySelector('.device-select');
                 const pinInput = this.overlay.querySelector('.pin-input');
@@ -1234,12 +1124,12 @@
                         type: 'POST',
                         contentType: 'application/json',
                         data: JSON.stringify(payload),
-                        error: function(error) {
+                        error: function (error) {
                             console.error(error);
                             alert("Error: " + error.responseText)
                         }
                     });
-                    
+
 
                     // Update the data structure
                     const switchIndex = data.statusSwitches.findIndex(s => s.name === this.currentSwitch.name);
@@ -1343,7 +1233,7 @@
                         button.textContent = originalText;
                         return;
                     }
-                    
+
                     const payload = {
                         action: action.toLowerCase(),
                         groupTitle,
@@ -1358,14 +1248,14 @@
                         type: 'POST',
                         contentType: 'application/json',
                         data: JSON.stringify(payload),
-                        error: function(error) {
+                        error: function (error) {
                             console.error(error);
                             alert("Error: " + error.responseText)
                         }
                     });
-                    
+
                     console.log(response)
-                    
+
 
                     if (action === 'Verify' || action === 'Run') {
                         if (response.verify_status) {
@@ -1379,7 +1269,7 @@
                             alert("Error with code: " + response.code_error || response.error)
                         }
                     }
-                    
+
                     if (action === 'Save') {
                         // Update the data structure
                         const group = data.switchGroups[groupTitle];
@@ -1391,7 +1281,7 @@
                                 pin: pin
                             };
                         }
-                        
+
                         // Update the UI
                         const switchBoxes = document.querySelectorAll('.switch-columns .box');
                         for (let box of switchBoxes) {
@@ -1406,7 +1296,7 @@
                         showSuccess(`${action} successful!`);
                         this.close();
                     }
-                    
+
                 } catch (error) {
                     alert(`Error during ${action.toLowerCase()}: ` + error.message);
                 } finally {
@@ -1447,14 +1337,14 @@
 
             initializeExistingTimers() {
                 // Initialize FlowKills
-                data.additionalSensors.flowKills.forEach(fk => {
+                data.timers.flowKills.forEach(fk => {
                     if (fk.countDownEnd && new Date(fk.countDownEnd) > new Date()) {
                         this.startCountdown('flowkill', fk.name, new Date(fk.countDownEnd));
                     }
                 });
 
                 // Initialize Feeds
-                data.additionalSensors.feeds.forEach(feed => {
+                data.timers.feeds.forEach(feed => {
                     if (feed.countDownEnd && new Date(feed.countDownEnd) > new Date()) {
                         this.startCountdown('feed', feed.type, new Date(feed.countDownEnd));
                     }
@@ -1478,7 +1368,7 @@
                 const type = element.dataset.type;
                 const name = element.dataset.name;
                 const end = element.dataset.end;
-                
+
                 if (end && new Date(end) > new Date()) {
                     this.stopCountdown(type, name);
                 } else {
@@ -1508,11 +1398,11 @@
                     this.startCountdown(type, name, endTime);
 
                     // Update data structure
-                    const items = type === 'flowkill' 
-                        ? data.additionalSensors.flowKills
-                        : data.additionalSensors.feeds;
-                    
-                    const item = items.find(i => 
+                    const items = type === 'flowkill'
+                        ? data.timers.flowKills
+                        : data.timers.feeds;
+
+                    const item = items.find(i =>
                         (type === 'flowkill' ? i.name : i.type) === name
                     );
                     if (item) item.countDownEnd = endTime.toISOString();
@@ -1607,11 +1497,11 @@
                     this.activeCountdowns.delete(key);
 
                     // Update data structure
-                    const items = type === 'flowkill' 
-                        ? data.additionalSensors.flowKills
-                        : data.additionalSensors.feeds;
-                    
-                    const item = items.find(i => 
+                    const items = type === 'flowkill'
+                        ? data.timers.flowKills
+                        : data.timers.feeds;
+
+                    const item = items.find(i =>
                         (type === 'flowkill' ? i.name : i.type) === name
                     );
                     if (item) item.countDownEnd = null;
@@ -1646,7 +1536,7 @@
                 );
 
                 if (element.querySelector('.spinner') && this.isProcessing) return;
-                
+
                 if (!element) return;
 
                 const now = new Date();
@@ -1661,8 +1551,8 @@
                 const diff = Math.floor((endTime - now) / 1000);
                 const minutes = Math.floor(diff / 60);
                 const seconds = diff % 60;
-                
-                element.textContent = minutes > 0 
+
+                element.textContent = minutes > 0
                     ? `${minutes}m ${seconds}s`
                     : `${seconds}s`;
                 element.dataset.end = endTime.toISOString();
@@ -1690,7 +1580,7 @@
             const originalContent = element.innerHTML;
             element.innerHTML = '<span class="spinner" style="width: 10px; height: 10px; margin: auto; border-width: 2px;"></span>'; // Adjust spinner size
             element.style.pointerEvents = 'none'; // Disable clicks during processing
-            
+
             try {
                 const response = await $.ajax({
                     url: '/setswitchoverwrite',
@@ -1728,7 +1618,7 @@
         }
 
         // Close modal when clicking outside
-        window.onclick = function(event) {
+        window.onclick = function (event) {
             const modal = document.getElementById('debugModal');
             if (event.target === modal) {
                 modal.style.display = 'none';
@@ -1756,7 +1646,7 @@
                     responseArea.innerHTML = 'Log file downloaded!';
                     return;
                 }
-                
+
                 const data = await response.json();
                 responseArea.innerHTML = JSON.stringify(data, null, 2);
             } catch (error) {
@@ -1773,7 +1663,7 @@
 
             // const switchNameCells = document.querySelectorAll('.switch-name-cell');
             // console.log(switchNameCells)
-            
+
             // for (const cell of Array.from(switchNameCells).slice(62)) {
             //     cell.click();
             //     const popup = document.querySelector('.status-switch-popup');
@@ -1784,4 +1674,5 @@
         });
     </script>
 </body>
+
 </html>
