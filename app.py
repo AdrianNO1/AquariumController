@@ -19,7 +19,6 @@ if num > 0:
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 from flask import Flask, request, jsonify, render_template, url_for, redirect, flash, session, send_file
-from flask_login import LoginManager, login_user, logout_user, login_required, UserMixin, current_user
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from datetime import datetime, timedelta
@@ -27,44 +26,16 @@ from manager import main
 from custom_syntax import parse_code
 import threading
 import queue, logging, glob, subprocess, signal
-from werkzeug.security import check_password_hash
 from utils import read_json_file
 from smsalert import sms_alert
 
 # run on pi: pip install flask_login flask_limiter
-
-
-try:
-    with open('secret.json', 'r') as f:
-        config = json.load(f)
-except FileNotFoundError:
-    raise FileNotFoundError("Secret file not found. Please run generate_secret.py first.")
 
 app = Flask(__name__)
 limiter = Limiter(
     app=app,
     key_func=lambda: "global"
 )
-app.secret_key = config['secret_key']
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=3650)  # 10 years
-app.config['SESSION_PERMANENT'] = True
-
-
-users = {
-    'pjot': {
-        'password_hash': config['password_hash']
-    }
-}
-
-class User(UserMixin):
-    def __init__(self, id):
-        self.id = id
-        self.username = id
-        self.password_hash = users[id]['password_hash']
-
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'login'
 
 os.makedirs("logs/app", exist_ok=True)
 os.makedirs("logs/manager", exist_ok=True)
@@ -95,75 +66,42 @@ def clear_res_queue():
         response_queue.get()
 
 @app.errorhandler(500)
-@login_required
 def handle_internal_server_error(e):
     app.logger.error('Internal Server Error: %s', e)
     return "Internal Server Error", 500
 
 @app.errorhandler(404)
-@login_required
 def handle_internal_server_error(e):
     app.logger.error('Not found: %s', e)
     return "No", 404
 
-@login_manager.user_loader
-def load_user(user_id):
-    if user_id not in users:
-        return None
-    return User(user_id)
-
 @app.route('/')
-@login_required
 def index():
     return render_template('index.html')
 
-@app.route('/login', methods=['GET', 'POST'])
-@limiter.limit("10 per minute")
-def login():
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
-        if username in users and check_password_hash(users[username]['password_hash'], password):
-            user = User(username)
-            session.permanent = True
-            login_user(user)
-            app.logger.info(f"User {username} logged in.")
-            return redirect(url_for('index'))
-        else:
-            flash('Invalid username or password')
-            app.logger.warning(f"Failed login attempt for user {username} from {request.remote_addr}.")
-            return render_template('login.html')
-    else:
-        return render_template('login.html')
-
 @app.route('/control/<device_type>')
-@login_required
 def control(device_type):
     return render_template('lightpumps.html')
 
 @app.route('/kill')
-@login_required
 def kill():
     app.logger.info("kill request")
     os.kill(os.getpid(), signal.SIGINT)
     return jsonify({"message": "Killed"}) # won't send lol
 
 @app.route('/shutdown')
-@login_required
 def shutdown():
     app.logger.info("shutdown request")
     os.system("sudo shutdown now")
     return jsonify({"message": "Shutting down"})
 
 @app.route('/restart')
-@login_required
 def restart():
     app.logger.info("restart request")
     os.system("sudo reboot")
     return jsonify({"message": "Restarting"})
 
 @app.route('/pull')
-@login_required
 def pull():
     # run git pull in the current directory without restarting the application
     app.logger.info("pull request")
@@ -197,7 +135,6 @@ git pull
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.route('/pullrestart')
-@login_required
 def pullrestart():
     app.logger.info("pullrestart request")
     import subprocess
@@ -242,13 +179,11 @@ python3 app.py &
     
 
 @app.route('/test')
-@login_required
 def test_func():
     app.logger.info("test request")
     return jsonify({"message": "Test Func"})
 
 @app.route('/load', methods=['POST'])
-@login_required
 def load():
     app.logger.info("load request")
     data = request.json
@@ -330,7 +265,6 @@ def load():
     return jsonify({"data": json.dumps(nodes), "throttle": throttle, "error_lines": error_lines, "avaliable_channels": avaliable_channels, "outputs": json.dumps(outputs)})
 
 @app.route('/loadarduinoinfo', methods=['POST'])
-@login_required
 def load_arduino_info():
     app.logger.info("loadarduinoinfo request")
     data = request.json
@@ -346,7 +280,6 @@ def load_arduino_info():
     return jsonify({"data": json.dumps(response)}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
 
 @app.route('/upload', methods=['POST'])
-@login_required
 def upload():
     app.logger.info("upload request")
     data = request.json
@@ -377,7 +310,6 @@ def upload():
 
 
 @app.route('/update-slider-values', methods=['POST'])
-@login_required
 def update_slider_values():
     app.logger.info("update-slider-values request")
     data = request.json
@@ -399,7 +331,6 @@ def update_slider_values():
 
 
 @app.route('/rename', methods=['POST'])
-@login_required
 def rename():
     app.logger.info("rename request")
     data = request.json
@@ -414,7 +345,6 @@ def rename():
     return jsonify(response)
 
 @app.route('/editesp', methods=['POST'])
-@login_required
 def editesp():
     app.logger.info("edit esp request")
     data = request.json
@@ -429,7 +359,6 @@ def editesp():
     return jsonify(response)
 
 @app.route('/update-channels', methods=['POST'])
-@login_required
 def update_channels():
     app.logger.info("update-channels request")
     data = request.json
@@ -453,7 +382,6 @@ def update_channels():
 
 
 @app.route('/getlog')
-@login_required
 def getlog():
     app.logger.info("getlog request")
     
