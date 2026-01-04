@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,101 +15,103 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/mode-python.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ext-language_tools.js"></script>
 </head>
+
 <body>
     <button id="upload">Upload</button>
     <button onclick="window.location.href = '/'"><- Home</button>
-    <p id="uploadStatus"></p>
-    <br>
-    <div id="graphContainer">
-        <svg id="graph" width="1000" height="300"></svg>
-        <table id="channelsTable"></table>
-    </div>
-    <div id="graphSettingsContainer">
-        <p id="current-time">Current time: Loading...</p>
-        <button id="new">New node</button>
-        <button id="delete">Delete selected node</button>
-        <br>
-        <br>
-        <br>
-        <form id="form">
-            <p class="inputDesc">Percentage</p>
-            <input type="text" value="50%" id="percentage">
-            <p class="inputDesc">Time</p>
-            <input type="text" value="06:00" id="time">
-            <p id="error"></p>
-            <button type="submit">Submit</button>
-        </form>
-    </div>
-    <br>
-    <div id="sliderContainer">
-        <form id="throttle-form">
-            <input id="slider-value" type="text" value="50%">
-        </form>
-        <input type="range" min="0" max="100" value="50" id="throttle" orient="vertical">
-    </div>
-    <br>
-    <p id="sliders-status"></p>
-    <button id="upload-sliders">Upload sliders</button>
-    <div id="sliders-wrapper">
-        <p id="sliders-error"></p>
-        <!-- Sliders will be generated here -->
-    </div>
+            <p id="uploadStatus"></p>
+            <br>
+            <div id="graphContainer">
+                <svg id="graph" width="1000" height="300"></svg>
+                <table id="channelsTable"></table>
+            </div>
+            <div id="graphSettingsContainer">
+                <p id="current-time">Current time: Loading...</p>
+                <button id="new">New node</button>
+                <button id="delete">Delete selected node</button>
+                <br>
+                <br>
+                <br>
+                <form id="form">
+                    <p class="inputDesc">Percentage</p>
+                    <input type="text" value="50%" id="percentage">
+                    <p class="inputDesc">Time</p>
+                    <input type="text" value="06:00" id="time">
+                    <p id="error"></p>
+                    <button type="submit">Submit</button>
+                </form>
+            </div>
+            <br>
+            <div id="sliderContainer">
+                <form id="throttle-form">
+                    <input id="slider-value" type="text" value="50%">
+                </form>
+                <input type="range" min="0" max="100" value="50" id="throttle" orient="vertical">
+            </div>
+            <br>
+            <p id="sliders-status"></p>
+            <button id="upload-sliders">Upload sliders</button>
+            <div id="sliders-wrapper">
+                <p id="sliders-error"></p>
+                <!-- Sliders will be generated here -->
+            </div>
 
 
-    <div id="esp32-config-template" style="display: none;">
-        <div class="popup-content">
-        <span class="close-btn">&times;</span>
-        <h2>Configure ESP32</h2>
-        <div class="form-group">
-            <label>Name:</label>
-            <input type="text" id="esp32-name" />
-        </div>
-        <div class="form-group">
-            <label>Frequency (Hz):</label>
-            <input type="number" id="esp32-freq" />
-        </div>
-        <div class="form-group">
-            <label>Resolution (bits):</label>
-            <input type="number" id="esp32-res" />
-        </div>
-        <div class="error-message"></div>
-        <div class="button-group">
-            <button class="submit-btn">Submit</button>
-            <button class="cancel-btn">Cancel</button>
-        </div>
-        </div>
-    </div>
-    
-    <div id="channel-config-template" style="display: none;">
-        <div class="popup-content">
-        <span class="close-btn">&times;</span>
-        <h2>Configure Channels</h2>
-        <div id="output-groups"></div>
-        <button class="add-output-btn">Add Group</button>
-        <div class="error-message"></div>
-        <div class="button-group">
-            <button class="submit-btn">Submit</button>
-            <button class="cancel-btn">Cancel</button>
-        </div>
-        </div>
-    </div>
-    
+            <div id="esp32-config-template" style="display: none;">
+                <div class="popup-content">
+                    <span class="close-btn">&times;</span>
+                    <h2>Configure ESP32</h2>
+                    <div class="form-group">
+                        <label>Name:</label>
+                        <input type="text" id="esp32-name" />
+                    </div>
+                    <div class="form-group">
+                        <label>Frequency (Hz):</label>
+                        <input type="number" id="esp32-freq" />
+                    </div>
+                    <div class="form-group">
+                        <label>Resolution (bits):</label>
+                        <input type="number" id="esp32-res" />
+                    </div>
+                    <div class="error-message"></div>
+                    <div class="button-group">
+                        <button class="submit-btn">Submit</button>
+                        <button class="cancel-btn">Cancel</button>
+                    </div>
+                </div>
+            </div>
 
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <br>
-    <button id="edit-channel-config" disabled>Edit channles</button>
-    <div class="cardss">
-        <p id="cards-status"></p>
-        <button id="refresh-cards">Refresh</button>
-        <div id="arduino_cards"></div>
-    </div>
-    
+            <div id="channel-config-template" style="display: none;">
+                <div class="popup-content">
+                    <span class="close-btn">&times;</span>
+                    <h2>Configure Channels</h2>
+                    <div id="output-groups"></div>
+                    <button class="add-output-btn">Add Group</button>
+                    <div class="error-message"></div>
+                    <div class="button-group">
+                        <button class="submit-btn">Submit</button>
+                        <button class="cancel-btn">Cancel</button>
+                    </div>
+                </div>
+            </div>
+
+
+            <br>
+            <br>
+            <br>
+            <br>
+            <br>
+            <br>
+            <br>
+            <br>
+            <button id="edit-channel-config" disabled>Edit channles</button>
+            <div class="cardss">
+                <p id="cards-status"></p>
+                <button id="refresh-cards">Refresh</button>
+                <div id="esp_cards"></div>
+            </div>
+
 </body>
 <script src="/static/lightpumps.js"></script>
+
 </html>

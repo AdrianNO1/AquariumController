@@ -21,7 +21,7 @@ const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;    // Don't change without altering manager.py
 
-const char* VERSION = "3w";
+const char* VERSION = "3.2w";
 const bool TEST = false;
 const char* ntpServer = "pool.ntp.org";  // NTP server for time sync
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
@@ -479,45 +479,45 @@ String handleCommand(String command, String args) {
 	if (command == "s") {
 		int pin, value, overwrite;
 		if (sscanf(args.c_str(), "%d %d %d", &pin, &value, &overwrite) == 3) {
-				Serial.println("Pin: " + String(pin));
-				Serial.println("Value: " + String(value));
-				Serial.println("Overwrite: " + String(overwrite));
-				if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
-						if (!attachedPins[pin]) {
-								if (ledcAttach(pin, freq, resolution)) {
-										attachedPins[pin] = true;
-										ledcWrite(pin, value);
-										lastPinValues[pin] = value;
-										
-										// Update pin state with overwrite information
-										if (overwrite == 1) {
-											pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
-										} else {
-											pinStates[pin] = {value, false, 0};
-										}
-										
-										response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
-								} else {
-										response = "E: LEDC attach failed";
-								}
+			Serial.println("Pin: " + String(pin));
+			Serial.println("Value: " + String(value));
+			Serial.println("Overwrite: " + String(overwrite));
+			if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
+				if (!attachedPins[pin]) {
+					if (ledcAttach(pin, freq, resolution)) {
+						attachedPins[pin] = true;
+						ledcWrite(pin, value);
+						lastPinValues[pin] = value;
+						
+						// Update pin state with overwrite information
+						if (overwrite == 1) {
+							pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
 						} else {
-								ledcWrite(pin, value);
-								lastPinValues[pin] = value;
-								
-								// Update pin state with overwrite information
-								if (overwrite == 1) {
-									pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
-								} else {
-									pinStates[pin] = {value, false, 0};
-								}
-								
-								response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+							pinStates[pin] = {value, false, 0};
 						}
+						
+						response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+					} else {
+						response = "E: LEDC attach failed";
+					}
 				} else {
-						response = "E: Invalid value or overwrite parameter";
+					ledcWrite(pin, value);
+					lastPinValues[pin] = value;
+					
+					// Update pin state with overwrite information
+					if (overwrite == 1) {
+						pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
+					} else {
+						pinStates[pin] = {value, false, 0};
+					}
+					
+					response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
 				}
+			} else {
+				response = "E: Invalid value or overwrite parameter";
+			}
 		} else {
-				response = "E: Invalid arguments";
+			response = "E: Invalid arguments";
 		}
 	}
 	
@@ -615,6 +615,21 @@ String handleCommand(String command, String args) {
 		} else {
 			response = "E: Invalid time value";
 		}
+	}
+	else if (command == "r") {
+        int pin;
+        char extra[32];
+        int count = sscanf(args.c_str(), "%d %31s", &pin, extra);
+        
+        if (count > 1) {
+            response = "E: Metadata not supported";
+        } else if (count == 1) {
+            pinMode(pin, INPUT);
+            int val = analogRead(pin);
+            response = "r " + String(pin) + " " + String(val);
+        } else {
+			response = "E: Invalid arguments";
+        }
 	}
 
 	return response;
@@ -929,6 +944,12 @@ void loop() {
 		lastTimeSave = millis();
 	}
 
+	static unsigned long lastOverwriteCheck = 0;
+	if (millis() - lastOverwriteCheck >= 200) {
+		checkOverwriteExpiries();
+		lastOverwriteCheck = millis();
+	}
+
 	// Process schedule if active
 	if (strlen(currentSchedule) > 0) {
 		unsigned long currentMillis = millis();
@@ -958,12 +979,7 @@ void loop() {
 							// Check if pin is currently overwritten
 							auto pinStateIt = pinStates.find(pin);
 							if (pinStateIt != pinStates.end() && pinStateIt->second.isOverwritten) {
-								// Check if overwrite has expired
-								if (currentMillis >= pinStateIt->second.overwriteExpiry) {
-									pinStateIt->second.isOverwritten = false;
-								} else {
-									continue; // Skip schedule update for this pin
-								}
+								continue; // Skip schedule update for this pin
 							}
 							
 							int targetValue = getScheduledValue(links, currentMinute);
@@ -992,7 +1008,9 @@ void loop() {
     // ------------------------------------------------------------------
     // Daily maintenance: restart WiFi and MQTT at 04:00 to reclaim memory
     // ------------------------------------------------------------------
-    if (timeInfo.timeInitialized) {
+    static unsigned long lastMaintenanceCheck = 0;
+    if (timeInfo.timeInitialized && millis() - lastMaintenanceCheck > 60000) {
+        lastMaintenanceCheck = millis();
         time_t now = getCurrentTime();
         struct tm timeinfo;
         localtime_r(&now, &timeinfo);
@@ -1014,6 +1032,38 @@ void loop() {
             lastReconnectAttempt = 0;
 
             lastRestartDayOfYear = timeinfo.tm_yday;
+        }
+    }
+}
+
+void checkOverwriteExpiries() {
+    unsigned long currentMillis = millis();
+    for (auto& pair : pinStates) {
+        int pin = pair.first;
+        PinState& state = pair.second;
+
+        if (state.isOverwritten && currentMillis >= state.overwriteExpiry) {
+            Serial.println("Overwrite expired for pin " + String(pin));
+            state.isOverwritten = false;
+            
+            // Determine if this pin is controlled by the schedule
+            bool controlledBySchedule = false;
+            if (strlen(currentSchedule) > 0) {
+				for (const auto& channel : activeChannels) {
+					if (channel.pin == pin) {
+						controlledBySchedule = true;
+						break;
+					}
+				}
+            }
+
+            // If not controlled by schedule (or no schedule), turn it off
+            if (!controlledBySchedule) {
+                Serial.println("No scheduled value for pin " + String(pin) + ", turning off");
+                ledcWrite(pin, 0);
+                lastPinValues[pin] = 0;
+            }
+            // If controlled by schedule, it will be updated in the next schedule loop
         }
     }
 }

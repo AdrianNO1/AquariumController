@@ -333,7 +333,16 @@
 
         .popup-close {
             cursor: pointer;
-            font-size: 20px;
+            font-size: 28px;
+            padding: 0 10px;
+            line-height: 1;
+            display: inline-block;
+            color: #888;
+            transition: color 0.2s;
+        }
+
+        .popup-close:hover {
+            color: #333;
         }
 
         .popup-content {
@@ -527,6 +536,11 @@
         .group-title-input {
             margin-top: 20px;
         }
+
+        .expired {
+            background-color: #ff4444 !important;
+            color: white !important;
+        }
     </style>
 </head>
 
@@ -605,9 +619,6 @@
                             <label>Device:</label>
                             <select class="device-select">
                                 <option value="">None</option>
-                                <option value="Device 1">Device 1</option>
-                                <option value="Device 2">Device 2</option>
-                                <option value="Device 3">Device 3</option>
                             </select>
                         </div>
                         <div class="form-row">
@@ -645,16 +656,15 @@
                         <div class="help-tooltip">
                             ?
                             <div class="tooltip-content">
-                                <h4>Available DSL Functions:</h4>
-                                <ul>
+                                <!-- <h4>Available DSL Functions:</h4> -->
+                                <!-- <ul>
                                     <li>turnOn()</li>
                                     <li>turnOff()</li>
                                     <li>readTemp("sensor")</li>
                                     <li>delay(minutes)</li>
                                     <li>ifOpen("switch")</li>
                                     <li>setTimer(time, action)</li>
-                                    <!-- Add more placeholder functions -->
-                                </ul>
+                                </ul> -->
                             </div>
                         </div>
                     </div>
@@ -699,6 +709,42 @@
             </div>
         </div>
     </template>
+
+    <template id="sensorConfigPopupTemplate">
+        <div class="popup-overlay sensor-config-popup">
+            <div class="popup">
+                <div class="popup-header">
+                    <h3>Configure Sensor: <span class="sensor-name"></span></h3>
+                    <span class="popup-close">×</span>
+                </div>
+                <div class="popup-content">
+                    <div class="form-row">
+                        <label>Device:</label>
+                        <select class="device-select">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label>Pin:</label>
+                        <input type="number" class="pin-input" min="0">
+                    </div>
+                    <div class="form-row">
+                        <label>Type:</label>
+                        <select class="read-type-select">
+                            <option value="">None</option>
+                            <option value="temp">Temp</option>
+                            <option value="ph">pH</option>
+                            <option value="redox">Redox</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="popup-buttons">
+                    <button class="cancel">Cancel</button>
+                    <button class="save">Save</button>
+                </div>
+            </div>
+        </div>
+    </template>
     <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/mode-python.js"></script>
@@ -722,21 +768,35 @@
             }
         };
 
+        function getSwitchStatus(mode, group, row) {
+            let status = mode;
+            if (mode === "auto") {
+                const statusObj = data.espstatuses && data.espstatuses.codegroups && data.espstatuses.codegroups[group] && data.espstatuses.codegroups[group][row];
+                if (statusObj) {
+                    status = "auto " + (statusObj.is_open ? "on" : "off");
+                } else {
+                    status = "auto ???";
+                }
+            }
+            return status;
+        }
+
         const statusSwitchesOrdering = ["Main High", "Main Low", "Loft High", "Loft Low", "Bad High", "Bad Low", "Sump High", "Sump Med", "Sump Low", "Frag High", "Frag Low", "Qt High", "Qt Low", "Qt2 High", "Qt2 Low", "Qt3 High", "Qt3 Low", "Qt4 High", "Qt4 Low", "Biljard High", "Biljard Low", "Sump2 High", "Sump2 Med", "Sump2 Low", "ATO High", "ATO Low", "Ca Low", "Kh Low", "Mg Low", "Lys 1", "Lys 2", "Lys 3", "Akvarium 1", "Akvarium 2", "Kjeller 1", "Kjeller 2", "Kjeller 3", "Loft", "Aux1", "Aux2"]
         const switchGroupsOrdering = ["Main", "Main 2", "Main 1b", "Main 2b", "Kjeller", "Kjeller 2", "Biljard", "Biljard 2", "Bad", "Loft"]
 
         console.log(data)
         $.ajax({
-            url: '/loadarduinoinfo',
+            url: '/loadespinfo',
             type: 'POST',
             async: false,
             success: function (response) {
                 if (response.data) {
+                    console.log("esp info:", response.data)
                     data.devices = JSON.parse(response.data);
                 }
             },
             error: function (response) {
-                console.error("Error loading arduino info:", response);
+                console.error("Error loading esp info:", response);
             }
         });
 
@@ -746,6 +806,7 @@
             async: false,
             success: function (response) {
                 console.log(response)
+                data.espstatuses = response.espstatuses;
 
                 // Load Sensors and Timers
                 if (response.espstatuses.sensors) {
@@ -765,11 +826,17 @@
                 if (response.main.timers) {
                     data.timers = response.main.timers;
                 }
+                if (response.main.sensors) {
+                    data.sensors.config = response.main.sensors;
+                } else {
+                    data.sensors.config = {};
+                }
                 let statusSwitches = response.main.switches
                 for (let [name, status] of Object.entries(statusSwitches)) {
                     statusSwitches[name].name = name
                     if (response.espstatuses.switches && response.espstatuses.switches[name]) {
                         statusSwitches[name].open = response.espstatuses.switches[name].is_open
+                        statusSwitches[name].updated_at = response.espstatuses.switches[name].updated_at
                         statusSwitches[name].status = status.alarm_when_closed && !statusSwitches[name].open || status.alarm_when_open && statusSwitches[name].open ? "ALARM" : "Ok"
                     } else {
                         statusSwitches[name].open = null;
@@ -784,16 +851,8 @@
                 for (let [name, switches] of Object.entries(switchGroups)) {
                     switchGroups[name] = Object.keys(switches.rows).map(row => {
                         const rowObj = switches.rows[row]
-                        let status = rowObj.mode
-                        if (rowObj.mode == "auto") {
-                            const statusObj = response.espstatuses.codegroups[name]?.[row]
-                            if (statusObj) {
-                                status = "auto " + (statusObj.is_open ? "on" : "off")
-                            } else {
-                                status = "auto ???"
-                            }
-                        }
-                        return { name: row, status, code: rowObj.code, pin: rowObj.pin }
+                        const status = getSwitchStatus(rowObj.mode, name, row);
+                        return { name: row, status, code: rowObj.code, pin: rowObj.pin, updated_at: rowObj.updated_at }
                     })
 
                 }
@@ -806,6 +865,28 @@
                 console.error(response)
             }
         });
+
+
+
+        function isExpired(dateStr) {
+            if (!dateStr) return false;
+            // Parse timestamp manually if it's ISO format but might be tricky?
+            // "2025-04-19T15:04:48.180396"
+            const date = new Date(dateStr);
+            const now = new Date();
+            const diff = now - date;
+            return diff > 3600 * 1000; // 1 hour in milliseconds
+        }
+
+        function formatSensorValue(sensor) {
+            if (sensor.type && sensor.type.startsWith('temp')) {
+                return `${sensor.value} °C`;
+            }
+            if (sensor.type === 'redox') {
+                return `${sensor.value} mV`;
+            }
+            return sensor.value;
+        }
 
         function createBox(content, className) {
             const box = document.createElement('div');
@@ -821,31 +902,46 @@
                         <td class="date-cell">${data.sensors.date} ${data.sensors.month}</td>
                         <td class="date-cell">${data.sensors.time}</td>
                     </tr>
-                    ${data.sensors.readings.map(s => `
-                        <tr>
-                            <td>${s.name === "Ph" || s.name === "Redox" || s.name.includes("Main") ? '<b>' + s.name + '</b>' : s.name}</td>
-                            <td class="sensor-value">${s.value}</td>
+                    ${data.sensors.readings.map(s => {
+                    const expired = isExpired(s.updated_at);
+                    const expiredClass = expired ? 'expired' : '';
+                    const titleAttr = expired ? `title="Expired. Last updated: ${s.updated_at}"` : '';
+
+                    return `
+                        <tr class="${expiredClass}" ${titleAttr}>
+                            <td onclick="sensorConfig.open('${s.name}')" style="cursor: pointer;">
+                                ${s.name === "Ph" || s.name === "Redox" || s.name.includes("Main") ? '<b>' + s.name + '</b>' : s.name}
+                            </td>
+                            <td class="sensor-value">${formatSensorValue(s)}</td>
                         </tr>
-                    `).join('')}
+                    `}).join('')}
                 </table>`,
                 'first-column'
             );
         }
 
         function createSwitchBox(title, switches, className) {
+            console.log("SWITHCES:", switches)
             return createBox(
-                `<div class="box-title" onclick="cellEdit.open('${title}')"><span>${title}</span><span class="${data.devices.filter(d => d.name === title).length == 0 || data.devices.find(d => d.name === title && d.error) ? 'error' : ''}">${data.devices.filter(d => d.name === title).length}</span></div>
+                `<div class="box-title" data-group="${title}" onclick="cellEdit.open('${title}')"><span>${title}</span><span class="${data.devices.filter(d => d.name === title).length == 0 || data.devices.find(d => d.name === title && d.error) ? 'error' : ''}">${data.devices.filter(d => d.name === title).length}</span></div>
                 <table class="switch-table">
-                    ${switches.map(sw => `
+                    ${switches.map(sw => {
+                    const expired = sw.status.toLowerCase().includes('auto') && isExpired(sw.updated_at);
+                    const statusText = sw.status == "auto on" ? 'Auto On' : sw.status == "auto off" ? 'Auto Off' : sw.status == "auto ???" ? 'Auto ???' : 'Auto';
+                    const displayText = expired ? statusText + " Expired" : statusText;
+                    const expiredClass = expired ? 'expired' : '';
+                    const titleAttr = expired ? `title="Expired. Last updated: ${sw.updated_at}"` : '';
+
+                    return `
                         <tr>
                             <td class="switch-name-cell" onclick="switchConfig.open('${title}', ${JSON.stringify(sw).replace(/"/g, '&quot;')})">
                                 ${sw.name}
                             </td>
                             <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'off')" class="switch-off ${sw.status === 'off' ? 'switch-enabled' : ''}">Off</td>
-                            <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'auto')" class="switch-auto ${sw.status == "auto on" ? 'switch-enabled' : sw.status != "auto off" ? 'switch-overwritten' : ''} ${!sw.code || !sw.pin ? 'no-code' : ''}">${sw.status == "auto on" ? 'Auto On' : sw.status == "auto off" ? 'Auto Off' : sw.status == "auto ???" ? 'Auto ???' : 'Auto'}</td>
+                            <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'auto')" class="switch-auto ${sw.status == "auto on" ? 'switch-enabled' : sw.status != "auto off" ? 'switch-overwritten' : ''} ${!sw.code || !sw.pin ? 'no-code' : ''} ${expiredClass}" ${titleAttr}>${displayText}</td>
                             <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'on')" class="switch-on ${sw.status === 'on' ? 'switch-enabled' : ''}">On</td>
                         </tr>
-                    `).join('')}
+                    `}).join('')}
                 </table>`,
                 className
             );
@@ -855,15 +951,20 @@
             return createBox(
                 `<div class="box-title">Switches</div>
                 <table class="switch-table">
-                    ${data.statusSwitches.map(sw => `
-                        <tr style="${!sw.device ? 'background-color: #d3d3d3;' : ''}">
+                    ${data.statusSwitches.map(sw => {
+                    const expired = sw.device && isExpired(sw.updated_at);
+                    const expiredClass = expired ? 'expired' : '';
+                    const titleAttr = expired ? `title="Expired. Last updated: ${sw.updated_at}"` : '';
+
+                    return `
+                        <tr style="${!sw.device ? 'background-color: #d3d3d3;' : ''}" class="${expiredClass}" ${titleAttr}>
                             <td class="switch-name-cell" onclick="statusSwitchEdit.open(${JSON.stringify(sw).replace(/"/g, '&quot;')})">${sw.name}</td>
                             ${sw.device ? `
                                 <td class="${sw.open === null ? 'status-alarm' : sw.open ? 'status-open' : 'status-closed'}">${sw.open === null ? 'Unknown' : sw.open ? 'Open' : 'Closed'}</td>
                                 <td class="${sw.status === 'Ok' ? 'status-ok' : 'status-alarm'}">${sw.status}</td>
                             ` : '<td colspan="2"></td>'}
                         </tr>
-                    `).join('')}
+                    `}).join('')}
                 </table>`,
                 'status-column'
             );
@@ -912,20 +1013,37 @@
                             `).join('')}
                     </tbody>
                     ${data.sensors.airTemps
-                    .map(s => `
-                                <tr>
+                    .map(s => {
+                        const expired = isExpired(s.updated_at);
+                        const expiredClass = expired ? 'expired' : '';
+                        const titleAttr = expired ? `title="Expired. Last updated: ${s.updated_at}"` : '';
+                        return `
+                                <tr class="${expiredClass}" ${titleAttr}>
                                     <td>${s.name}</td>
-                                    <td>${s.value}</td>
+                                    <td>${formatSensorValue(s)}</td>
                                 </tr>
-                            `).join('')}
+                            `}).join('')}
                     </tbody>
                 </table>
             `, 'first-column');
         }
 
         function checkForAlarms() {
-            // remember the data.devices errors
-            return true;
+            const sensorsExpired = data.sensors.readings.some(s => isExpired(s.updated_at));
+            const airTempsExpired = data.sensors.airTemps.some(s => isExpired(s.updated_at));
+            const switchesExpired = data.statusSwitches.some(sw => sw.device && isExpired(sw.updated_at));
+
+            let anyAutoSwitchExpired = false;
+            Object.values(data.switchGroups).forEach(group => {
+                if (group.some(sw => sw.status.toLowerCase().includes('auto') && isExpired(sw.updated_at))) {
+                    anyAutoSwitchExpired = true;
+                }
+            });
+
+            const anyAlarm = data.statusSwitches.some(sw => sw.status === 'ALARM');
+            const deviceErrors = data.devices.some(d => d.error);
+
+            return sensorsExpired || airTempsExpired || switchesExpired || anyAutoSwitchExpired || anyAlarm || deviceErrors;
         }
 
         const statusBar = document.getElementById('statusBar');
@@ -952,6 +1070,25 @@
         // Finally, add status switches on the right
         dashboard.appendChild(createStatusSwitchBox());
 
+        function setupPopupCloseOnOverlayClick(overlay, closeCallback) {
+            let isMouseDownOnOverlay = false;
+
+            overlay.addEventListener('mousedown', (e) => {
+                if (e.target === overlay) {
+                    isMouseDownOnOverlay = true;
+                } else {
+                    isMouseDownOnOverlay = false;
+                }
+            });
+
+            overlay.addEventListener('mouseup', (e) => {
+                if (e.target === overlay && isMouseDownOnOverlay) {
+                    closeCallback();
+                }
+                isMouseDownOnOverlay = false;
+            });
+        }
+
         const cellEdit = {
             currentGroup: null,
             overlay: null,
@@ -967,12 +1104,16 @@
                 this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
                 this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
                 this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+                setupPopupCloseOnOverlayClick(this.overlay, () => this.close());
             },
 
             open(groupTitle) {
                 const switches = data.switchGroups[groupTitle];
                 console.log(data)
-                this.currentGroup = { title: groupTitle, switches: [...switches] };
+                this.currentGroup = {
+                    title: groupTitle,
+                    switches: switches.map(s => ({ ...s, originalName: s.name }))
+                };
                 this.overlay.style.display = 'block';
 
                 const titleInput = this.overlay.querySelector('.group-title-input');
@@ -989,19 +1130,33 @@
             renderSwitches() {
                 const list = this.overlay.querySelector('.switches-list');
                 list.innerHTML = this.currentGroup.switches.map((sw, idx) => `
-                    <div class="switch-item">
-                        <input type="text" value="${sw.name}">
+                    <div class="switch-item" data-index="${idx}">
+                        <input type="text" value="${sw.name}" class="switch-name-input">
                         <button onclick="cellEdit.removeSwitch(${idx})">Remove</button>
                     </div>
                 `).join('');
             },
 
             addSwitch() {
-                this.currentGroup.switches.push({ name: "New Switch", status: "auto off" });
+                this.readCurrentValues();
+                this.currentGroup.switches.push({ name: "New Switch", originalName: null, status: "auto off" });
                 this.renderSwitches();
             },
 
+            readCurrentValues() {
+                const list = this.overlay.querySelector('.switches-list');
+                const items = list.querySelectorAll('.switch-item');
+                items.forEach(item => {
+                    const idx = parseInt(item.dataset.index);
+                    const input = item.querySelector('.switch-name-input');
+                    if (this.currentGroup.switches[idx]) {
+                        this.currentGroup.switches[idx].name = input.value;
+                    }
+                });
+            },
+
             removeSwitch(index) {
+                this.readCurrentValues();
                 this.currentGroup.switches.splice(index, 1);
                 this.renderSwitches();
             },
@@ -1015,6 +1170,7 @@
                 saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
 
                 try {
+                    this.readCurrentValues();
                     const newSwitches = this.currentGroup.switches
                     const newTitle = this.overlay.querySelector('.group-title-input').value;
                     const originalGroupTitle = this.currentGroup.title;
@@ -1026,9 +1182,18 @@
                         switches: newSwitches
                     });
 
-                    // Simulate API call returning the updated group data
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    const apiResponse = { newTitle, newSwitches } // Simulated API response
+                    const response = await $.ajax({
+                        url: '/savegroup',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({
+                            originalTitle: originalGroupTitle,
+                            newTitle: newTitle,
+                            switches: newSwitches
+                        })
+                    });
+
+                    const apiResponse = response;
 
                     // Update the data structure
                     delete data.switchGroups[originalGroupTitle];
@@ -1038,7 +1203,7 @@
                     const switchBoxes = document.querySelectorAll('.switch-columns .box');
                     for (let box of switchBoxes) {
                         const titleDiv = box.querySelector('.box-title');
-                        if (titleDiv && titleDiv.textContent === originalGroupTitle) {
+                        if (titleDiv && titleDiv.dataset.group === originalGroupTitle) {
                             const newBox = createSwitchBox(apiResponse.newTitle, apiResponse.newSwitches, '');
                             box.parentNode.replaceChild(newBox, box);
                             break;
@@ -1071,6 +1236,7 @@
                 this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
                 this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
                 this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+                setupPopupCloseOnOverlayClick(this.overlay, () => this.close());
             },
 
             open(switchData) {
@@ -1083,6 +1249,16 @@
                 const alarmWhenClosedInput = this.overlay.querySelector('.alarm-when-closed-input');
                 const alarmWhenOpenInput = this.overlay.querySelector('.alarm-when-open-input');
                 const alarmDelayInput = this.overlay.querySelector('.alarm-delay-input');
+
+                // Populate device selector
+                deviceSelect.innerHTML = '<option value="">None</option>';
+                const uniqueDeviceNames = [...new Set(data.devices.map(d => d.name))].sort();
+                uniqueDeviceNames.forEach(name => {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    deviceSelect.appendChild(option);
+                });
 
                 nameInput.value = switchData.name;
                 deviceSelect.value = switchData.device || '';
@@ -1190,6 +1366,7 @@
                 this.overlay.querySelector('.run-once').addEventListener('click', () => this.runOnce());
                 this.overlay.querySelector('.dsl-code').addEventListener('input', () => this.unsavedChanges = true);
                 this.overlay.querySelector('.pin-input').addEventListener('input', () => this.unsavedChanges = true);
+                setupPopupCloseOnOverlayClick(this.overlay, () => this.close());
             },
 
             open(groupTitle, switchData) {
@@ -1291,13 +1468,21 @@
                         const switchBoxes = document.querySelectorAll('.switch-columns .box');
                         for (let box of switchBoxes) {
                             const titleDiv = box.querySelector('.box-title');
-                            if (titleDiv && titleDiv.textContent === groupTitle) {
+                            if (titleDiv && titleDiv.dataset.group === groupTitle) {
                                 const newBox = createSwitchBox(groupTitle, group, '');
                                 box.parentNode.replaceChild(newBox, box);
                                 break;
                             }
                         }
                         this.unsavedChanges = false;
+                        if (response.updated_at) {
+                            // Update updated_at locally so UI reflects change if needed
+                            const group = data.switchGroups[groupTitle];
+                            const switchIndex = group.findIndex(s => s.name === switchName);
+                            if (switchIndex !== -1) {
+                                group[switchIndex].updated_at = response.updated_at;
+                            }
+                        }
                         showSuccess(`${action} successful!`);
                         this.close();
                     }
@@ -1324,6 +1509,103 @@
                 const runBtn = this.overlay.querySelector('.run-once');
                 await this.performAction('Run', runBtn);
             },
+        };
+
+        const sensorConfig = {
+            currentSensor: null,
+            overlay: null,
+            isProcessing: false,
+
+            init() {
+                document.body.insertAdjacentHTML('beforeend', document.getElementById('sensorConfigPopupTemplate').innerHTML);
+                this.overlay = document.querySelector('.sensor-config-popup');
+                this.setupListeners();
+            },
+
+            setupListeners() {
+                this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
+                this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+                setupPopupCloseOnOverlayClick(this.overlay, () => this.close());
+            },
+
+            open(sensorName) {
+                this.currentSensor = sensorName;
+                const config = data.sensors.config && data.sensors.config[sensorName] ? data.sensors.config[sensorName] : {};
+
+                this.overlay.querySelector('.sensor-name').textContent = sensorName;
+
+                const deviceSelect = this.overlay.querySelector('.device-select');
+                deviceSelect.innerHTML = '<option value="">None</option>';
+                const uniqueDeviceNames = [...new Set(data.devices.map(d => d.name))].sort();
+                uniqueDeviceNames.forEach(name => {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    deviceSelect.appendChild(option);
+                });
+                deviceSelect.value = config.device || '';
+
+                this.overlay.querySelector('.pin-input').value = config.pin || '';
+                this.overlay.querySelector('.read-type-select').value = config.readType || '';
+
+                this.overlay.style.display = 'block';
+            },
+
+            close() {
+                this.overlay.style.display = 'none';
+                this.currentSensor = null;
+            },
+
+            async save() {
+                if (this.isProcessing) return;
+                this.isProcessing = true;
+                const saveBtn = this.overlay.querySelector('.save');
+                const originalText = saveBtn.textContent;
+                saveBtn.innerHTML = '<span class="spinner"></span>Saving...';
+
+                try {
+                    const device = this.overlay.querySelector('.device-select').value;
+                    const pin = this.overlay.querySelector('.pin-input').value ? parseInt(this.overlay.querySelector('.pin-input').value) : null;
+                    const readType = this.overlay.querySelector('.read-type-select').value;
+
+                    const payload = {
+                        name: this.currentSensor,
+                        device,
+                        pin,
+                        readType
+                    };
+
+                    await $.ajax({
+                        url: '/savesensor',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify(payload)
+                    });
+
+                    // Update local data
+                    if (!data.sensors.config) data.sensors.config = {};
+                    data.sensors.config[this.currentSensor] = { device, pin, readType };
+
+                    // Re-render sensor box to update metadata tooltip or similar
+                    const sensorBoxes = document.querySelector('.sensor-boxes');
+                    if (sensorBoxes) {
+                        const oldBox = sensorBoxes.firstElementChild; // Assuming sensor box is first
+                        if (oldBox) {
+                            const newBox = createSensorBox();
+                            sensorBoxes.replaceChild(newBox, oldBox);
+                        }
+                    }
+
+                    showSuccess();
+                    this.close();
+                } catch (error) {
+                    alert('Error saving sensor config: ' + error.message);
+                } finally {
+                    this.isProcessing = false;
+                    saveBtn.textContent = originalText;
+                }
+            }
         };
 
         const countdownManager = {
@@ -1367,6 +1649,7 @@
                 this.overlay.querySelector('.popup-close').addEventListener('click', () => this.close());
                 this.overlay.querySelector('.cancel').addEventListener('click', () => this.close());
                 this.overlay.querySelector('.save').addEventListener('click', () => this.save());
+                setupPopupCloseOnOverlayClick(this.overlay, () => this.close());
             },
 
             handleStatusClick(element) {
@@ -1396,11 +1679,12 @@
                     const payload = this.prepareApiPayload(type, name, 'start');
                     console.log('API call for start timer:', payload);
 
-                    // Simulate API call
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-
-                    const endTime = new Date(Date.now() + 30 * 60000); // Default 30 minutes
-                    this.startCountdown(type, name, endTime);
+                    await $.ajax({
+                        url: '/timer',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify(payload)
+                    });
 
                     // Update data structure
                     const items = type === 'flowkill'
@@ -1410,6 +1694,12 @@
                     const item = items.find(i =>
                         (type === 'flowkill' ? i.name : i.type) === name
                     );
+
+                    const duration = item && item.duration ? item.duration : 30;
+                    const endTime = new Date(Date.now() + duration * 60 * 1000);
+                    this.startCountdown(type, name, endTime);
+
+
                     if (item) item.countDownEnd = endTime.toISOString();
 
                     showSuccess();
@@ -1425,6 +1715,13 @@
                 this.currentItem = { type, name };
                 this.overlay.style.display = 'block';
                 this.overlay.querySelector('.countdown-name').textContent = name;
+
+                // Find existing duration if any
+                const items = type === 'flowkill' ? data.timers.flowKills : data.timers.feeds;
+                const item = items.find(i => (type === 'flowkill' ? i.name : i.type) === name);
+                const duration = item && item.duration ? item.duration : 30;
+
+                this.overlay.querySelector('.duration-input').value = duration;
             },
 
             close() {
@@ -1467,8 +1764,19 @@
                     );
                     console.log('API call for save countdown configuration:', payload);
 
-                    // Simulate API call
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await $.ajax({
+                        url: '/timer',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify(payload)
+                    });
+
+                    // Update data structure locally
+                    const items = this.currentItem.type === 'flowkill' ? data.timers.flowKills : data.timers.feeds;
+                    const item = items.find(i => (this.currentItem.type === 'flowkill' ? i.name : i.type) === this.currentItem.name);
+                    if (item) {
+                        item.duration = duration;
+                    }
 
                     showSuccess();
                     this.close();
@@ -1495,8 +1803,12 @@
                     const payload = this.prepareApiPayload(type, name, 'stop');
                     console.log('API call for stop countdown:', payload);
 
-                    // Simulate API call
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await $.ajax({
+                        url: '/timer',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify(payload)
+                    });
 
                     const key = `${type}-${name}`;
                     this.activeCountdowns.delete(key);
@@ -1598,10 +1910,26 @@
                     }),
                 });
                 console.log('Switch overwrite set successfully:', response);
-                // Note: The UI state (color, text) isn't updated here based on the response.
-                // It relies on the next data refresh or manual page reload.
-                // If immediate UI feedback is needed, the response should contain the new state,
-                // and the element's classes/content should be updated accordingly here.
+
+                if (data.switchGroups && data.switchGroups[groupTitle]) {
+                    const group = data.switchGroups[groupTitle];
+                    const switchObj = group.find(s => s.name === switchName);
+
+                    if (switchObj) {
+                        switchObj.status = getSwitchStatus(action, groupTitle, switchName);
+
+                        const switchBoxes = document.querySelectorAll('.switch-columns .box');
+                        for (let box of switchBoxes) {
+                            const titleDiv = box.querySelector('.box-title');
+                            if (titleDiv && titleDiv.dataset.group === groupTitle) {
+                                const newBox = createSwitchBox(groupTitle, group, '');
+                                box.parentNode.replaceChild(newBox, box);
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 showSuccess();
             } catch (xhr) {
                 const error = xhr.responseText || xhr.statusText || 'Unknown error';
@@ -1623,12 +1951,11 @@
         }
 
         // Close modal when clicking outside
-        window.onclick = function (event) {
-            const modal = document.getElementById('debugModal');
-            if (event.target === modal) {
-                modal.style.display = 'none';
-            }
-        }
+        // Close modal when clicking outside
+        const debugModal = document.getElementById('debugModal');
+        setupPopupCloseOnOverlayClick(debugModal, () => {
+            debugModal.style.display = 'none';
+        });
 
         async function makeApiCall(endpoint) {
             const responseArea = document.getElementById('responseArea');
@@ -1664,18 +1991,8 @@
             cellEdit.init();
             statusSwitchEdit.init();
             switchConfig.init();
+            sensorConfig.init();
             countdownManager.init();
-
-            // const switchNameCells = document.querySelectorAll('.switch-name-cell');
-            // console.log(switchNameCells)
-
-            // for (const cell of Array.from(switchNameCells).slice(62)) {
-            //     cell.click();
-            //     const popup = document.querySelector('.status-switch-popup');
-            //     const saveButton = popup.querySelector('.save');
-            //     saveButton.click();
-            //     await new Promise(resolve => setTimeout(resolve, 200));
-            // }
         });
     </script>
 </body>

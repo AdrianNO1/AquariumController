@@ -27,7 +27,7 @@ from manager import main
 from custom_syntax import parse_code
 import threading
 import queue, logging, glob, subprocess, signal
-from utils import read_json_file
+from utils import read_json_file, write_json_file
 from smsalert import sms_alert
 
 # run on pi: pip install flask_login flask_limiter
@@ -64,12 +64,10 @@ homepagedata_path = os.path.join("data", "homepagedata.json")
 espstatuses_path = os.path.join("data", "espstatuses.json")
 
 if not os.path.exists(homepagedata_path):
-    with open(homepagedata_path, "w", encoding="utf-8") as f:
-        json.dump({"codegroups": {}, "switches": {}, "timers": {}}, f, indent=4)
+    write_json_file(homepagedata_path, {"codegroups": {}, "switches": {}, "timers": {}})
 
 if not os.path.exists(espstatuses_path):
-    with open(espstatuses_path, "w", encoding="utf-8") as f:
-        json.dump({"codegroups": {}, "switches": {}, "timers": {}}, f, indent=4)
+    write_json_file(espstatuses_path, {"codegroups": {}, "switches": {}, "timers": {}})
 
 def clear_res_queue():
     while not response_queue.empty():
@@ -237,8 +235,7 @@ def load():
 
             did_something = True
     if did_something:
-        with open(links_path, "w", encoding="utf-8") as f:
-            json.dump(nodes, f, indent=4)
+        write_json_file(links_path, nodes)
     avaliable_channels = []
     for key in nodes.keys():
         avaliable_channels.append(key)
@@ -274,16 +271,16 @@ def load():
 
     return jsonify({"data": json.dumps(nodes), "throttle": throttle, "error_lines": error_lines, "avaliable_channels": avaliable_channels, "outputs": json.dumps(outputs)})
 
-@app.route('/loadarduinoinfo', methods=['POST'])
-def load_arduino_info():
-    app.logger.info("loadarduinoinfo request")
+@app.route('/loadespinfo', methods=['POST'])
+def load_esp_info():
+    app.logger.info("load ESP info request")
     
     clear_res_queue()
-    task_queue.put("get_arduinos")
+    task_queue.put("get_esps")
     try:
         response = response_queue.get(timeout=30)
     except queue.Empty:
-        return jsonify({"error": "Unable to fetch arduino data. The manager is not responding. It may have crashed and may not be updating the arduinos."})
+        return jsonify({"error": "Unable to fetch esp data. The manager is not responding. It may have crashed and may not be updating the esps."})
 
 
     return jsonify({"data": json.dumps(response)}) # , "arduinoConstants": json.dumps(code["arduinoConstants"])
@@ -297,13 +294,11 @@ def upload():
     links = read_json_file(links_path)
     for key in data["links_data"]:
         links[key] = data["links_data"][key]
-    with open(links_path, "w", encoding="utf-8") as f:
-        json.dump(links, f, indent=4)
+    write_json_file(links_path, links)
 
     throttle = read_json_file(throttle_path)
     throttle[mode + "throttle"] = data["throttle"]
-    with open(throttle_path, "w", encoding="utf-8") as f:
-        json.dump(throttle, f, indent=4)
+    write_json_file(throttle_path, throttle)
 
     response = {'message': 'ok'}
 
@@ -323,8 +318,7 @@ def update_slider_values():
     app.logger.info("update-slider-values request")
     data = request.json
 
-    with open(temporaryoverwritesliders_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    write_json_file(temporaryoverwritesliders_path, data)
     
     response = {'message': 'ok'}
 
@@ -375,7 +369,7 @@ def update_channels():
         return jsonify({'error': "no outputs in data"}), 400
     
     try:
-        json.dump(data["outputs"], open(channels_path, "w", encoding="utf-8"), indent=4)
+        write_json_file(channels_path, data["outputs"])
     except Exception as e:
         return jsonify({'error': f"error when writing to file: {str(e)}"}), 400,
 
@@ -447,19 +441,27 @@ def getlog():
 @app.route("/savecoderow", methods=['POST'])
 def savecoderow():
     app.logger.info("save code row request")
-    data = request.json # {'action': 'verify', 'groupTitle': 'Main 2', 'switchName': 'Ventilasjn', 'pin': 4, 'code': 'coeeee'}
+    data = request.json # {'action': 'verify', 'groupTitle': 'Main 2', 'switchName': 'Ventilasjon', 'pin': 4, 'code': 'coeeee'}
     
     if data["action"] == "save":
-        existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
+        existing_json = read_json_file(homepagedata_path)
         if not data["groupTitle"] in existing_json["codegroups"]:
             existing_json["codegroups"][data["groupTitle"]] = {"rows": {}}
+            
+        current_rows = existing_json["codegroups"][data["groupTitle"]]["rows"]
+        current_row_data = current_rows[data["switchName"]]
+        mode = current_row_data["mode"]
+        
+        updated_at = datetime.now().isoformat()
         existing_json["codegroups"][data["groupTitle"]]["rows"][data["switchName"]] = {
             "pin": data["pin"],
             "code": data["code"],
-            "updated_at": datetime.now().isoformat()
+            "mode": mode,
+            "updated_at": updated_at
         }
-        with open(homepagedata_path, "w", encoding="utf-8") as f:
-            json.dump(existing_json, f, indent=4)
+        write_json_file(homepagedata_path, existing_json)
+        return jsonify({"message": "ok", "updated_at": updated_at})
+        
 
     elif data["action"] == "verify":
         is_valid, code_error = verify_code(data["code"])
@@ -480,26 +482,26 @@ def saveswitch():
     app.logger.info("saveswitch request")
     data = request.json # {'originalName': 'Sump High', 'name': 'Sump High', 'device': 'Device 1', 'pin': 33, 'alarm_when_closed': False, 'alarm_delay': 30}
 
-    existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
+    existing_json = read_json_file(homepagedata_path)
     if data["originalName"] != data["name"]:
         if data["originalName"] in existing_json["switches"]:
             del existing_json["switches"][data["originalName"]]
     existing_json["switches"][data["name"]] = {
         "pin": data["pin"],
-        "alarm_when_closed": data["alarm_when_closed"],
+        "alarm_when_closed": data.get("alarm_when_closed", True),
+        "alarm_when_open": data.get("alarm_when_open", True),
         "alarm_delay": data["alarm_delay"],
         "device": data["device"]
     }
-    with open(homepagedata_path, "w", encoding="utf-8") as f:
-        json.dump(existing_json, f, indent=4)
+    write_json_file(homepagedata_path, existing_json)
     return jsonify({"message": "ok"})
 
 @app.route("/setswitchoverwrite", methods=['POST'])
 def setswitchoverwrite():
     app.logger.info("setswitchoverwrite request")
     data = request.json
-    print(data) # {'groupTitle': 'Main 2', 'switchName': 'Ventilasjn', 'action': 'on'}
-    existing_json = json.load(open(homepagedata_path, "r", encoding="utf-8"))
+    print(data) # {'groupTitle': 'Main 2', 'switchName': 'Ventilasjon', 'action': 'on'}
+    existing_json = read_json_file(homepagedata_path)
     if not data["groupTitle"] in existing_json["codegroups"]:
         existing_json["codegroups"][data["groupTitle"]] = {"rows": {}}
     if not data["switchName"] in existing_json["codegroups"][data["groupTitle"]]["rows"]:
@@ -509,10 +511,121 @@ def setswitchoverwrite():
             "updated_at": datetime.now().isoformat()
         }
     existing_json["codegroups"][data["groupTitle"]]["rows"][data["switchName"]]["mode"] = data["action"]
+    existing_json["codegroups"][data["groupTitle"]]["rows"][data["switchName"]]["updated_at"] = datetime.now().isoformat()
 
-    with open(homepagedata_path, "w", encoding="utf-8") as f:
-        json.dump(existing_json, f, indent=4)
+    write_json_file(homepagedata_path, existing_json)
 
+    return jsonify({"message": "ok"})
+
+@app.route("/savegroup", methods=['POST'])
+def savegroup():
+    app.logger.info("savegroup request")
+    data = request.json # { 'originalTitle': '...', 'newTitle': '...', 'switches': [{ 'name': '...', 'status': '...' }, ...] }
+
+    existing_json = read_json_file(homepagedata_path)
+    
+    # Handle renaming
+    if data["originalTitle"] != data["newTitle"]:
+        if data["originalTitle"] in existing_json["codegroups"]:
+            existing_json["codegroups"][data["newTitle"]] = existing_json["codegroups"].pop(data["originalTitle"])
+    
+    group_title = data["newTitle"]
+    if group_title not in existing_json["codegroups"]:
+        existing_json["codegroups"][group_title] = {"rows": {}}
+    
+    current_rows = existing_json["codegroups"][group_title]["rows"]
+    new_rows_data = {}
+
+    for sw in data["switches"]:
+        name = sw["name"]
+        
+        # Check if we have an original name to link to existing data
+        original_name = sw.get("originalName")
+        
+        if original_name and original_name in current_rows:
+            # renamed or same name
+            new_rows_data[name] = current_rows[original_name]
+            if original_name != name:
+                new_rows_data[name]["updated_at"] = datetime.now().isoformat()
+        elif name in current_rows:
+             # Just in case originalName wasn't sent but name matches (unlikely if logic is correct but good fallback)
+            new_rows_data[name] = current_rows[name]
+        else:
+            # Create new
+            new_rows_data[name] = {
+                "pin": None,
+                "code": "",
+                "updated_at": datetime.now().isoformat(),
+                "mode": "auto"
+            }
+            
+    existing_json["codegroups"][group_title]["rows"] = new_rows_data
+    
+    write_json_file(homepagedata_path, existing_json)
+    
+    response_switches = []
+    for sw in data["switches"]:
+        name = sw["name"]
+        row_data = new_rows_data.get(name)
+        if row_data:
+            mode = row_data.get("mode", "auto")
+            response_switches.append({
+                "name": name,
+                "status": mode, 
+                "mode": mode,
+                "code": row_data.get("code", ""),
+                "pin": row_data.get("pin"),
+                "updated_at": row_data.get("updated_at")
+            })
+    
+    return jsonify({
+        "newTitle": group_title,
+        "newSwitches": response_switches
+    })
+
+@app.route("/timer", methods=['POST'])
+def timer_action():
+    app.logger.info("timer request")
+    data = request.json 
+    
+    existing_json = read_json_file(homepagedata_path)
+    if "timers" not in existing_json:
+        existing_json["timers"] = {"flowKills": [], "feeds": []}
+        
+    target_list = None
+    if data["type"] == "flowkill":
+        target_list = existing_json["timers"]["flowKills"]
+        search_key = "name"
+    elif data["type"] == "feed":
+        target_list = existing_json["timers"]["feeds"]
+        search_key = "type"
+    else:
+        return jsonify({"error": "invalid type"}), 400
+        
+    # Find item
+    item = next((i for i in target_list if i[search_key] == data["name"]), None)
+    if not item:
+         return jsonify({"error": "item not found"}), 404
+         
+    if data["action"] == "start":
+        duration = data.get("duration", 30) 
+        # Check if item allows custom duration configuration
+        if "duration" in item:
+            duration = item["duration"]
+             
+        end_time = datetime.now() + timedelta(minutes=duration)
+        item["countDownEnd"] = end_time.isoformat()
+        
+    elif data["action"] == "stop":
+        item["countDownEnd"] = None
+        
+    elif data["action"] == "configure":
+        item["duration"] = data["duration"]
+        
+    else:
+        return jsonify({"error": "invalid action"}), 400
+        
+    write_json_file(homepagedata_path, existing_json)
     return jsonify({"message": "ok"})
 
 @app.route("/loadmainpageinfo")
@@ -532,6 +645,25 @@ def loadmainpageinfo():
                     espstatuses["codegroups"][group_name][row_name] = {"is_open": False}
 
     return jsonify({"main": existing_json, "espstatuses": espstatuses})
+
+@app.route("/savesensor", methods=['POST'])
+def savesensor():
+    app.logger.info("savesensor request")
+    data = request.json 
+    # {'name': 'SensorName', 'device': 'DeviceName', 'pin': 123, 'metadata': '...'}
+
+    existing_json = read_json_file(homepagedata_path)
+    if "sensors" not in existing_json:
+        existing_json["sensors"] = {}
+    
+    existing_json["sensors"][data["name"]] = {
+        "device": data["device"],
+        "pin": data["pin"],
+        "readType": data["readType"]
+    }
+    
+    write_json_file(homepagedata_path, existing_json)
+    return jsonify({"message": "ok"})
 
 if __name__ == '__main__':
     # Create queues for communication
@@ -554,11 +686,10 @@ if __name__ == '__main__':
     #         raise ValueError("Invalid argument. Use 'test' or 'notest'")
         
     if os.path.exists("test.json"):
-        test = json.load(open("test.json", "r", encoding="utf-8"))["test"]
+        test = read_json_file("test.json")["test"]
     else:
         test = True
-        with open("test.json", "w", encoding="utf-8") as f:
-            json.dump({"test": True}, f, indent=4)
+        write_json_file("test.json", {"test": True})
 
     # Function to run in the thread
     def thread_function():

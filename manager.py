@@ -7,7 +7,7 @@ def main(task_queue, response_queue, test=False):
         from datetime import datetime
         from custom_syntax import parse_code, get_current_strength
         from logging.handlers import TimedRotatingFileHandler
-        from utils import read_json_file
+        from utils import read_json_file, write_json_file
 
         slaves = []
         logger = logging.getLogger(__name__)
@@ -247,7 +247,7 @@ def main(task_queue, response_queue, test=False):
             if task:
                 logger.info(f"Recieved message from queue: {task}.")
                 response = "Error: no error info given"
-                if task == "get_arduinos":
+                if task == "get_esps":
                     response_queue.put([{x: device[x] for x in device if x not in "serial"} for device in slaves])
                     return
                 elif task == "preview":
@@ -356,7 +356,6 @@ def main(task_queue, response_queue, test=False):
                 
                 if matches:
                     for device in matches:
-                        print("building command for", device["name"])
                         for info in device_outputs[name]:
                             if preview_start != 0:
                                 if time.time() - preview_start >= preview_duration:
@@ -398,8 +397,110 @@ def main(task_queue, response_queue, test=False):
                 else:
                     logger.error("Error: esp_controller returned: " + str(responses))
 
-        # if not test:
-        #     setup_usb_listener(on_connect, on_disconnect)
+        def read_device_sensors():
+            # Read sensors and switches
+            try:
+                homepagedata_path = os.path.join("data", "homepagedata.json")
+                espstatuses_path = os.path.join("data", "espstatuses.json")
+                
+                homepagedata = read_json_file(homepagedata_path)
+                
+                commands = []
+                # Map index to (type, key, extra_info)
+                # For switches: ("switch", switch_name, None)
+                # For sensors: ("sensor", sensor_key/name, sensor_type)
+                map_index_to_item = {} 
+                
+                command_str = ""
+                cmd_idx = 0
+
+                # Process switches
+                if "switches" in homepagedata:
+                    for name, data in homepagedata["switches"].items():
+                        if data.get("device") and data.get("pin") is not None:
+                            cmd = f"{data['device']} r {data['pin']} switch"
+                            command_str += cmd + ";"
+                            map_index_to_item[cmd_idx] = ("switch", name, None)
+                            cmd_idx += 1
+
+                # Process sensors
+                if "sensors" in homepagedata:
+                    for name, data in homepagedata["sensors"].items():
+                        if data.get("device") and data.get("pin") is not None:
+                            read_type = data.get("readType", "raw")
+                            cmd = f"{data['device']} r {data['pin']} {read_type}"
+                            command_str += cmd + ";"
+                            map_index_to_item[cmd_idx] = ("sensor", name, read_type)
+                            cmd_idx += 1
+                            
+                if command_str:
+                    responses = esp_controller.run_command(command_str.strip(";"))
+                    
+                    if responses:
+                        espstatuses = read_json_file(espstatuses_path)
+                        current_time_iso = datetime.now().isoformat()
+                        
+                        # Ensure structures depend on existing file or init if needed
+                        if "switches" not in espstatuses:
+                            espstatuses["switches"] = {}
+                        # Handle sensors list -> dict for easy update, then back to list if needed
+                        # But wait, sensors is a list in espstatuses.
+                        # Let's map it by name
+                        sensor_map = {}
+                        if "sensors" in espstatuses and isinstance(espstatuses["sensors"], list):
+                            for s in espstatuses["sensors"]:
+                                if "name" in s:
+                                    sensor_map[s["name"]] = s
+                        
+                        for idx_str, result in responses.items():
+                            idx = int(idx_str)
+                            if idx in map_index_to_item and result["status"]:
+                                item_type, item_name, extra_info = map_index_to_item[idx]
+                                
+                                # Parse response: "r {pin} {val}"
+                                msg = result["message"]
+                                parts = msg.split()
+                                if len(parts) >= 3:
+                                    val_str = parts[2]
+                                    
+                                    if item_type == "switch":
+                                        # val should be 0 or 1
+                                        try:
+                                            is_open = (int(val_str) == 1) # Assuming 1 is true
+                                            espstatuses["switches"][item_name] = {
+                                                "is_open": is_open,
+                                                "updated_at": current_time_iso
+                                            }
+                                        except ValueError:
+                                            logger.warn(f"Invalid switch value for {item_name}: {val_str}")
+                                            
+                                    elif item_type == "sensor":
+                                        # val could be float
+                                        try:
+                                            val = float(val_str)
+                                            # Update or create sensor entry
+                                            if item_name in sensor_map:
+                                                sensor_map[item_name]["value"] = val
+                                                sensor_map[item_name]["updated_at"] = current_time_iso
+                                                sensor_map[item_name]["type"] = extra_info
+                                            else:
+                                                sensor_map[item_name] = {
+                                                    "name": item_name,
+                                                    "type": extra_info,
+                                                    "value": val,
+                                                    "updated_at": current_time_iso
+                                                }
+                                        except ValueError:
+                                            logger.warn(f"Invalid sensor value for {item_name}: {val_str}")
+                                            
+                        # Convert sensor map back to list
+                        espstatuses["sensors"] = list(sensor_map.values())
+                        
+                        write_json_file(espstatuses_path, espstatuses)
+                        
+            except Exception as e:
+                logger.error(f"Error reading sensors/switches: {e}")
+
 
 
         def load_device_outputs(retries=4):
@@ -444,7 +545,7 @@ def main(task_queue, response_queue, test=False):
             if (last_updated + update_frequency) < time.time():
                 last_updated = time.time()
                 update_device_outputs(overwrite_schedule=True)
-
+                read_device_sensors()
 
 
 

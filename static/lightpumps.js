@@ -1,29 +1,29 @@
 // Define the dimensions and margins of the graph
-var margin = {top: 20, right: 20, bottom: 30, left: 50},
+var margin = { top: 20, right: 20, bottom: 30, left: 50 },
     width = 1000 - margin.left - margin.right,
     height = 300 - margin.top - margin.bottom;
 
 // Append the svg object to the body of the page
 var mainSvg = d3.select("#graph")
-  .attr("width", width + margin.left + margin.right)
-  .attr("height", height + margin.top + margin.bottom)
+    .attr("width", width + margin.left + margin.right)
+    .attr("height", height + margin.top + margin.bottom)
 
 // Define the scales for x and y
 var xScale = d3.scaleLinear()
-.domain([0, 1439])
-.range([0, width]);
+    .domain([0, 1439])
+    .range([0, width]);
 
 var yScale = d3.scaleLinear()
-.domain([0, 100])
-.range([height, 0]);
+    .domain([0, 100])
+    .range([height, 0]);
 
 var example_nodes = [
-    {time: 540, percentage: 20},
-    {time: 720, percentage: 50},
-    {time: 901, percentage: 30}
+    { time: 540, percentage: 20 },
+    { time: 720, percentage: 50 },
+    { time: 901, percentage: 30 }
 ];
 
-example_nodes.forEach(function(d) {
+example_nodes.forEach(function (d) {
     d.x = Math.round(xScale(d.time));
     d.y = Math.round(yScale(d.percentage));
 });
@@ -49,7 +49,7 @@ let selected
 let svg_name
 let svg
 let current_minutes
-let arduinos
+let ESPs
 let preview_start = 0
 let preview_interval_id
 let preview_duration = 60 // seconds
@@ -70,19 +70,19 @@ const pathParts = window.location.pathname.split('/');
 const deviceType = pathParts[2]; // Get the device type from /control/<device_type>
 
 console.log(deviceType)
-if (deviceType === "lights"){
+if (deviceType === "lights") {
     channels_type = "light"
     channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
     channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
-} else if (deviceType === "pumps"){
+} else if (deviceType === "pumps") {
     channels_type = "pump"
     channels_names = ["Pump 1", "Pump 2", "Pump 3", "Pump 4", "Pump 5", "Pump 6"]
     channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
-} else if (deviceType === "testlights"){
+} else if (deviceType === "testlights") {
     channels_type = "testlight"
     channels_names = ["Test Uv", "Test Violet", "Test Royal Blue", "Test Blue", "Test White", "Test Red"]
     channels_colors = ["purple", "violet", "blue", "cyan", "white", "red"]
-} else if (["bad", "loft", "biljard", "frag", "qt1", "qt2", "qt3", "qt4"].includes(deviceType)){
+} else if (["bad", "loft", "biljard", "frag", "qt1", "qt2", "qt3", "qt4"].includes(deviceType)) {
     channels_type = deviceType
     channels_names = ["Uv", "Violet", "Royal Blue", "Blue", "White", "Red"]
     channels_names = channels_names.map(name => `${deviceType.slice(0, 1).toUpperCase()}${deviceType.slice(1)} ${name}`)
@@ -103,11 +103,11 @@ let output = document.getElementById('slider-value');
 
 
 // Update the current slider value (each time you drag the slider handle)
-slider.oninput = function() {
+slider.oninput = function () {
     output.value = this.value + '%';
 }
 
-document.getElementById("throttle-form").addEventListener("submit", function(event) {
+document.getElementById("throttle-form").addEventListener("submit", function (event) {
     event.preventDefault();
     slider.value = Math.max(Math.min(output.value.slice(0, -1), 100), 0)
     output.value = Math.max(Math.min(output.value.slice(0, -1), 100), 0) + "%"
@@ -115,7 +115,7 @@ document.getElementById("throttle-form").addEventListener("submit", function(eve
 
 function initializeSliders() {
     const wrapper = document.getElementById('sliders-wrapper');
-    
+
     // Create sliders based on the names array
     channels_names.forEach(name => {
         wrapper.appendChild(createSlider(name));
@@ -136,7 +136,7 @@ function initializeSliders() {
 
     function uploadSliderValues() {
         const values = Array.from(sliders).map(slider => {
-            return {name: slider.dataset.name, value: slider.value};
+            return { name: slider.dataset.name, value: slider.value };
         });
         console.log("uploading")
 
@@ -145,17 +145,17 @@ function initializeSliders() {
             type: 'POST',
             async: false,
             contentType: 'application/json',
-            data: JSON.stringify({values: values, updated_at: new Date().getTime()}),
-            success: function(response) {
+            data: JSON.stringify({ values: values, updated_at: new Date().getTime() }),
+            success: function (response) {
                 document.getElementById("sliders-error").innerText = ""
             },
-            error: function(error) {
+            error: function (error) {
                 document.getElementById("sliders-error").innerText = "Error: " + error.responseText
                 console.error(error);
             }
         });
     }
-        
+
 
     function printAllValues() {
         const values = Array.from(sliders).map(slider => {
@@ -164,7 +164,7 @@ function initializeSliders() {
         console.log(values.join(' | '));
     }
 
-    document.getElementById("upload-sliders").addEventListener("click", function(){
+    document.getElementById("upload-sliders").addEventListener("click", function () {
         console.log("uploading sliders")
         uploadSliderValues()
     })
@@ -180,11 +180,11 @@ function createSlider(name) {
     let graphY
     let links = getLinks(channels[name])
     let local_current_minutes = current_minutes
-    
-    for (let i=0; i < links.length; i++){
+
+    for (let i = 0; i < links.length; i++) {
         let link = links[i]
-        if (link.source.time <= local_current_minutes && link.target.time >= local_current_minutes){
-            graphY = link.source.y + ((local_current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+        if (link.source.time <= local_current_minutes && link.target.time >= local_current_minutes) {
+            graphY = link.source.y + ((local_current_minutes - link.source.time) / (link.target.time - link.source.time)) * (link.target.y - link.source.y)
             break
         }
     }
@@ -192,7 +192,7 @@ function createSlider(name) {
     const container = document.createElement('div');
     container.className = 'slider-container';
     container.id = name.replace(" ", "_") + "_slider";
-    
+
     const slider = document.createElement('input');
     slider.type = 'range';
     slider.min = '0';
@@ -216,18 +216,18 @@ function createSlider(name) {
     return container;
 }
 
-if (overwriteNodesWithExample){
+if (overwriteNodesWithExample) {
     channels_names.forEach(e => {
         nodes[e] = structuredClone(example_nodes)
     })
-} else{
+} else {
     $.ajax({
         url: '/load',
         type: 'POST',
         async: false,
         contentType: 'application/json',
-        data: JSON.stringify({"type": channels_type, "expected_channels": channels_names}),
-        success: function(response) {
+        data: JSON.stringify({ "type": channels_type, "expected_channels": channels_names }),
+        success: function (response) {
             nodes = JSON.parse(response.data)
             slider.value = JSON.parse(response.throttle)
             output.value = JSON.parse(response.throttle) + "%"
@@ -235,7 +235,7 @@ if (overwriteNodesWithExample){
             outputs = JSON.parse(response.outputs)
             document.getElementById("edit-channel-config").removeAttribute("disabled")
         },
-        error: function(error) {
+        error: function (error) {
             console.log(error);
             document.getElementById("error").textContent = error.responseText
         }
@@ -251,13 +251,13 @@ channels_names.forEach(e => {
     channels[e] = mainSvg
         .append("g")
         .attr("transform", "translate(" + margin.left + "," + margin.top + ")");
-    
+
     initializeSvg(channels[e], e)
     i++
 })
 
-function selectSvg(new_svg){
-    if (svg){
+function selectSvg(new_svg) {
+    if (svg) {
         svg.selectAll(".node")
             .attr("r", svg_name === new_svg ? selected_radius : unselected_radius)
     }
@@ -274,15 +274,15 @@ function selectSvg(new_svg){
 // Define the time format for the x-axis
 var timeFormat = d3.timeFormat("%H:%M");
 
-function minutesToTimeFormat(minutes){
+function minutesToTimeFormat(minutes) {
     var date = new Date();
-    
+
     var hours = Math.floor(minutes / 60);
-    
+
     var remainingMinutes = minutes % 60;
-    
+
     date.setHours(hours, remainingMinutes, 0, 0);
-    
+
     return timeFormat(date);
 }
 
@@ -321,7 +321,7 @@ function setCurrentTime() {
 
     backgroundSvg.selectAll(".time-bar").remove();
 
-    current_minutes = hours*60 + minutes
+    current_minutes = hours * 60 + minutes
 
     backgroundSvg.append("line")
         .attr("class", "time-bar")
@@ -331,8 +331,8 @@ function setCurrentTime() {
         .attr("y2", yScale(100))
         .attr("stroke", `rgb(100, 100, 100)`)
         .attr("stroke-width", "3");
-    
-    if (preview_start === 0){
+
+    if (preview_start === 0) {
         updateTablePercentages()
     }
 }
@@ -351,10 +351,10 @@ function updatePreviewTime() {
         // Convert milliseconds to minutes and then scale to the minutes of the day
         // based on the preview duration.
         var minutes_of_day = Math.max(Math.floor((Date.now() / 1000 - preview_start) * 60 * (24 / preview_duration)), 0);
-    } else{
+    } else {
         return
     }
-    
+
     // Line from the last node to the right boundary
     backgroundSvg.append("line")
         .attr("class", "vertical-preview-bar")
@@ -363,7 +363,7 @@ function updatePreviewTime() {
         .attr("x2", xScale(minutes_of_day))
         .attr("y2", yScale(100))
         .attr("stroke", "black")
-    
+
     updateTablePercentages()
 }
 
@@ -373,7 +373,7 @@ function scheduleSetCurrentTime() {
     const timeToNextMinute = (60 - now.getUTCSeconds()) * 1000 - now.getUTCMilliseconds();
 
     // Set a timeout to align with the next minute change
-    setTimeout(function() {
+    setTimeout(function () {
         setCurrentTime(); // Print the time at the start of the next minute
 
         // Then set an interval to print the time every minute thereafter
@@ -384,22 +384,22 @@ function scheduleSetCurrentTime() {
 // Start the scheduling function
 scheduleSetCurrentTime();
 
-function verifyGraphIntegrity(){
+function verifyGraphIntegrity() {
     let ok = true
     channels_names.forEach(e => {
         let first_link
         let prev_link
         getLinks(channels[e]).forEach(link => {
-            if (prev_link){
-                if (JSON.stringify(prev_link.target) != JSON.stringify(link.source)){
+            if (prev_link) {
+                if (JSON.stringify(prev_link.target) != JSON.stringify(link.source)) {
                     ok = false
                 }
-            } else{
+            } else {
                 first_link = link
             }
             prev_link = link
         })
-        if (first_link.source.y != prev_link.target.y || first_link.source.percentage != prev_link.target.percentage || first_link.source.time != 0 || prev_link.target.time != 1439){
+        if (first_link.source.y != prev_link.target.y || first_link.source.percentage != prev_link.target.percentage || first_link.source.time != 0 || prev_link.target.time != 1439) {
             ok = false
         }
     })
@@ -407,36 +407,36 @@ function verifyGraphIntegrity(){
 }
 
 
-function refreshGraph(svg, name=svg_name){
+function refreshGraph(svg, name = svg_name) {
     svg.selectAll(".link").remove();
     svg.selectAll(".node").remove();
 
     //update wraparound links
     var lastNode = nodes[name][nodes[name].length - 1];
     var firstNode = nodes[name][0];
-    
+
     var p1 = [lastNode.x, lastNode.y]
     var p2 = [width + firstNode.x, firstNode.y]
-    
+
     var m = (p2[1] - p1[1]) / (p2[0] - p1[0]);
-    
+
     // Calculate the slope of the original line
     var slope = (p2[1] - lastNode.y) / (p2[0] - lastNode.x);
-    
+
     // Calculate the new y-coordinate for point B using the slope
     var newY = Math.round(lastNode.y + slope * (width - lastNode.x));
-    
+
     // Calculate the y-coordinate when x equals width
     var yPoint = Math.round(m * (width - p1[0]) + p1[1]);
-    if (isNaN(yPoint)){
+    if (isNaN(yPoint)) {
         yPoint = lastNode.y
         newY = lastNode.y
     }
-    
-    let links_data = [{source: {time: Math.round(xScale.invert(0)), percentage: Math.round(yScale.invert(yPoint)), x: 0, y: yPoint}, target: {time: Math.round(xScale.invert(firstNode.x)), percentage: Math.round(yScale.invert(firstNode.y)), x: firstNode.x, y: firstNode.y}}].concat(d3.range(nodes[name].length - 1).map(i => ({source: nodes[name][i], target: nodes[name][i + 1]}))).concat([{source: {time: Math.round(xScale.invert(lastNode.x)), percentage: Math.round(yScale.invert(lastNode.y)), x: lastNode.x, y: lastNode.y}, target: {time: Math.round(xScale.invert(width)), percentage: Math.round(yScale.invert(newY)), x: width, y: newY}}])
-        
 
-        
+    let links_data = [{ source: { time: Math.round(xScale.invert(0)), percentage: Math.round(yScale.invert(yPoint)), x: 0, y: yPoint }, target: { time: Math.round(xScale.invert(firstNode.x)), percentage: Math.round(yScale.invert(firstNode.y)), x: firstNode.x, y: firstNode.y } }].concat(d3.range(nodes[name].length - 1).map(i => ({ source: nodes[name][i], target: nodes[name][i + 1] }))).concat([{ source: { time: Math.round(xScale.invert(lastNode.x)), percentage: Math.round(yScale.invert(lastNode.y)), x: lastNode.x, y: lastNode.y }, target: { time: Math.round(xScale.invert(width)), percentage: Math.round(yScale.invert(newY)), x: width, y: newY } }])
+
+
+
     // Create the lines
     link = svg.selectAll(".link")
         .data(links_data)
@@ -469,41 +469,41 @@ function refreshGraph(svg, name=svg_name){
     //    .attr("text-anchor", "middle")
     //    .attr("class", "tooltip")
     //    .attr("dy", "-1em");
-//
+    //
     //selected = null
 }
 
 
 var placingNode = false
 
-function initializeSvg(svg, name){
+function initializeSvg(svg, name) {
     //nodes[name] = structuredClone(example_nodes)
-    
+
     // Add a transparent rect to capture mouse events over the entire SVG area
     svg.append("rect")
         .attr("width", "100%")
         .attr("height", "100%")
         .style("fill", "none") // You can set this to "transparent" or any other color if needed
         .style("pointer-events", "all"); // This ensures that the rect captures mouse events
-    
 
-    svg.on("click", function(event) {
-        if (placingNode){
+
+    svg.on("click", function (event) {
+        if (placingNode) {
             var mouse = d3.pointer(event);
             var mouseX = Math.min(Math.max(mouse[0], 0), width);
             placingNode = false
 
             backgroundSvg.selectAll(".selection-circle").remove();
             backgroundSvg.selectAll(".vertical-selection-bar").remove();
-        
+
             let links = getLinks(svg)
-            for (let i=0; i < links.length; i++){
+            for (let i = 0; i < links.length; i++) {
                 let link = links[i]
-                if (link.source.x <= mouseX && link.target.x >= mouseX){
-                    graphY = link.source.y + ((mouseX - link.source.x)/(link.target.x - link.source.x)) * (link.target.y - link.source.y)
+                if (link.source.x <= mouseX && link.target.x >= mouseX) {
+                    graphY = link.source.y + ((mouseX - link.source.x) / (link.target.x - link.source.x)) * (link.target.y - link.source.y)
                     let time = Math.round(xScale.invert(mouseX))
                     let percentage = Math.round(yScale.invert(graphY))
-                    let newNode = {time: time, percentage: percentage, x: Math.round(xScale(time)), y: Math.round(yScale(percentage))}
+                    let newNode = { time: time, percentage: percentage, x: Math.round(xScale(time)), y: Math.round(yScale(percentage)) }
                     nodes[svg_name].splice(i, 0, newNode)
                     refreshGraph(svg)
                     break
@@ -512,35 +512,35 @@ function initializeSvg(svg, name){
         }
     })
 
-    svg.on("mousemove", function(event) {
+    svg.on("mousemove", function (event) {
         if (placingNode) {
             var mouse = d3.pointer(event);
             var mouseX = Math.min(Math.max(mouse[0], 0), width);
 
             let graphY
             let links = getLinks(svg)
-            for (let i=0; i < links.length; i++){
+            for (let i = 0; i < links.length; i++) {
                 let link = links[i]
-                if (link.source.x <= mouseX && link.target.x >= mouseX){
-                    graphY = link.source.y + ((mouseX - link.source.x)/(link.target.x - link.source.x)) * (link.target.y - link.source.y)
+                if (link.source.x <= mouseX && link.target.x >= mouseX) {
+                    graphY = link.source.y + ((mouseX - link.source.x) / (link.target.x - link.source.x)) * (link.target.y - link.source.y)
                     break
                 }
             }
 
             // Remove any existing circles
             backgroundSvg.selectAll(".selection-circle").remove();
-            
+
             // Remove any existing wrap-around links
             backgroundSvg.selectAll(".vertical-selection-bar").remove();
-            
+
             // Line from the last node to the right boundary
             backgroundSvg.append("line")
-            .attr("class", "vertical-selection-bar")
-            .attr("x1", mouseX)
-            .attr("y1", yScale(0))
-            .attr("x2", mouseX)
-            .attr("y2", yScale(100))
-            .attr("stroke", "black")
+                .attr("class", "vertical-selection-bar")
+                .attr("x1", mouseX)
+                .attr("y1", yScale(0))
+                .attr("x2", mouseX)
+                .attr("y2", yScale(100))
+                .attr("stroke", "black")
 
             // Draw a white circle at the specified location
             backgroundSvg.append("circle")
@@ -557,9 +557,9 @@ function initializeSvg(svg, name){
 }
 
 
-function getLinks(svg){
+function getLinks(svg) {
     let links = []
-    
+
     svg.selectAll(".link").each(e => {
         links.push(e)
     })
@@ -591,7 +591,7 @@ function dragstarted(event, d) {
         .attr("x", d.x)
         .attr("y", d.y + (d.percentage > 95 ? 45 : 0)) // Position the tooltip above the node
         .text(minutesToTimeFormat(d.time) + ", " + Math.round(d.percentage) + "%");
-    
+
 
 
     updateTablePercentages()
@@ -603,42 +603,42 @@ function dragstarted(event, d) {
 function dragged(event, d) {
     // Convert the drag coordinates to time and percentage
     var percentage = Math.min(Math.max(Math.round(yScale.invert(event.y)), 0), 100)
-    
+
     d.percentage = percentage;
-    
+
     let nodeIndex
-    for (nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++){
-        if (nodes[svg_name][nodeIndex] == d){ //(nodes[svg_name][nodeIndex].x == d.x && nodes[svg_name][nodeIndex].y == d.y){ //(Math.abs(nodes[svg_name][nodeIndex].x - d.x) < 10 && Math.abs(nodes[svg_name][nodeIndex].y - d.y) < 10){
+    for (nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++) {
+        if (nodes[svg_name][nodeIndex] == d) { //(nodes[svg_name][nodeIndex].x == d.x && nodes[svg_name][nodeIndex].y == d.y){ //(Math.abs(nodes[svg_name][nodeIndex].x - d.x) < 10 && Math.abs(nodes[svg_name][nodeIndex].y - d.y) < 10){
             break
         }
     }
-    
+
     let lowerLimit
     let upperLimit
-    if (nodeIndex == 0){
+    if (nodeIndex == 0) {
         lowerLimit = 0
-    } else{
-        lowerLimit = nodes[svg_name][nodeIndex-1].x+1
+    } else {
+        lowerLimit = nodes[svg_name][nodeIndex - 1].x + 1
     }
-    if (nodeIndex == nodes[svg_name].length-1){
+    if (nodeIndex == nodes[svg_name].length - 1) {
         upperLimit = width
-    } else{
-        upperLimit = nodes[svg_name][nodeIndex+1].x-1
+    } else {
+        upperLimit = nodes[svg_name][nodeIndex + 1].x - 1
     }
-    
-    if (event.x <= upperLimit && event.x >= lowerLimit){
+
+    if (event.x <= upperLimit && event.x >= lowerLimit) {
         d.x = event.x;
         d.time = Math.round(xScale.invert(event.x))
-        
-    } else if (event.x > upperLimit){
+
+    } else if (event.x > upperLimit) {
         d.x = upperLimit;
         d.time = Math.round(xScale.invert(upperLimit))
-    } else{
+    } else {
         d.x = lowerLimit;
         d.time = Math.round(xScale.invert(lowerLimit))
     }
     d.y = Math.round(yScale(percentage));
-    
+
     //nodes[svg_name][nodeIndex].x = d.x
     //nodes[svg_name][nodeIndex].y = d.y
     //nodes[svg_name][nodeIndex].time = d.time
@@ -647,7 +647,7 @@ function dragged(event, d) {
     d3.select(this)
         .attr("cx", d.x)
         .attr("cy", d.y);
-    
+
     // Update the links
     link.filter(l => l.source === d)
         .attr("x1", d.x)
@@ -662,7 +662,7 @@ function dragged(event, d) {
 
 
     updateTablePercentages()
-    
+
     document.getElementById("percentage").value = Math.round(d.percentage) + "%"
     document.getElementById("time").value = minutesToTimeFormat(d.time).toString()
 
@@ -676,9 +676,9 @@ function dragended(event, d) {
 
 
 
-document.getElementById("form").addEventListener("submit", function(event) {
+document.getElementById("form").addEventListener("submit", function (event) {
     event.preventDefault();
-    if (!selected){
+    if (!selected) {
         return
     }
 
@@ -703,26 +703,26 @@ document.getElementById("form").addEventListener("submit", function(event) {
 
 
         let nodeIndex
-        for (nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++){
-            if (nodes[svg_name][nodeIndex].x == selected.x && nodes[svg_name][nodeIndex].y == selected.y){
+        for (nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++) {
+            if (nodes[svg_name][nodeIndex].x == selected.x && nodes[svg_name][nodeIndex].y == selected.y) {
                 break
             }
         }
-        
+
         let lowerLimit
         let upperLimit
-        if (nodeIndex == 0){
+        if (nodeIndex == 0) {
             lowerLimit = 0
-        } else{
-            lowerLimit = nodes[svg_name][nodeIndex-1].time+1
+        } else {
+            lowerLimit = nodes[svg_name][nodeIndex - 1].time + 1
         }
-        if (nodeIndex == nodes[svg_name].length-1){
+        if (nodeIndex == nodes[svg_name].length - 1) {
             upperLimit = 1440
-        } else{
-            upperLimit = nodes[svg_name][nodeIndex+1].time-1
+        } else {
+            upperLimit = nodes[svg_name][nodeIndex + 1].time - 1
         }
 
-        if (time > upperLimit || time < lowerLimit){
+        if (time > upperLimit || time < lowerLimit) {
             errorMessage += "Time out of bounds. "
         }
 
@@ -736,12 +736,12 @@ document.getElementById("form").addEventListener("submit", function(event) {
         document.getElementById("error").textContent = errorMessage;
     } else {
         document.getElementById("error").textContent = "";
-        
+
         if (selected) {
             // Update the node data
             selected.percentage = percentage;
             selected.time = time
-    
+
             // Update the node's position based on the new data
             selected.x = xScale(selected.time);
             selected.y = yScale(selected.percentage);
@@ -765,7 +765,7 @@ document.getElementById("form").addEventListener("submit", function(event) {
                 .attr("x", selected.x + (selected.time > 1410 ? -45 : 0) + (selected.time < 50 ? 45 : 0))
                 .attr("y", selected.y + (selected.percentage > 95 ? 45 : 0))
                 .text(minutesToTimeFormat(selected.time) + ", " + Math.round(selected.percentage) + "%");
-            
+
             refreshGraph(svg);
             updateTablePercentages()
         }
@@ -773,20 +773,20 @@ document.getElementById("form").addEventListener("submit", function(event) {
 });
 
 
-document.getElementById("new").addEventListener("click", function(){
+document.getElementById("new").addEventListener("click", function () {
     placingNode = !placingNode
     backgroundSvg.selectAll(".selection-circle").remove();
     backgroundSvg.selectAll(".vertical-selection-bar").remove();
 })
-document.getElementById("delete").addEventListener("click", function(){
-    if (selected){
-        if (nodes[svg_name].length == 1){
+document.getElementById("delete").addEventListener("click", function () {
+    if (selected) {
+        if (nodes[svg_name].length == 1) {
             document.getElementById("error").textContent = "no.";
             return
         }
         document.getElementById("error").textContent = "";
-        for (let nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++){
-            if (nodes[svg_name][nodeIndex].x == selected.x && nodes[svg_name][nodeIndex].y == selected.y){
+        for (let nodeIndex = 0; nodeIndex < nodes[svg_name].length; nodeIndex++) {
+            if (nodes[svg_name][nodeIndex].x == selected.x && nodes[svg_name][nodeIndex].y == selected.y) {
                 nodes[svg_name].splice(nodeIndex, 1)
                 refreshGraph(svg)
                 break
@@ -798,28 +798,28 @@ document.getElementById("delete").addEventListener("click", function(){
 })
 
 
-document.getElementById("upload").addEventListener("click", function(){
-    if (!verifyGraphIntegrity()){
+document.getElementById("upload").addEventListener("click", function () {
+    if (!verifyGraphIntegrity()) {
         document.getElementById("uploadStatus").textContent = "error: Links are somehow not connected"
         return
     }
     document.getElementById("uploadStatus").textContent = "sending..."
     let links_data = {}
     channels_names.forEach(e => {
-        links_data[e] = {"type": channels_type, "links": getLinks(channels[e])}
+        links_data[e] = { "type": channels_type, "links": getLinks(channels[e]) }
     })
-    document.getElementById("upload").setAttribute("disabled","disabled")
+    document.getElementById("upload").setAttribute("disabled", "disabled")
     $.ajax({
         url: '/upload',
         type: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({links_data: links_data, throttle: Number(output.value.slice(0, -1)), type: channels_type}),
-        success: function(response) {
+        data: JSON.stringify({ links_data: links_data, throttle: Number(output.value.slice(0, -1)), type: channels_type }),
+        success: function (response) {
             console.log(response.message);
             document.getElementById("uploadStatus").textContent = response.message
             document.getElementById("upload").removeAttribute("disabled");
         },
-        error: function(error) {
+        error: function (error) {
             console.log(error);
             document.getElementById("uploadStatus").textContent = error
             document.getElementById("upload").removeAttribute("disabled");
@@ -831,7 +831,7 @@ document.getElementById("upload").addEventListener("click", function(){
 
 function selectRow(row) {
     var rows = document.querySelectorAll('.selectable');
-    rows.forEach(function(r) {
+    rows.forEach(function (r) {
         r.classList.remove('selected');
     });
 
@@ -839,10 +839,10 @@ function selectRow(row) {
 
     let graphY
     let links = getLinks(svg)
-    for (let i=0; i < links.length; i++){
+    for (let i = 0; i < links.length; i++) {
         let link = links[i]
-        if (link.source.time <= current_minutes && link.target.time >= current_minutes){
-            graphY = link.source.y + ((current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+        if (link.source.time <= current_minutes && link.target.time >= current_minutes) {
+            graphY = link.source.y + ((current_minutes - link.source.time) / (link.target.time - link.source.time)) * (link.target.y - link.source.y)
             break
         }
     }
@@ -858,7 +858,7 @@ function selectRow(row) {
 //    console.log(checkbox.parentElement.parentElement.querySelector(".selectable").innerText, checkbox.checked)
 //}
 
-function updateTablePercentages(){
+function updateTablePercentages() {
     if (overwriteStatusTimeout) {
         return
     }
@@ -866,14 +866,14 @@ function updateTablePercentages(){
         let graphY
         let links = getLinks(channels[name])
         let local_current_minutes = current_minutes
-        if (preview_start !== 0){
+        if (preview_start !== 0) {
             local_current_minutes = Math.max(Math.floor((Date.now() / 1000 - preview_start) * 60 * (24 / preview_duration)), 0);
         }
-        
-        for (let i=0; i < links.length; i++){
+
+        for (let i = 0; i < links.length; i++) {
             let link = links[i]
-            if (link.source.time <= local_current_minutes && link.target.time >= local_current_minutes){
-                graphY = link.source.y + ((local_current_minutes - link.source.time)/(link.target.time - link.source.time)) * (link.target.y - link.source.y)
+            if (link.source.time <= local_current_minutes && link.target.time >= local_current_minutes) {
+                graphY = link.source.y + ((local_current_minutes - link.source.time) / (link.target.time - link.source.time)) * (link.target.y - link.source.y)
                 // console.log(Math.round(yScale.invert(graphY)) + "%", Math.round(yScale.invert(graphY)), yScale.invert(graphY), graphY, link.source, local_current_minutes, link.target)
                 break
             }
@@ -887,7 +887,7 @@ function updateTablePercentages(){
     })
 }
 
-window.onload = function() {
+window.onload = function () {
     initializeSliders()
     updateTablePercentages()
     selectRow(document.querySelector('.selectable'))
@@ -1158,26 +1158,26 @@ function editTitle(buttonElement) {
     } else {
         // Save the changes and make the title no longer editable
         titleElement.contentEditable = false;
-        
+
         // Here you would also handle saving the new title to your data or server
         var newTitle = titleElement.textContent;
         // Save newTitle to your data or server
 
-        buttonElement.setAttribute("disabled","disabled")
+        buttonElement.setAttribute("disabled", "disabled")
         $.ajax({
             url: '/rename',
             type: 'POST',
             contentType: 'application/json',
-            data: JSON.stringify({"device": buttonElement.id, "newname": newTitle}),
-            success: function(response) {
+            data: JSON.stringify({ "device": buttonElement.id, "newname": newTitle }),
+            success: function (response) {
                 buttonElement.removeAttribute("disabled")
                 buttonElement.textContent = 'Edit';
-                if (!response.data){
+                if (!response.data) {
                     console.log(response)
                     document.getElementById("cards-status").textContent = response.error
                 }
             },
-            error: function(error) {
+            error: function (error) {
                 buttonElement.disabled = false
                 console.log(error);
                 document.getElementById("cards-status").textContent = "Error: Unable to connect"
@@ -1190,16 +1190,16 @@ function editTitle(buttonElement) {
 
 
 // ESP32 Configuration Popup
-function showESP32Config(arduino_index) {
-    let arduino = arduinos[arduino_index]
-    console.log(arduino)
+function showESP32Config(esp_index) {
+    let esp = ESPs[esp_index]
+    console.log(esp)
     const template = $('#esp32-config-template').html();
     const $popup = $('<div class="popup-overlay">').html(template);
-    
+
     // Set initial values
-    $popup.find('#esp32-name').val(arduino.name);
-    $popup.find('#esp32-freq').val(arduino.freq);
-    $popup.find('#esp32-res').val(arduino.res);
+    $popup.find('#esp32-name').val(esp.name);
+    $popup.find('#esp32-freq').val(esp.freq);
+    $popup.find('#esp32-res').val(esp.res);
 
     // Close handlers
     function closePopup() {
@@ -1212,7 +1212,7 @@ function showESP32Config(arduino_index) {
     $popup.find('.submit-btn').click(() => {
         $popup.find('.submit-btn').attr('disabled', 'disabled');
         const data = {
-            id: arduino.id,
+            id: esp.id,
             name: $popup.find('#esp32-name').val().replace(" ", "_"),
             freq: parseInt($popup.find('#esp32-freq').val()),
             res: parseInt($popup.find('#esp32-res').val())
@@ -1223,14 +1223,14 @@ function showESP32Config(arduino_index) {
             method: 'POST',
             data: JSON.stringify(data),
             contentType: 'application/json',
-            success: function() {
+            success: function () {
                 closePopup();
                 $('#refresh-cards').click();
             },
-            error: function(xhr) {
+            error: function (xhr) {
                 $popup.find('.error-message').text(xhr.responseText || 'Error updating device');
             },
-            finally: function(){
+            finally: function () {
                 $popup.find('.submit-btn').removeAttr('disabled');
             }
         });
@@ -1304,13 +1304,13 @@ function showChannelConfig(outputs = {}) {
         const outputs = {};
         let hasError = false;
 
-        $outputGroups.find('.output-group').each(function() {
+        $outputGroups.find('.output-group').each(function () {
             const $output = $(this);
             const name = $output.find('.output-name').val();
             const channels = [];
             const usedPins = new Set();
 
-            $output.find('.channel-entry').each(function() {
+            $output.find('.channel-entry').each(function () {
                 const channel = {
                     channel: $(this).find('select').val(),
                     pin: parseInt($(this).find('input').val())
@@ -1355,17 +1355,17 @@ function showChannelConfig(outputs = {}) {
         if (!hasError) {
             $.ajax({
                 url: '/update-channels',
-                method: 'POST', 
+                method: 'POST',
                 data: JSON.stringify({ outputs }),
                 contentType: 'application/json',
-                success: function(response) {
+                success: function (response) {
                     closePopup();
                     $('#refresh-cards').click();
                 },
-                error: function(xhr) {
+                error: function (xhr) {
                     $popup.find('.error-message').text(xhr.responseText || 'Error updating channels');
                 },
-                finally: function(){
+                finally: function () {
                     $popup.find('.submit-btn').removeAttr('disabled');
                 }
             });
@@ -1377,46 +1377,46 @@ function showChannelConfig(outputs = {}) {
     $('body').append($popup);
 }
 
-document.getElementById("edit-channel-config").addEventListener("click", function(){
+document.getElementById("edit-channel-config").addEventListener("click", function () {
     showChannelConfig(outputs)
 })
 
 
 
-document.getElementById("refresh-cards").addEventListener("click", function(){
-    document.getElementById("refresh-cards").setAttribute("disabled","disabled")
+document.getElementById("refresh-cards").addEventListener("click", function () {
+    document.getElementById("refresh-cards").setAttribute("disabled", "disabled")
     $.ajax({
-        url: '/loadarduinoinfo',
+        url: '/loadespinfo',
         type: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({}),
-        success: function(response) {
+        success: function (response) {
             document.getElementById("refresh-cards").removeAttribute("disabled")
-            if (response.data){
+            if (response.data) {
                 console.log(JSON.parse(response.data))
-                arduinos = JSON.parse(response.data);
-                
+                ESPs = JSON.parse(response.data);
+
                 totalText = ""
-                for (let i = 0; i < arduinos.length; i++){
-                    let arduino = arduinos[i];
-                    totalText += `<div class="card ${arduino.error ? 'error-background' : ''}">
-                    <div class="title">${arduino.name}</div>
-                    ${arduino.wireless ? `<input type="button" class="edit-button" value="Edit" onclick="showESP32Config(${i})">` : `<input disabled type="button" class="edit-button" id=${arduino.device} value="Edit" onclick="editTitle(this)">`}
-                    ${arduino.wireless ? `<div class="subtitle">ID: ${arduino.id}</div>` : `<div class="subtitle">USB: ${arduino.device}</div>`}
-                    <div class="content error">${arduino.error}</div>       
-                    <div class="lastused">Last used: ${timeSinceEpochToString(arduino.lastused)}</div>
-                    <div class="status">Status: ${arduino.status}</div>
+                for (let i = 0; i < ESPs.length; i++) {
+                    let esp = ESPs[i];
+                    totalText += `<div class="card ${esp.error ? 'error-background' : ''}">
+                    <div class="title">${esp.name}</div>
+                    ${esp.wireless ? `<input type="button" class="edit-button" value="Edit" onclick="showESP32Config(${i})">` : `<input disabled type="button" class="edit-button" id=${esp.device} value="Edit" onclick="editTitle(this)">`}
+                    ${esp.wireless ? `<div class="subtitle">ID: ${esp.id}</div>` : `<div class="subtitle">USB: ${esp.device}</div>`}
+                    <div class="content error">${esp.error}</div>       
+                    <div class="lastused">Last used: ${timeSinceEpochToString(esp.lastused)}</div>
+                    <div class="status">Status: ${esp.status}</div>
                     </div>`
                 }
-                document.getElementById("arduino_cards").innerHTML = totalText
+                document.getElementById("esp_cards").innerHTML = totalText
                 document.getElementById("cards-status").textContent = "OK"
             }
-            else{
+            else {
                 console.log(response)
                 document.getElementById("cards-status").textContent = response.error
             }
         },
-        error: function(error) {
+        error: function (error) {
             document.getElementById("refresh-cards").removeAttribute("disabled")
             console.log(error);
             document.getElementById("cards-status").textContent = "Error: Unable to connect"

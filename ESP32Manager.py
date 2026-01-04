@@ -8,7 +8,9 @@ import sys
 from schedulemaker import create_esp32_schedule
 from utils import read_json_file
 import math
+import math
 from smsalert import sms_alert
+import re
 
 class ESP32Manager:
     def __init__(self, slaves, test, logger=None):
@@ -91,6 +93,7 @@ class ESP32Manager:
         """Request all ESP32s to announce themselves"""
         print("Broadcasting device discovery message...")
         if self.TEST:
+            print("announcing")
             self.client.publish("test/aquarium/command", "discover")
         else:
             self.client.publish("aquarium/command", "discover")
@@ -303,9 +306,16 @@ class ESP32Manager:
                         elif command == "clear":
                             res = "EEPROM cleared"
                         elif command == "sc":
-                            res = "schedule_ok"  # Updated to match the new response from ESP32
+                            res = "schedule_ok"
                         elif command == "sync":
                             res = args
+                        elif command == "r":
+                            parts = args.split()
+                            if parts:
+                                pin = parts[0]
+                                res = f"^r {pin} .+$"
+                            else:
+                                raise ValueError("Invalid arguments for read command")
                         else:
                             print(f"Invalid command: {cmd}")
                             return
@@ -393,7 +403,10 @@ class ESP32Manager:
                     real_responses[index] = {"message": error, "status": False}
                     continue
 
-                if actual_actual["response"] == expected["response"]:
+                regex_match = False
+                if (expected["response"].startswith("^")):
+                    regex_match = re.match(expected["response"], actual_actual["response"])
+                if actual_actual["response"] == expected["response"] or regex_match:
                     print(f"Command {index} succeeded")
                     try:
                         command = command_str.split(";")[index].split()

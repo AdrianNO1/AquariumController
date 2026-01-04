@@ -140,7 +140,7 @@ def get_current_strength(color, mult=1, minutes_of_day=None, retries=0, temporar
         if color not in links:
             return f"Error in get_current_strength: Unable to find {color} in link"
         
-        throttle = read_json_file(os.path.join("data", "throttle.json"))[links[color]["type"] + "throttle"]
+        throttle = read_json_file(os.path.join("data", "throttle.json")).get(links[color]["type"] + "throttle", 100)
         if color in links:
             if minutes_of_day == None:
                 now = datetime.utcnow()

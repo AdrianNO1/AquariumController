@@ -4,17 +4,6 @@ from utils import read_json_file
 
 # TODO: remember sync time. overwriting.
 
-def retry_read_json(file_path, max_retries=3, initial_delay=1):
-    for attempt in range(max_retries):
-        try:
-            with open(file_path, 'r', encoding="utf-8") as file:
-                return json.load(file)
-        except (FileNotFoundError, json.JSONDecodeError, PermissionError) as e:
-            if attempt == max_retries - 1:  # Last attempt
-                raise
-            delay = initial_delay * (2 ** attempt)
-            time.sleep(delay)
-
 def create_esp32_schedule(device_name):
     # Read the channel configuration with retries
     try:
