@@ -8,6 +8,45 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
 
+def get_current_strength(color, mult=1, minutes_of_day=None, retries=0, temporaryoverwrite=False):
+    try:
+        if temporaryoverwrite:
+            sliders = read_json_file(os.path.join("data", "temporaryoverwritesliders.json"))
+            values = [x for x in sliders["values"] if x["name"] == color]
+            if len(values) == 0:
+                return f"Error in get_current_strength: {color} not in temporary overwrite"
+            value = int(values[0]["value"])
+            return max(min(round(value/100*255*mult), 255), 0)
+        
+        links = read_json_file(os.path.join("data", "links.json"))
+        if color not in links:
+            return f"Error in get_current_strength: Unable to find {color} in link"
+        
+        throttle = read_json_file(os.path.join("data", "throttle.json")).get(links[color]["type"] + "throttle", 100)
+        if color in links:
+            if minutes_of_day == None:
+                now = datetime.utcnow()
+                minutes_of_day = int((now - now.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60)
+
+            for link in links[color]["links"]:
+                if link["source"]["time"] <= minutes_of_day and link["target"]["time"] >= minutes_of_day:
+                    total_duration = link["target"]["time"] - link["source"]["time"]
+                    if total_duration == 0:
+                        return "Error in get_current_strength: division by zero. Two nodes have the same time"
+                    else:
+                        percentage = link["source"]["percentage"] + (1 - (link["target"]["time"] - minutes_of_day) / total_duration) * (link["target"]["percentage"] - link["source"]["percentage"])
+                        return max(min(round(percentage/100*255*(throttle/100*mult)), 255), 0)
+                    
+        else:
+            return f"Error in get_current_strength: Unable to find {color} in link"
+    except json.JSONDecodeError as e:
+        if retries == 10:
+            return f"Error in get_current_strength: {e}"
+        else:
+            time.sleep(retries*0.2+1)
+            return get_current_strength(color, mult=mult, minutes_of_day=minutes_of_day, retries=retries+1)
+
+
 def retry_operation(
     operation: Callable[..., T],
     max_retries: int = 3,

@@ -5,9 +5,8 @@ def main(task_queue, response_queue, test=False):
         sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
         from datetime import datetime
-        from custom_syntax import get_current_strength
         from logging.handlers import TimedRotatingFileHandler
-        from utils import read_json_file, write_json_file
+        from utils import read_json_file, write_json_file, get_current_strength
 
         slaves = []
         logger = logging.getLogger(__name__)
