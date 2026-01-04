@@ -8,7 +8,6 @@ import sys
 from schedulemaker import create_esp32_schedule
 from utils import read_json_file
 import math
-import math
 from smsalert import sms_alert
 import re
 

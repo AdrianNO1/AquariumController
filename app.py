@@ -24,7 +24,6 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from datetime import datetime, timedelta
 from manager import main
-from custom_syntax import parse_code
 import threading
 import queue, logging, glob, subprocess, signal
 from utils import read_json_file, write_json_file
@@ -666,24 +665,8 @@ def savesensor():
     return jsonify({"message": "ok"})
 
 if __name__ == '__main__':
-    # Create queues for communication
     task_queue = queue.Queue()
     response_queue = queue.Queue()
-
-
-    def fakemain(task_queue, a, b):
-        print("fake thing running")
-        time.sleep(3)
-        print("raising")
-        raise ValueError("AAAAAAAAAAAAAAAAAAA")
-
-    # if len(sys.argv) > 1:
-    #     if sys.argv[0] == "test":
-    #         test = True
-    #     elif sys.argv[0] in ["notest", "no-test"]:
-    #         test = False
-    #     else:
-    #         raise ValueError("Invalid argument. Use 'test' or 'notest'")
         
     if os.path.exists("test.json"):
         test = read_json_file("test.json")["test"]
@@ -691,7 +674,6 @@ if __name__ == '__main__':
         test = True
         write_json_file("test.json", {"test": True})
 
-    # Function to run in the thread
     def thread_function():
         def start_thread():
             thread = threading.Thread(target=main, args=(task_queue, response_queue, test))
@@ -721,7 +703,6 @@ if __name__ == '__main__':
         
         
 
-    # Start the thread
     thread = threading.Thread(target=thread_function)
     thread.start()
 

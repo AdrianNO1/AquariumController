@@ -1,22 +1,17 @@
 def main(task_queue, response_queue, test=False):
     try:
-        import serial, time, threading, multiprocessing, os, json, logging, math, queue, re, sys, os, zipfile#, dropbox
+        import time, threading, multiprocessing, os, json, logging, math, queue, re, sys, os, zipfile
         
         sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
         from datetime import datetime
-        from custom_syntax import parse_code, get_current_strength
+        from custom_syntax import get_current_strength
         from logging.handlers import TimedRotatingFileHandler
         from utils import read_json_file, write_json_file
 
         slaves = []
         logger = logging.getLogger(__name__)
 
-        if not test:
-            pass
-            # from usb_listener import setup_usb_listener
-            # from get_connected_arduinos import get_arduinos
-        
         from ESP32Manager import ESP32Manager
         esp_controller = ESP32Manager(slaves, test, logger)
 
@@ -24,21 +19,6 @@ def main(task_queue, response_queue, test=False):
         last_updated = 0
         device_outputs = {}
         channels_path = os.path.join("data", "channels.json")
-
-        #refresh_token = os.getenv("DROPBOX_API_KEY")
-
-        # def refresh_access_token(refresh_token):
-        #     dbx = dropbox.DropboxOAuth2FlowNoRedirect(os.getenv("DROPBOX_APP_KEY"), os.getenv("DROPBOX_APP_SECRET"))
-        #     oauth_result = dbx.refresh_access_token(refresh_token)
-        #     return oauth_result.access_token
-
-        # def upload_file_to_dropbox(local_path):
-        #     access_token = refresh_access_token(refresh_token)
-        #     dbx = dropbox.Dropbox(access_token)
-        #     dropbox_path = "/AquariumControllerLogs/" + os.path.basename(local_path)
-        #     with open(local_path, 'rb') as f:
-        #         dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-
 
         class CompressingTimedRotatingFileHandler(TimedRotatingFileHandler):
             def doRollover(self):
@@ -51,7 +31,7 @@ def main(task_queue, response_queue, test=False):
                     zip_filename = f"{oldest_log}.zip"
                     with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
                         zipf.write(oldest_log, os.path.basename(oldest_log))
-                    #upload_file_to_dropbox(zip_filename)
+
                     os.remove(oldest_log)
                     return zip_filename
 
@@ -83,145 +63,6 @@ def main(task_queue, response_queue, test=False):
             logger.addHandler(handler)
 
             logger.info("started new session")
-
-        def initialize(serial_device):
-            logger.info("initializing", serial_device)
-            try:
-                serial_device["serial"].write(bytes("whodis\n", encoding="utf-8"))
-                time.sleep(0.05)
-                name = serial_device["serial"].readline().decode('utf-8').strip().strip(";")
-                if not name:
-                    logger.error("serial_device did not recieve a name. Possible timeout")
-                    name = "Not responding"
-                    serial_device["status"] = "No response"
-                    serial_device["error"] = "Error: Device is not responding"
-                else:
-                    serial_device["status"] = "Responded"
-                    serial_device["error"] = ""
-                
-                serial_device["lastused"] = int(time.time())
-                serial_device["name"] = name
-            except serial.serialutil.SerialException:
-                logger.warn("Device disconnected when initializing")
-                return
-            slaves.append(serial_device)
-            logger.info(f"USB device initialized: {serial_device['name']}")
-
-        def start_initialization_timer(device):
-            ser = serial.Serial(device, 9600, timeout=1)#, dsrdtr=True)
-           # ser.setDTR(False)
-            threading.Timer(2, initialize, args=({"device": device, "serial": ser, "name": None},)).start()
-
-        def on_connect(device):
-            logger.info(f"USB device connected: {device.device_node}")
-            start_initialization_timer(device.device_node)
-            
-        def on_disconnect(device):
-            for serial_device in slaves:
-                if serial_device["device"] == device.device_node:
-                    slaves.remove(serial_device)
-                    logger.info(f"USB device disconnected: {device.device_node}")
-                    return
-            logger.info(f"unknown USB device disconnected: {device.device_node}")
-        
-        def run_command(device, cmd, args=None): # legacy
-            if device.get("wireless"):
-                return False
-            logger.info(f"Executing function {cmd} with args {args} on {device['name']} ({device['device']})")
-            if cmd == "isOn" or cmd == "isOff":
-                command = "p\n"
-                logger.info(f"Sending: {command}")
-                try:
-                    device["serial"].write(bytes(command, encoding="utf-8"))
-                    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";")
-                except serial.serialutil.SerialException:
-                    logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
-                    return cmd == "isOff"
-                
-                #print("Received: " + recieved)
-                device["lastused"] = int(time.time())
-
-                if recieved != "o":
-                    wrn = f"usb device {device['name']} did not respond with 'o', responded with '{recieved}' instead"
-                    logger.warn(wrn)
-                    device["error"] = "Error: " + wrn
-                    device["status"] = "Unexpected response"
-                    if not recieved:
-                        logger.warn(f"usb device {device['name']} did not respond")
-                        device["error"] = "Error: Device is not responding"
-                        device["status"] = "No response"
-                    return cmd == "isOff"
-
-                device["status"] = "Responded"
-                device["error"] = ""
-                return cmd == "isOn"
-            
-            elif cmd == "analogWrite":
-                if len(args) != 2:
-                    logger.error(f"Length of args is {len(args)} not 2.")
-                command = f"s {args[0]} {args[1]}\n"
-                logger.info(f"Sending: {command}")
-                try:
-                    device["serial"].write(bytes(command, encoding="utf-8"))
-                    time.sleep(0.05)
-                    # recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";") + "\n"
-                except serial.serialutil.SerialException:
-                    logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
-                    return False
-                
-                
-                
-                device["lastused"] = int(time.time())
-
-                #if recieved != command:
-                #    wrn = f'{device["name"]} did not echo. got "{recieved}". Expected "{command}"'
-                #    logger.warning(wrn)
-                #    if device["error"]:
-                #        raise RuntimeError(f"magic stuff happened to arduino {device['name']} ({device['device']})")
-                #        print("magic")
-                #       return
-                #    device["error"] = "Error: " + wrn
-                #    logger.warning(f"usb device {device['name']} did not respond.")
-                #    device["error"] = "Error: Device is not responding"
-                #    device["status"] = "No response"
-                #    return False
-                #else:
-                device["status"] = "idk"
-                device["error"] = ""
-                return True
-            
-            elif cmd == "rename":
-                if len(args) != 1:
-                    logger.error(f"Length of args is {len(args)} not 1.")
-                command = f"e {args[0]}\n"
-                logger.info(f"Sending: {command}")
-                try:
-                    old_name = device["name"]
-                    device["serial"].write(bytes(command, encoding="utf-8"))
-                    recieved = device["serial"].readline().decode(encoding="utf-8").strip().strip(";")
-                except serial.serialutil.SerialException:
-                    logger.warn(f"usb device {device['name']} may have disconnected while running command {cmd}")
-                    return False
-                
-                #print("Received: " + recieved)
-                device["lastused"] = int(time.time())
-
-                if recieved != args[0]:
-                    wrn = f'{device["name"]} did not respond as expected. got "{recieved}". Expected "{args[0]}"'
-                    logger.warn(wrn)
-                    device["error"] = "Error: " + wrn
-                    device["status"] = "Unexpected response"
-                    if not recieved:
-                        logger.warn(f"usb device {device['name']} did not respond")
-                        device["error"] = "Error: Device is not responding"
-                        device["status"] = "No response"
-                    return False
-                
-
-                device["name"] = recieved
-                device["status"] = "Responded"
-                device["error"] = ""
-                return True
         
         def preview():
             nonlocal preview_start, update_frequency
@@ -273,34 +114,6 @@ def main(task_queue, response_queue, test=False):
                     thread.start()
                     thread.join()
                     return
-                
-                elif type(task) == tuple and len(task) == 3 and task[0] == "rename":
-                    matches = [device for device in slaves if device["device"] == task[1]]
-                    if matches:
-                        for device in matches:
-                            run_command(device, "rename", [task[2]])
-
-                elif type(task) == tuple and len(task) == 2 and task[0] == "editesp":
-                    data = task[1]
-                    print("GOT:", data)
-                    matches = [device for device in slaves if device.get("id") == data["id"]]
-                    if matches:
-                        if matches[0].get("wireless"):
-                            device = matches[0]
-                            thread = threading.Thread(target=lambda: esp_controller.run_command(f"{data['id']} e {data['name']} {data['freq']} {data['res']}"))
-                            thread.start()
-                            thread.join()
-                            
-                            thread = threading.Thread(target=esp_controller.update_schedules)
-                            thread.start()
-                            thread.join()
-                        else:
-                            res = run_command(matches[0], "editesp", [data["id"], data["name"], data["freq"], data["res"]])
-                            if res:
-                                response = "ok"
-                            else:
-                                logger.error(f"Error: not good. editesp something went wrong")
-                                response = "Error: something went wrong"
 
                 if "error" in response.lower():
                     logger.warn(f"Responding with: {response}")
@@ -313,33 +126,6 @@ def main(task_queue, response_queue, test=False):
                     response_queue.put(str(response))
 
                 task = None
-
-        if test:
-            class fakeserial:
-                def __init__(self):
-                    self.written = ""
-
-                def write(self, bytes):
-                    self.written = bytes.decode("utf-8")
-
-                def readline(self):
-                    if self.written.split():
-                        if self.written.split()[0] == "s":
-                            return bytes(self.written, encoding="utf-8")
-                        elif self.written[0] == "p":
-                            return bytes("o", encoding="utf-8")
-                    #print(self.written)
-                    return bytes(self.written, encoding="utf-8")
-
-            # slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainLysTest", "status": "Responded", "lastused": int(time.time()), "error": ""})
-            # slaves.append({"device": "idk", "serial": fakeserial(), "name": "mainPump", "status": "Responded", "lastused": int(time.time()), "error": ""})
-        # else:
-        #     for device in get_arduinos():
-        #         logger.info(f"found already connected USB device: {device}")
-        #         start_initialization_timer(device)
-        #     usb_listener_process = multiprocessing.Process(target=setup_usb_listener, args=(on_connect, on_disconnect))
-
-
 
         def update_device_outputs(temporaryoverwrite=False, overwrite_schedule=False):
             nonlocal last_updated
@@ -379,7 +165,7 @@ def main(task_queue, response_queue, test=False):
                                         wireless_cmd_builder += f"{device['id']} s {info['pin']} {strength} {1 if temporaryoverwrite or overwrite_schedule else 0};"
                                         wireless_cmd_devices.append(device)
                                     else:
-                                        run_command(device, "analogWrite", [info["pin"], strength])
+                                        logger.warning(f"Device {device['name']} is not wireless and cannot be controlled by manager")
                             
                             time.sleep(0.05)
             if wireless_cmd_builder:
