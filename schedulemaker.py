@@ -51,11 +51,19 @@ def create_esp32_schedule(device_name):
         "c": []  # Changed from dictionary to list
     }
 
+    throttle_data = read_json_file('data/throttle.json')
+
     # Process each channel
     for channel_name, channel_data in links_data.items():
         if channel_name in pin_mapping:
             # Determine channel type based on name - store as ASCII value (112 for 'p', 108 for 'l')
             channel_type = 112 if channel_name.lower().startswith("pump") else 108  # ASCII values for 'p' and 'l'
+            
+            throttle_key = channel_data["type"] + "throttle"
+            if throttle_key in throttle_data:
+                throttle_val = throttle_data[throttle_key]
+            else:
+                throttle_val = 100
             
             channel_schedule = {
                 "o": pin_mapping[channel_name],  # Pin number
@@ -68,11 +76,11 @@ def create_esp32_schedule(device_name):
                 simplified_link = {
                     "s": {  # Source
                         "t": link["source"]["time"],
-                        "p": link["source"]["percentage"]
+                        "p": int(round(link["source"]["percentage"] * (throttle_val / 100.0)))
                     },
                     "d": {  # Destination (target)
                         "t": link["target"]["time"],
-                        "p": link["target"]["percentage"]
+                        "p": int(round(link["target"]["percentage"] * (throttle_val / 100.0)))
                     }
                 }
                 channel_schedule["l"].append(simplified_link)
@@ -89,7 +97,7 @@ def create_esp32_schedule(device_name):
 if __name__ == "__main__":
     try:
         # Example usage with device name
-        device_name = "mainTest"  # or any other device name from channels.json
+        device_name = "mainPump"  # or any other device name from channels.json
         command = create_esp32_schedule(device_name)
         print("ESP32 Command:")
         print(command)
