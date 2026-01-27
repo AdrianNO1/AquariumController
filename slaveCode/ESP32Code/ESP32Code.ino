@@ -7,6 +7,8 @@
 #include <vector>  // Added for std::vector
 #include <SPIFFS.h>
 #include <time.h>  // Added for time functions
+#include <esp_wifi.h>
+#include <cstring>  // for strlcpy, strlen
 
 unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000; // 5 seconds
@@ -19,11 +21,13 @@ const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;    // Don't change without altering manager.py
 
-const char* VERSION = "3w";
+const char* VERSION = "3.2w";
 const bool TEST = false;
 const char* ntpServer = "pool.ntp.org";  // NTP server for time sync
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
+
+StaticJsonDocument<4096> globalDoc;
 
 // Chunking configuration
 #define MAX_CHUNK_SIZE 200
@@ -31,7 +35,7 @@ const int daylightOffset_sec = 0;      // No daylight savings offset
 #define CHUNK_TIMEOUT 10000  // 10 seconds timeout for receiving all chunks
 
 struct ChunkInfo {
-    String data;
+    char data[MAX_CHUNK_SIZE + 1]; // fixed-size buffer per chunk
     bool received;
 };
 
@@ -74,7 +78,12 @@ int resolution;
 
 unsigned long lastScheduleUpdate = 0;
 
-String currentSchedule = "";
+// Fixed-size buffer holding the active schedule JSON; avoids dynamic heap usage
+char currentSchedule[4096] = {0};
+
+// Track last day we performed the daily 4 AM restart
+int lastRestartDayOfYear = -1;
+
 unsigned long syncTimeOffset = 0;
 
 // Update the struct to include channel type
@@ -277,29 +286,10 @@ void processSchedule(const String& schedule) {
 
     // Store the schedule
     storeSchedule(schedule);
-    currentSchedule = schedule;
+    strlcpy(currentSchedule, schedule.c_str(), sizeof(currentSchedule));
     
     // Get sync time from schedule
     unsigned long scheduleTime = doc["syncTime"].as<unsigned long>();
-    
-    // Update our time if we have syncTime in the schedule
-    if (scheduleTime > 0) {
-        // Set current time based on syncTime
-        struct tm timeinfo;
-        time_t syncTime = scheduleTime;
-        localtime_r(&syncTime, &timeinfo);
-        
-        Serial.print("Syncing time to: ");
-        Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-        
-        timeInfo.lastSyncTime = syncTime;
-        timeInfo.lastSavedTime = syncTime;
-        timeInfo.lastMillis = millis();
-        timeInfo.timeInitialized = true;
-        
-        // Save to EEPROM
-        saveTimeInfo();
-    }
     
     // Clear existing channel configurations
     activeChannels.clear();
@@ -324,13 +314,38 @@ void processSchedule(const String& schedule) {
     }
 }
 
+const int MAX_RETRIES = 3;
+const int RETRY_DELAY_MS = 1000;
+bool publishWithRetry(const char* topic, const char* payload) {
+    int attempt = 0;
+    while (attempt < MAX_RETRIES) {
+        if (client.publish(topic, payload)) {
+            Serial.printf("Publish succeeded on attempt %d\n", attempt + 1);
+            return true;  // Success
+        } else {
+            Serial.printf("Publish failed on attempt %d, retrying...\n", attempt + 1);
+            attempt++;
+            delay(RETRY_DELAY_MS);
+            client.loop();  // Allow MQTT client to process incoming/outgoing packets
+        }
+    }
+
+    Serial.println("Publish failed after maximum retries, disconnecting MQTT client");
+    client.disconnect();  // Force reconnection on next loop iteration
+    return false;         // Failed after retries
+}
+
+
 void setup_wifi() {
 	Serial.println("Connecting to WiFi...");
 	Serial.print("SSID: ");
 	Serial.println(ssid);
 	
 	WiFi.begin(ssid, password);
-	
+
+	WiFi.setSleep(false);           // Arduino-style call
+    esp_wifi_set_ps(WIFI_PS_NONE);  // IDF-style call, does the same
+
 	int attempts = 0;
 	while (WiFi.status() != WL_CONNECTED && attempts < 20) {
 		delay(500);
@@ -367,7 +382,7 @@ void announcePresence() {
   	doc["version"] = VERSION;
 	
 	// Calculate and send a hash of the schedule instead of the entire schedule
-	if (currentSchedule.length() > 0) {
+	if (strlen(currentSchedule) > 0) {
 		// Parse the schedule to remove syncTime before hashing
 		StaticJsonDocument<4096> scheduleDoc;
 		deserializeJson(scheduleDoc, currentSchedule);
@@ -391,9 +406,9 @@ void announcePresence() {
 	String message;
 	serializeJson(doc, message);
 	if (TEST) {
-		client.publish("test/aquarium/announce", message.c_str());
+		publishWithRetry("test/aquarium/announce", message.c_str());
 	} else {
-		client.publish("aquarium/announce", message.c_str());
+		publishWithRetry("aquarium/announce", message.c_str());
 	}
 	Serial.println("Announced presence: " + message);
 }
@@ -408,7 +423,7 @@ String handleScheduleCommand(const String& scheduleJson) {
     
     // Store and process the schedule
     storeSchedule(scheduleJson);
-    currentSchedule = scheduleJson;
+    strlcpy(currentSchedule, scheduleJson.c_str(), sizeof(currentSchedule));
     
     // Set time offset
     syncTimeOffset = doc["syncTime"].as<unsigned long>() - (millis() / 1000);
@@ -445,45 +460,45 @@ String handleCommand(String command, String args) {
 	if (command == "s") {
 		int pin, value, overwrite;
 		if (sscanf(args.c_str(), "%d %d %d", &pin, &value, &overwrite) == 3) {
-				Serial.println("Pin: " + String(pin));
-				Serial.println("Value: " + String(value));
-				Serial.println("Overwrite: " + String(overwrite));
-				if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
-						if (!attachedPins[pin]) {
-								if (ledcAttach(pin, freq, resolution)) {
-										attachedPins[pin] = true;
-										ledcWrite(pin, value);
-										lastPinValues[pin] = value;
-										
-										// Update pin state with overwrite information
-										if (overwrite == 1) {
-											pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
-										} else {
-											pinStates[pin] = {value, false, 0};
-										}
-										
-										response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
-								} else {
-										response = "E: LEDC attach failed";
-								}
+			Serial.println("Pin: " + String(pin));
+			Serial.println("Value: " + String(value));
+			Serial.println("Overwrite: " + String(overwrite));
+			if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
+				if (!attachedPins[pin]) {
+					if (ledcAttach(pin, freq, resolution)) {
+						attachedPins[pin] = true;
+						ledcWrite(pin, value);
+						lastPinValues[pin] = value;
+						
+						// Update pin state with overwrite information
+						if (overwrite == 1) {
+							pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
 						} else {
-								ledcWrite(pin, value);
-								lastPinValues[pin] = value;
-								
-								// Update pin state with overwrite information
-								if (overwrite == 1) {
-									pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
-								} else {
-									pinStates[pin] = {value, false, 0};
-								}
-								
-								response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+							pinStates[pin] = {value, false, 0};
 						}
+						
+						response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+					} else {
+						response = "E: LEDC attach failed";
+					}
 				} else {
-						response = "E: Invalid value or overwrite parameter";
+					ledcWrite(pin, value);
+					lastPinValues[pin] = value;
+					
+					// Update pin state with overwrite information
+					if (overwrite == 1) {
+						pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
+					} else {
+						pinStates[pin] = {value, false, 0};
+					}
+					
+					response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
 				}
+			} else {
+				response = "E: Invalid value or overwrite parameter";
+			}
 		} else {
-				response = "E: Invalid arguments";
+			response = "E: Invalid arguments";
 		}
 	}
 	
@@ -582,6 +597,21 @@ String handleCommand(String command, String args) {
 			response = "E: Invalid time value";
 		}
 	}
+	else if (command == "r") {
+        int pin;
+        char extra[32];
+        int count = sscanf(args.c_str(), "%d %31s", &pin, extra);
+        
+        if (count > 1) {
+            response = "E: Metadata not supported";
+        } else if (count == 1) {
+            pinMode(pin, INPUT);
+            int val = analogRead(pin);
+            response = "r " + String(pin) + " " + String(val);
+        } else {
+			response = "E: Invalid arguments";
+        }
+	}
 
 	return response;
 }
@@ -620,9 +650,9 @@ void callback(char* topic, byte* payload, unsigned int length) {
 			clearEEPROM();
 			initializeEEPROM();
 			if (TEST) {
-				client.publish("test/aquarium/response", "EEPROM cleared");
+				publishWithRetry("test/aquarium/response", "EEPROM cleared");
 			} else {
-				client.publish("aquarium/response", "EEPROM cleared");
+				publishWithRetry("aquarium/response", "EEPROM cleared");
 			}
 			return;
 		}
@@ -663,11 +693,11 @@ void callback(char* topic, byte* payload, unsigned int length) {
 			serializeJson(responses, responseStr);
 			if (TEST) {
 				Serial.println("Publishing response to test/aquarium/response: " + responseStr);
-				client.publish("test/aquarium/response", responseStr.c_str());
+				publishWithRetry("test/aquarium/response", responseStr.c_str());
 				Serial.println("Published to test/aquarium/response");
 			} else {
 				Serial.println("Publishing response to aquarium/response: " + responseStr);
-				client.publish("aquarium/response", responseStr.c_str());
+				publishWithRetry("aquarium/response", responseStr.c_str());
 				Serial.println("Published to aquarium/response");
 			}
 		}
@@ -716,7 +746,18 @@ void initializeTime() {
         configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
         
         struct tm timeinfo;
-        if (getLocalTime(&timeinfo)) {
+        bool success = false;
+        
+        // Retry NTP sync for up to 4 minutes (30 attempts * 8 seconds)
+        for (int i = 0; i < 30; i++) {
+            if (getLocalTime(&timeinfo, 8000)) {
+                success = true;
+                break;
+            }
+            Serial.println("Retrying NTP sync... (" + String(i + 1) + "/30)");
+        }
+        
+        if (success) {
             time_t now;
             time(&now);
             timeInfo.lastSyncTime = now;
@@ -728,7 +769,7 @@ void initializeTime() {
             Serial.print("Current time: ");
             Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
         } else {
-            Serial.println("Failed to obtain time from NTP");
+            Serial.println("Failed to obtain time from NTP after retries");
         }
     } else {
         Serial.println("WiFi not connected, can't initialize time via NTP");
@@ -827,13 +868,18 @@ void setup() {
 	initializeTime();
 	
 	client.setServer(mqtt_server, mqtt_port);
-	client.setKeepAlive(60);	// Set keepalive to 60 seconds
+	client.setKeepAlive(15);
 	client.setCallback(callback);
 	
 	Serial.println("Setup complete");
 }
 
 void loop() {
+	if (WiFi.status() != WL_CONNECTED) {
+		WiFi.reconnect();
+		delay(200);
+	}
+
 	if (!client.connected()) {
 		unsigned long currentMillis = millis();
 		if (currentMillis - lastReconnectAttempt >= reconnectInterval) {
@@ -890,8 +936,14 @@ void loop() {
 		lastTimeSave = millis();
 	}
 
+	static unsigned long lastOverwriteCheck = 0;
+	if (millis() - lastOverwriteCheck >= 200) {
+		checkOverwriteExpiries();
+		lastOverwriteCheck = millis();
+	}
+
 	// Process schedule if active
-	if (currentSchedule.length() > 0) {
+	if (strlen(currentSchedule) > 0) {
 		unsigned long currentMillis = millis();
 		
 		// Only update if SCHEDULE_UPDATE_INTERVAL has passed
@@ -902,11 +954,10 @@ void loop() {
 			int currentMinute = getCurrentMinuteOfDay();
 			
 			if (currentMinute > 0 || timeInfo.timeInitialized) {
-				StaticJsonDocument<4096> doc;
-				deserializeJson(doc, currentSchedule);
+				deserializeJson(globalDoc, currentSchedule);
 				
 				// Process each channel in the array
-				JsonArray channels = doc["c"].as<JsonArray>();
+				JsonArray channels = globalDoc["c"].as<JsonArray>();
 				for (size_t i = 0; i < channels.size(); i++) {
 					JsonVariant channel = channels[i];
 					int pin = channel["o"].as<int>();
@@ -920,12 +971,7 @@ void loop() {
 							// Check if pin is currently overwritten
 							auto pinStateIt = pinStates.find(pin);
 							if (pinStateIt != pinStates.end() && pinStateIt->second.isOverwritten) {
-								// Check if overwrite has expired
-								if (currentMillis >= pinStateIt->second.overwriteExpiry) {
-									pinStateIt->second.isOverwritten = false;
-								} else {
-									continue; // Skip schedule update for this pin
-								}
+								continue; // Skip schedule update for this pin
 							}
 							
 							int targetValue = getScheduledValue(links, currentMinute);
@@ -950,6 +996,68 @@ void loop() {
 	}
  
 	client.loop();
+
+    // ------------------------------------------------------------------
+    // Daily maintenance: restart WiFi and MQTT at 04:00 to reclaim memory
+    // ------------------------------------------------------------------
+    static unsigned long lastMaintenanceCheck = 0;
+    if (timeInfo.timeInitialized && millis() - lastMaintenanceCheck > 60000) {
+        lastMaintenanceCheck = millis();
+        time_t now = getCurrentTime();
+        struct tm timeinfo;
+        localtime_r(&now, &timeinfo);
+
+        if (timeinfo.tm_hour == 4 && timeinfo.tm_min == 0 && lastRestartDayOfYear != timeinfo.tm_yday) {
+            Serial.println("Daily 04:00 restart: Disconnecting WiFi and MQTT to reclaim memory");
+
+            // Disconnect MQTT cleanly
+            if (client.connected()) {
+                client.disconnect();
+            }
+
+            // Reconnect WiFi
+            WiFi.disconnect(true);
+            delay(500);
+            setup_wifi();
+
+            // Force immediate MQTT reconnect attempt
+            lastReconnectAttempt = 0;
+
+            lastRestartDayOfYear = timeinfo.tm_yday;
+        }
+    }
+}
+
+void checkOverwriteExpiries() {
+    unsigned long currentMillis = millis();
+    for (auto& pair : pinStates) {
+        int pin = pair.first;
+        PinState& state = pair.second;
+
+        if (state.isOverwritten && currentMillis >= state.overwriteExpiry) {
+            Serial.println("Overwrite expired for pin " + String(pin));
+            state.isOverwritten = false;
+            
+            // Determine if this pin is controlled by the schedule
+            bool controlledBySchedule = false;
+            if (strlen(currentSchedule) > 0) {
+				for (const auto& channel : activeChannels) {
+					if (channel.pin == pin) {
+						controlledBySchedule = true;
+						break;
+					}
+				}
+            }
+
+            // If not controlled by schedule (or no schedule), turn it off
+            if (!controlledBySchedule) {
+                Serial.println("No scheduled value for pin " + String(pin) + ", turning off");
+                ledcWrite(pin, 0);
+                lastPinValues[pin] = 0;
+            }
+            // If controlled by schedule, it will be updated in the next schedule loop
+        }
+    }
 }
 
 void handleChunkedMessage(String chunkData) {
@@ -977,7 +1085,7 @@ void handleChunkedMessage(String chunkData) {
         // Reset current message if this is the first chunk or if timeout occurred
         Serial.println("Initializing new chunked message with " + String(totalChunks) + " chunks");
         for (int i = 0; i < MAX_CHUNKS; i++) {
-            currentMessage.chunks[i].data = "";
+            currentMessage.chunks[i].data[0] = '\0';
             currentMessage.chunks[i].received = false;
         }
         currentMessage.totalChunks = totalChunks;
@@ -987,7 +1095,7 @@ void handleChunkedMessage(String chunkData) {
     
     // Store this chunk
     if (chunkIndex < MAX_CHUNKS) {
-        currentMessage.chunks[chunkIndex].data = data;
+        strlcpy(currentMessage.chunks[chunkIndex].data, data.c_str(), sizeof(currentMessage.chunks[chunkIndex].data));
         currentMessage.chunks[chunkIndex].received = true;
         currentMessage.lastChunkTime = millis();
         
@@ -1020,7 +1128,7 @@ void handleChunkedMessage(String chunkData) {
             
             // Reset for next chunked message
             for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data = "";
+                currentMessage.chunks[i].data[0] = '\0';
                 currentMessage.chunks[i].received = false;
             }
             currentMessage.complete = true;
@@ -1069,11 +1177,11 @@ void processCompleteMessage(String message) {
         serializeJson(responses, responseStr);
         if (TEST) {
             Serial.println("Publishing response to test/aquarium/response: " + responseStr);
-            client.publish("test/aquarium/response", responseStr.c_str());
+            publishWithRetry("test/aquarium/response", responseStr.c_str());
             Serial.println("Published to test/aquarium/response");
         } else {
             Serial.println("Publishing response to aquarium/response: " + responseStr);
-            client.publish("aquarium/response", responseStr.c_str());
+            publishWithRetry("aquarium/response", responseStr.c_str());
             Serial.println("Published to aquarium/response");
         }
     }
@@ -1087,7 +1195,7 @@ void checkChunkTimeout() {
             Serial.println("Chunked message timed out, resetting");
             // Reset the chunked message
             for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data = "";
+                currentMessage.chunks[i].data[0] = '\0';
                 currentMessage.chunks[i].received = false;
             }
             currentMessage.complete = false;
