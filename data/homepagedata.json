@@ -1,0 +1,769 @@
+{
+    "codegroups": {
+        "Main": {
+            "rows": {
+                "Heat 1": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:45.763744",
+                    "mode": "auto"
+                },
+                "Pumpe loft": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:45.965769",
+                    "mode": "auto"
+                },
+                "Chiller": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2026-01-11T21:24:59.622168",
+                    "mode": "auto"
+                },
+                "Light1": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2026-01-11T21:24:57.665567",
+                    "mode": "auto"
+                },
+                "Pump 1": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2026-01-11T21:25:00.392690",
+                    "mode": "auto"
+                },
+                "Pump 2": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:46.769476",
+                    "mode": "auto"
+                },
+                "SeaSwirl1": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2026-01-11T21:25:00.665014",
+                    "mode": "auto"
+                },
+                "ATO": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2026-01-11T21:24:59.967333",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Main 1b": {
+            "rows": {
+                "Heat 3": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:48.985431",
+                    "mode": "auto"
+                },
+                "Pump 5": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:49.185373",
+                    "mode": "auto"
+                },
+                "Pump 6": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:49.387909",
+                    "mode": "auto"
+                },
+                "Ventilasjon 2": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:49.592445",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Main 2b": {
+            "rows": {
+                "Heat 4": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:49.791533",
+                    "mode": "auto"
+                },
+                "Pump 7": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:49.991987",
+                    "mode": "auto"
+                },
+                "Pump 8": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:50.194022",
+                    "mode": "auto"
+                },
+                "Pump 9": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:50.401191",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Kjeller": {
+            "rows": {
+                "MainReturn": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:50.603263",
+                    "mode": "auto"
+                },
+                "Return1": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:50.804455",
+                    "mode": "auto"
+                },
+                "Light 11": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:51.007531",
+                    "mode": "auto"
+                },
+                "Light 12": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:51.206216",
+                    "mode": "auto"
+                },
+                "Heat 5": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:51.408369",
+                    "mode": "auto"
+                },
+                "Pump 11": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:51.609536",
+                    "mode": "auto"
+                },
+                "Pump 12": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:51.811618",
+                    "mode": "auto"
+                },
+                "Pump 13": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:52.015586",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Kjeller 2": {
+            "rows": {
+                "MainReturn2": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:52.214729",
+                    "mode": "auto"
+                },
+                "Return2": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:52.414710",
+                    "mode": "auto"
+                },
+                "Light 13": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:52.617394",
+                    "mode": "auto"
+                },
+                "Biljard": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:52.818311",
+                    "mode": "auto"
+                },
+                "Heat 6": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:53.021123",
+                    "mode": "auto"
+                },
+                "Pump 14": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:53.220338",
+                    "mode": "auto"
+                },
+                "Pump 15": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:53.424275",
+                    "mode": "auto"
+                },
+                "Pump 16": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:53.630220",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Biljard": {
+            "rows": {
+                "MainReturn": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:53.836184",
+                    "mode": "auto"
+                },
+                "Heat 7": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:54.040460",
+                    "mode": "auto"
+                },
+                "Skimmer": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:54.241708",
+                    "mode": "auto"
+                },
+                "Luft": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:54.442487",
+                    "mode": "auto"
+                },
+                "Pump 20": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:54.645536",
+                    "mode": "auto"
+                },
+                "Pump 21": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:54.847950",
+                    "mode": "auto"
+                },
+                "ReturnATO": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:55.047273",
+                    "mode": "auto"
+                },
+                "ATO4": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:55.248396",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Biljard 2": {
+            "rows": {
+                "ReturnBad": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:55.450519",
+                    "mode": "auto"
+                },
+                "Heat 8": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:55.653701",
+                    "mode": "auto"
+                },
+                "Light 20": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:55.855085",
+                    "mode": "auto"
+                },
+                "Light 21": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:56.053757",
+                    "mode": "auto"
+                },
+                "Light 32": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:56.256084",
+                    "mode": "auto"
+                },
+                "Pump 22": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:56.457211",
+                    "mode": "auto"
+                },
+                "Pump 23": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:56.663479",
+                    "mode": "auto"
+                },
+                "Pump 24": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:56.866314",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Bad": {
+            "rows": {
+                "Heat 9": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:57.069223",
+                    "mode": "auto"
+                },
+                "Light 30": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:57.268983",
+                    "mode": "auto"
+                },
+                "Pump 30": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:57.471046",
+                    "mode": "auto"
+                },
+                "Pump 31": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:57.671353",
+                    "mode": "auto"
+                }
+            }
+        },
+        "Loft": {
+            "rows": {
+                "Heat 10": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:57.874913",
+                    "mode": "auto"
+                },
+                "Light 40": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:58.081451",
+                    "mode": "auto"
+                },
+                "Pump 40": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:58.284667",
+                    "mode": "auto"
+                },
+                "Pump 41": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-04-19T15:04:58.484252",
+                    "mode": "auto"
+                }
+            }
+        },
+        "MockESP32_1": {
+            "rows": {
+                "Frontlys": {
+                    "pin": 2,
+                    "code": "asdasddd",
+                    "mode": "off",
+                    "updated_at": "2026-01-11T21:39:32.876837"
+                },
+                "Heat 2": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-12-31T11:28:22.892413",
+                    "mode": "auto"
+                },
+                "Pump 3": {
+                    "pin": 42,
+                    "code": "Set ON\nIf Switch1 CLOSED Then OFF",
+                    "mode": "auto",
+                    "updated_at": "2026-01-11T21:37:21.443089"
+                },
+                "Pump 4": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-12-31T11:28:22.892413",
+                    "mode": "auto"
+                },
+                "SeaSwirl2": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2026-01-11T21:25:05.561287",
+                    "mode": "auto"
+                },
+                "SeaSwirl3": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2026-01-11T21:25:01.208119",
+                    "mode": "auto"
+                },
+                "Surge": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-12-31T11:28:22.892413",
+                    "mode": "auto"
+                },
+                "Ventilasjon": {
+                    "pin": null,
+                    "code": "",
+                    "updated_at": "2025-12-31T11:28:22.892413",
+                    "mode": "auto"
+                }
+            }
+        }
+    },
+    "switches": {
+        "Bad Low": {
+            "pin": 33,
+            "alarm_when_closed": true,
+            "alarm_when_open": false,
+            "alarm_delay": 30,
+            "device": "MockESP32_2"
+        },
+        "Frag High": {
+            "pin": 0,
+            "alarm_when_closed": false,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Main High": {
+            "pin": 33,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Main Low": {
+            "pin": 33,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Loft High": {
+            "pin": 33,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Loft Low": {
+            "pin": 33,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Bad High": {
+            "pin": 33,
+            "alarm_when_closed": true,
+            "alarm_when_open": false,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Sump High": {
+            "pin": 33,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Sump Med": {
+            "pin": 33,
+            "alarm_when_closed": true,
+            "alarm_when_open": false,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Sump Low": {
+            "pin": 33,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Frag Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Qt High": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_delay": 30,
+            "device": "Device 2"
+        },
+        "Qt Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Qt2 High": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Qt2 Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Qt3 High": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Qt3 Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Qt4 High": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Qt4 Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Biljard High": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Biljard Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Sump2 High": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Sump2 Med": {
+            "pin": null,
+            "alarm_when_closed": true,
+            "alarm_when_open": false,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Sump2 Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "ATO High": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "ATO Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Ca Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Kh Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Mg Low": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Lys 1": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Lys 2": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Lys 3": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Akvarium 1": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Akvarium 2": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Kjeller 1": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Kjeller 2": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Kjeller 3": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Loft": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Aux1": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        },
+        "Aux2": {
+            "pin": null,
+            "alarm_when_closed": false,
+            "alarm_when_open": true,
+            "alarm_delay": 30,
+            "device": null
+        }
+    },
+    "timers": {
+        "flowKills": [
+            {
+                "name": "Main FlowKill",
+                "countDownEnd": "2025-12-31T12:17:51.834247",
+                "duration": 30
+            },
+            {
+                "name": "Frag FlowKill",
+                "countDownEnd": "2025-12-31T11:53:34.537569",
+                "duration": 1
+            },
+            {
+                "name": "Bad FlowKill",
+                "countDownEnd": null,
+                "duration": 0
+            },
+            {
+                "name": "Good FlowKill",
+                "countDownEnd": "2025-12-31T12:17:51.440564",
+                "duration": 30
+            }
+        ],
+        "feeds": [
+            {
+                "type": "Feed A",
+                "device": "Light",
+                "countDownEnd": null,
+                "duration": 25
+            },
+            {
+                "type": "Feed B",
+                "device": "SeaSwirl",
+                "countDownEnd": "2025-12-31T12:17:48.193049",
+                "duration": 30
+            },
+            {
+                "type": "Feed C",
+                "device": "Flow",
+                "countDownEnd": null,
+                "duration": 20
+            },
+            {
+                "type": "Feed D",
+                "device": "DosingPump",
+                "countDownEnd": "2025-12-31T12:17:50.165133",
+                "duration": 30
+            }
+        ]
+    },
+    "sensors": {
+        "Temp Main": {
+            "device": "MockESP32_1",
+            "pin": 6,
+            "readType": "temp"
+        },
+        "Temp Main2": {
+            "device": "MockESP32_1",
+            "pin": 2,
+            "readType": "temp"
+        }
+    }
+}

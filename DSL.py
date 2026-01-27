@@ -1,8 +1,13 @@
+import logging
 from datetime import datetime, timedelta, time as time_obj
+import os
+from utils import read_json_file
 from enum import Enum, auto
 from typing import List, Dict, Optional, Tuple, Any
 
-# --- Data Structures ---
+logger = logging.getLogger(__name__)
+
+# ... (Previous Enums and Classes) ...
 
 class CommandType(Enum):
     FALLBACK = auto()
@@ -82,8 +87,6 @@ class MinTimeInstruction(Instruction):
         self.state = state # "Min Time ... Then OFF" means "Must stay OFF for at least..."
         self.duration = duration_seconds
 
-# --- Memory ---
-
 class DeviceStateMemory:
     def __init__(self):
         self.current_state = DeviceState.OFF
@@ -92,8 +95,6 @@ class DeviceStateMemory:
         # For Defer
         self.pending_state: Optional[DeviceState] = None
         self.pending_start_time = 0
-
-# --- Parser ---
 
 class ApexParser:
     def __init__(self):
@@ -217,28 +218,55 @@ class ApexParser:
                 instructions.append(inst)
         return instructions
 
-def verify_code(code: str) -> Tuple[bool, Optional[str]]:
+def verify_code(code: str, context: 'InterpreterContext' = None) -> Tuple[bool, Optional[str]]:
+    """
+    Verify DSL code for syntax errors and optionally validate referenced resources.
+    If context is provided, also checks that referenced sensors/switches exist.
+    """
     parser = ApexParser()
     try:
-        parser.parse_block(code)
+        instructions = parser.parse_block(code)
+        
+        # If context provided, validate referenced resources exist
+        if context is not None:
+            missing = []
+            for inst in instructions:
+                if isinstance(inst, IfSensorInstruction):
+                    if inst.sensor_name not in context.sensors:
+                        missing.append(f"Sensor '{inst.sensor_name}' not found")
+                elif isinstance(inst, IfSwitchInstruction):
+                    if inst.switch_name not in context.switches:
+                        missing.append(f"Switch '{inst.switch_name}' not found")
+            
+            if missing:
+                return False, "Missing resources: " + "; ".join(missing)
+        
         return True, None
     except ValueError as e:
         return False, str(e)
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-# --- Evaluator ---
-
 class InterpreterContext:
-    def __init__(self, sensors: Dict[str, float], switches: Dict[str, bool], current_time: datetime):
+    def __init__(self, sensors: Dict[str, float], switches: Dict[str, bool], current_time: datetime, sensor_timestamps: Dict[str, datetime] = None):
         self.sensors = sensors
+        self.sensor_timestamps = sensor_timestamps or {}
         self.switches = switches 
         # current_time must be datetime for timestamp calc, though logic uses time portion
         self.current_time_dt = current_time 
         self.current_time_obj = current_time.time()
 
-def evaluate(instructions: List[Instruction], context: InterpreterContext, memory: DeviceStateMemory) -> DeviceState:
+def evaluate(instructions: List[Instruction], context: InterpreterContext, memory: DeviceStateMemory, allow_expired: bool = False, errors: List[str] = None) -> DeviceState:
+    """
+    Evaluate DSL instructions and return the resulting device state.
     
+    Args:
+        instructions: Parsed DSL instructions
+        context: Sensor/switch context
+        memory: Device state memory for Defer/MinTime
+        allow_expired: If True, don't check sensor expiry
+        errors: Optional list to collect error messages (for frontend display)
+    """
     # 1. Determine "Logical State" (Proposed State)
     # Default to current state (Supports Hysteresis / No-Change behavior)
     raw_state = memory.current_state 
@@ -269,21 +297,67 @@ def evaluate(instructions: List[Instruction], context: InterpreterContext, memor
         
         elif isinstance(inst, IfSensorInstruction):
             val = context.sensors.get(inst.sensor_name)
-            if val is not None:
-                condition_met = False
-                if inst.operator == Operator.GREATER_THAN:
-                     condition_met = val > inst.value
-                elif inst.operator == Operator.LESS_THAN:
-                     condition_met = val < inst.value
-                elif inst.operator == Operator.EQUALS:
-                     condition_met = abs(val - inst.value) < 0.001
-                
-                if condition_met:
-                    raw_state = inst.state
+            if val is None:
+                # Sensor not found - log error, collect for frontend, and use fallback
+                error_msg = f"Sensor '{inst.sensor_name}' not found"
+                logger.error(f"ERROR: {error_msg}!")
+                print(f"ERROR: {error_msg}!")
+                if errors is not None:
+                    errors.append(error_msg)
+                fallback = next((i for i in instructions if isinstance(i, FallbackInstruction)), None)
+                if fallback:
+                    logger.warning(f"Using fallback state {fallback.state} due to missing sensor.")
+                    return fallback.state
+                # No fallback, skip this condition
+                continue
+            
+            # Check expiry
+            if not allow_expired:
+                ts = context.sensor_timestamps.get(inst.sensor_name)
+                if ts:
+                    # calculate age
+                    age = (context.current_time_dt - ts).total_seconds()
+                    if age > 300: # 5 minutes
+                         error_msg = f"Sensor '{inst.sensor_name}' is stale ({age:.0f}s old)"
+                         logger.error(f"ERROR: {error_msg}.")
+                         print(f"ERROR: {error_msg}.")
+                         if errors is not None:
+                             errors.append(error_msg)
+                         # Check fallback
+                         fallback = next((i for i in instructions if isinstance(i, FallbackInstruction)), None)
+                         if fallback:
+                             logger.warning(f"Using fallback state {fallback.state} due to stale sensor.")
+                             return fallback.state
+            
+            condition_met = False
+            if inst.operator == Operator.GREATER_THAN:
+                 condition_met = val > inst.value
+            elif inst.operator == Operator.LESS_THAN:
+                 condition_met = val < inst.value
+            elif inst.operator == Operator.EQUALS:
+                 condition_met = abs(val - inst.value) < 0.001
+            
+            if condition_met:
+                raw_state = inst.state
         
         elif isinstance(inst, IfSwitchInstruction):
-            # Assume switch True=Closed, False=Open
-            is_closed = context.switches.get(inst.switch_name, False)
+            # Check if switch exists
+            if inst.switch_name not in context.switches:
+                # Switch not found - log error, collect for frontend, and use fallback
+                error_msg = f"Switch '{inst.switch_name}' not found"
+                logger.error(f"ERROR: {error_msg}!")
+                print(f"ERROR: {error_msg}!")
+                if errors is not None:
+                    errors.append(error_msg)
+                fallback = next((i for i in instructions if isinstance(i, FallbackInstruction)), None)
+                if fallback:
+                    logger.warning(f"Using fallback state {fallback.state} due to missing switch.")
+                    return fallback.state
+                # No fallback, skip this condition
+                continue
+            
+            # Switch exists, evaluate condition
+            is_closed = context.switches[inst.switch_name]
             target_is_closed = (inst.target_state == "CLOSED")
             
             if is_closed == target_is_closed:
@@ -354,4 +428,79 @@ def evaluate(instructions: List[Instruction], context: InterpreterContext, memor
         memory.last_transition_time = context.current_time_dt.timestamp()
         memory.pending_state = None # Reset pending if we successfully switched
         
+
     return memory.current_state
+
+
+def build_interpreter_context(data_dir: str) -> InterpreterContext:
+    """
+    Builds an InterpreterContext from the JSON files in the specified data directory.
+    Uses 'espstatuses.json' for sensor values and switch states.
+    """
+    esp_status_path = os.path.join(data_dir, "espstatuses.json")
+    
+    try:
+        data = read_json_file(esp_status_path)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Missing required data file: {esp_status_path}")
+    except Exception as e:
+        raise ValueError(f"Error reading context data: {str(e)}")
+
+    sensors = {}
+    sensor_timestamps = {}
+    switches = {}
+
+    # Parse Sensors
+    if "sensors" in data:
+        sensor_data = data["sensors"]
+        # Handle list format (e.g. [{"name": "Temp", "value": 25.0}, ...])
+        if isinstance(sensor_data, list):
+            for s in sensor_data:
+                if "name" in s and "value" in s:
+                    try:
+                        sensors[s["name"]] = float(s["value"])
+                        if "updated_at" in s:
+                            # 2025-12-27T14:04:38.010451
+                            try:
+                                dt = datetime.fromisoformat(s["updated_at"])
+                                sensor_timestamps[s["name"]] = dt
+                            except ValueError:
+                                logger.warning(f"Invalid timestamp format for sensor '{s['name']}': {s['updated_at']}")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Failed to parse sensor '{s.get('name', 'unknown')}': {e}")
+                else:
+                    logger.warning(f"Skipping malformed sensor entry (missing name or value): {s}")
+        # Handle dict format if present
+        elif isinstance(sensor_data, dict):
+            for name, info in sensor_data.items():
+                if isinstance(info, dict) and "value" in info:
+                    try:
+                        sensors[name] = float(info["value"])
+                        if "updated_at" in info:
+                            try:
+                                dt = datetime.fromisoformat(info["updated_at"])
+                                sensor_timestamps[name] = dt
+                            except ValueError:
+                                logger.warning(f"Invalid timestamp format for sensor '{name}': {info['updated_at']}")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Failed to parse sensor '{name}': {e}")
+                else:
+                    logger.warning(f"Skipping malformed sensor entry '{name}': missing 'value' field")
+
+    # Parse Switches
+    if "switches" in data:
+        switch_data = data["switches"]
+        if isinstance(switch_data, dict):
+            for name, info in switch_data.items():
+                if isinstance(info, dict) and "is_open" in info:
+                    # DSL Logic: True=Closed, False=Open
+                    # Json Logic: is_open=True -> Open
+                    # Json Logic: is_open=False -> Closed
+                    # Therefore: is_closed (DSL) = not is_open (JSON)
+                    switches[name] = not info["is_open"]
+                else:
+                    logger.warning(f"Skipping malformed switch entry '{name}': missing 'is_open' field")
+    
+    current_time = datetime.now()
+    return InterpreterContext(sensors, switches, current_time, sensor_timestamps)
+

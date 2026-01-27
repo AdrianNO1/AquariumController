@@ -199,6 +199,11 @@
             color: white;
         }
 
+        .switch-unknown {
+            background-color: #ff9800;
+            color: white;
+        }
+
         .status-column {
             grid-column: 4;
             align-self: start;
@@ -541,6 +546,51 @@
             background-color: #ff4444 !important;
             color: white !important;
         }
+
+        .error-banner {
+            display: none;
+            background-color: #ff4444;
+            color: white;
+            padding: 10px 15px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        .error-banner.visible {
+            display: block;
+        }
+
+        .error-banner .error-title {
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .error-banner .error-list {
+            font-size: 12px;
+            font-weight: normal;
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        .error-banner .error-list li {
+            margin: 2px 0;
+        }
+
+        .error-banner .dismiss-btn {
+            float: right;
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .error-banner .dismiss-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
     </style>
 </head>
 
@@ -558,6 +608,12 @@
         <button class="nav-button" onclick="navigate('/control/qt2')">Qt2</button>
         <button class="nav-button" onclick="navigate('/control/qt3')">Qt3</button>
         <button class="nav-button" onclick="navigate('/control/qt4')">Qt4</button>
+    </div>
+
+    <div id="dslErrorBanner" class="error-banner">
+        <button class="dismiss-btn" onclick="dismissErrorBanner()">Dismiss</button>
+        <div class="error-title">⚠️ DSL Errors Detected:</div>
+        <ul class="error-list" id="dslErrorList"></ul>
     </div>
 
     <div class="container" id="dashboard"></div>
@@ -772,8 +828,8 @@
             let status = mode;
             if (mode === "auto") {
                 const statusObj = data.espstatuses && data.espstatuses.codegroups && data.espstatuses.codegroups[group] && data.espstatuses.codegroups[group][row];
-                if (statusObj) {
-                    status = "auto " + (statusObj.is_open ? "on" : "off");
+                if (statusObj && statusObj.output_value) {
+                    status = "auto " + statusObj.output_value;
                 } else {
                     status = "auto ???";
                 }
@@ -903,16 +959,20 @@
                         <td class="date-cell">${data.sensors.time}</td>
                     </tr>
                     ${data.sensors.readings.map(s => {
-                    const expired = isExpired(s.updated_at);
+                    // Look up config to find if device is set
+                    const config = data.sensors.config && data.sensors.config[s.name];
+                    const hasDevice = config && config.device && config.device !== null && config.device !== "";
+                    const expired = hasDevice && isExpired(s.updated_at);
                     const expiredClass = expired ? 'expired' : '';
-                    const titleAttr = expired ? `title="Expired. Last updated: ${s.updated_at}"` : '';
+                    const notSetClass = !hasDevice ? 'not-set' : '';
+                    const titleAttr = !hasDevice ? 'title="No device configured"' : (expired ? `title="Expired. Last updated: ${s.updated_at}"` : '');
 
                     return `
-                        <tr class="${expiredClass}" ${titleAttr}>
+                        <tr class="${expiredClass} ${notSetClass}" ${titleAttr} style="${!hasDevice ? 'background-color: #d3d3d3;' : ''}">
                             <td onclick="sensorConfig.open('${s.name}')" style="cursor: pointer;">
                                 ${s.name === "Ph" || s.name === "Redox" || s.name.includes("Main") ? '<b>' + s.name + '</b>' : s.name}
                             </td>
-                            <td class="sensor-value">${formatSensorValue(s)}</td>
+                            <td class="sensor-value">${hasDevice ? formatSensorValue(s) : '-'}</td>
                         </tr>
                     `}).join('')}
                 </table>`,
@@ -926,11 +986,43 @@
                 `<div class="box-title" data-group="${title}" onclick="cellEdit.open('${title}')"><span>${title}</span><span class="${data.devices.filter(d => d.name === title).length == 0 || data.devices.find(d => d.name === title && d.error) ? 'error' : ''}">${data.devices.filter(d => d.name === title).length}</span></div>
                 <table class="switch-table">
                     ${switches.map(sw => {
+                    const hasPin = sw.pin !== null && sw.pin !== undefined && sw.pin !== "";
                     const expired = sw.status.toLowerCase().includes('auto') && isExpired(sw.updated_at);
-                    const statusText = sw.status == "auto on" ? 'Auto On' : sw.status == "auto off" ? 'Auto Off' : sw.status == "auto ???" ? 'Auto ???' : 'Auto';
-                    const displayText = expired ? statusText + " Expired" : statusText;
-                    const expiredClass = expired ? 'expired' : '';
-                    const titleAttr = expired ? `title="Expired. Last updated: ${sw.updated_at}"` : '';
+                    const isUnknown = sw.status === "auto ???";
+
+                    // Determine display text for auto cell
+                    let displayText;
+                    let titleAttr = '';
+                    let autoClass = 'switch-auto';
+
+                    if (!hasPin) {
+                        // No pin configured - show gray "Not Set"
+                        displayText = 'Not Set';
+                        autoClass += ' no-code';
+                        titleAttr = 'title="No pin configured"';
+                    } else if (sw.status === "on" || sw.status === "off") {
+                        // Manual override - red
+                        displayText = 'Auto';
+                        autoClass += ' switch-overwritten';
+                    } else if (isUnknown) {
+                        // Auto mode but no data yet - orange
+                        displayText = 'Auto ???';
+                        autoClass += ' switch-unknown';
+                        titleAttr = 'title="No status data yet - waiting for manager"';
+                    } else if (sw.status === "auto on") {
+                        // Auto on - green
+                        displayText = 'Auto On';
+                        autoClass += ' switch-enabled';
+                    } else {
+                        // Auto off - normal
+                        displayText = 'Auto Off';
+                    }
+
+                    if (expired && hasPin) {
+                        displayText += ' Expired';
+                        autoClass += ' expired';
+                        titleAttr = `title="Expired. Last updated: ${sw.updated_at}"`;
+                    }
 
                     return `
                         <tr>
@@ -938,7 +1030,7 @@
                                 ${sw.name}
                             </td>
                             <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'off')" class="switch-off ${sw.status === 'off' ? 'switch-enabled' : ''}">Off</td>
-                            <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'auto')" class="switch-auto ${sw.status == "auto on" ? 'switch-enabled' : sw.status != "auto off" ? 'switch-overwritten' : ''} ${!sw.code || !sw.pin ? 'no-code' : ''} ${expiredClass}" ${titleAttr}>${displayText}</td>
+                            <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'auto')" class="${autoClass}" ${titleAttr}>${displayText}</td>
                             <td onclick="setSwitchOverwrite(this, '${title}', '${sw.name}', 'on')" class="switch-on ${sw.status === 'on' ? 'switch-enabled' : ''}">On</td>
                         </tr>
                     `}).join('')}
@@ -1014,13 +1106,16 @@
                     </tbody>
                     ${data.sensors.airTemps
                     .map(s => {
-                        const expired = isExpired(s.updated_at);
+                        // Look up config to find if device is set
+                        const config = data.sensors.config && data.sensors.config[s.name];
+                        const hasDevice = config && config.device && config.device !== null && config.device !== "";
+                        const expired = hasDevice && isExpired(s.updated_at);
                         const expiredClass = expired ? 'expired' : '';
-                        const titleAttr = expired ? `title="Expired. Last updated: ${s.updated_at}"` : '';
+                        const titleAttr = !hasDevice ? 'title="No device configured"' : (expired ? `title="Expired. Last updated: ${s.updated_at}"` : '');
                         return `
-                                <tr class="${expiredClass}" ${titleAttr}>
+                                <tr class="${expiredClass}" ${titleAttr} style="${!hasDevice ? 'background-color: #d3d3d3;' : ''}">
                                     <td>${s.name}</td>
-                                    <td>${formatSensorValue(s)}</td>
+                                    <td>${hasDevice ? formatSensorValue(s) : '-'}</td>
                                 </tr>
                             `}).join('')}
                     </tbody>
@@ -1894,9 +1989,23 @@
         }
 
         async function setSwitchOverwrite(element, groupTitle, switchName, action) {
+            // Check if the action matches the current status - if so, skip the request
+            if (data.switchGroups && data.switchGroups[groupTitle]) {
+                const group = data.switchGroups[groupTitle];
+                const switchObj = group.find(s => s.name === switchName);
+                if (switchObj) {
+                    const currentStatus = switchObj.status;
+                    // Check if action matches current mode
+                    if (action === 'on' && currentStatus === 'on') return;
+                    if (action === 'off' && currentStatus === 'off') return;
+                    if (action === 'auto' && currentStatus.startsWith('auto')) return;
+                }
+            }
+
             const originalContent = element.innerHTML;
             element.innerHTML = '<span class="spinner" style="width: 10px; height: 10px; margin: auto; border-width: 2px;"></span>'; // Adjust spinner size
             element.style.pointerEvents = 'none'; // Disable clicks during processing
+
 
             try {
                 const response = await $.ajax({

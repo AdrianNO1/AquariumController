@@ -109,11 +109,10 @@ class ESP32Manager:
         self.discover_devices()
         
     def on_message(self, client, userdata, msg):
-        print(f"\nReceived message on topic: {msg.topic}")
+        # print(f"\nReceived message on topic: {msg.topic}")
         decoded = msg.payload.decode()
-        print(f"Message payload: {decoded}") # {"id":"58B55856","name":"ESP32_Device","commands":[{"index":2,"response":"o"}]}
+        # print(f"Message payload: {decoded}") # {"id":"58B55856","name":"ESP32_Device","commands":[{"index":2,"response":"o"}]}
         if decoded == "announce":
-            print("Ignoring self-discovery message")
             return
         
         try:
@@ -175,7 +174,7 @@ class ESP32Manager:
                 device_name = payload.get("name", "unknown")
                 responses = payload.get("responses")
                 
-                print(f"Command response received from {device_name} (ID: {device_id}), Responses: {responses}")
+                # print(f"Command response received from {device_name} (ID: {device_id}), Responses: {responses}")
 
                 self.responses[device_id] = payload
                 if device_id in self.response_events:
@@ -294,7 +293,6 @@ class ESP32Manager:
                     target = parts[0]
                     command = parts[1]
                     args = ' '.join(parts[2:])
-                    print(slave)
                     if target == slave["name"] or target == slave["id"]:
                         if command == "s":
                             res = f"s {args}"
@@ -342,7 +340,7 @@ class ESP32Manager:
                     self.send_chunked_message(command_str, "aquarium/command")
             else:
                 # Publish the combined command string directly
-                print(f"Publishing commands to topic: aquarium/command")
+                # print(f"Publishing commands to topic: aquarium/command")
                 if self.TEST:
                     self.client.publish("test/aquarium/command", command_str)
                 else:
@@ -470,7 +468,7 @@ class ESP32Manager:
             self.responses = {}
             self.response_events = {}
 
-            print("manager _execute_internal returning", real_responses)
+            # print("manager _execute_internal returning", real_responses)
             return real_responses
     
         except Exception as e:

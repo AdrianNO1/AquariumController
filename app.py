@@ -1,6 +1,6 @@
 import json, os, sys, re, time, requests, dotenv
 dotenv.load_dotenv()
-from DSL import verify_code
+from DSL import verify_code, ApexParser, evaluate, DeviceState, DeviceStateMemory, build_interpreter_context
 
 if len(sys.argv) > 1 and sys.argv[1] == "restart":
     print("waiting 10")
@@ -471,8 +471,48 @@ def savecoderow():
         if not is_valid:
             return jsonify({"verify_status": is_valid, "code_error": code_error})
         
+        pin = data.get("pin")
+        if not pin:
+            return jsonify({"verify_status": False, "code_error": "No pin configured"})
         
-        return jsonify({"message": "ok"})
+        try:
+            # Parse and evaluate the code
+            parser = ApexParser()
+            instructions = parser.parse_block(data["code"])
+            
+            # Build context from current sensor/switch data
+            context = build_interpreter_context(os.path.join("data"))
+            
+            # Use temporary memory (not persisted for one-shot run)
+            memory = DeviceStateMemory()
+            
+            # Evaluate to get target state
+            target_state = evaluate(instructions, context, memory)
+            is_on = (target_state == DeviceState.ON)
+            
+            # Send command to manager via queue
+            clear_res_queue()
+            group_title = data.get("groupTitle", "RunOnce")
+            command = f"{group_title} s {pin} {1 if is_on else 0}"
+            task_queue.put(("run_command", command))
+            
+            try:
+                response = response_queue.get(timeout=10)
+                return jsonify({
+                    "verify_status": True, 
+                    "message": f"Executed: {'ON' if is_on else 'OFF'}",
+                    "result_state": "ON" if is_on else "OFF"
+                })
+            except queue.Empty:
+                return jsonify({
+                    "verify_status": True, 
+                    "message": f"Command sent (state: {'ON' if is_on else 'OFF'}), but no confirmation from manager",
+                    "result_state": "ON" if is_on else "OFF"
+                })
+                
+        except Exception as e:
+            app.logger.error(f"Error running code: {e}")
+            return jsonify({"verify_status": False, "code_error": str(e)})
     else:
         return jsonify({"error": "invalid action"})
 
@@ -633,15 +673,15 @@ def loadmainpageinfo():
     existing_json = read_json_file(homepagedata_path)
     espstatuses = read_json_file(espstatuses_path)
     
-    # Construct dummy codegroups status
-    espstatuses["codegroups"] = {}
+    # Ensure codegroups key exists in espstatuses
+    if "codegroups" not in espstatuses:
+        espstatuses["codegroups"] = {}
+    
+    # Create empty group structures for any missing groups (but don't set fake values)
     if "codegroups" in existing_json:
         for group_name, group_data in existing_json["codegroups"].items():
-            espstatuses["codegroups"][group_name] = {}
-            if "rows" in group_data:
-                for row_name in group_data["rows"]:
-                    # Always return False for now as per instructions
-                    espstatuses["codegroups"][group_name][row_name] = {"is_open": False}
+            if group_name not in espstatuses["codegroups"]:
+                espstatuses["codegroups"][group_name] = {}
 
     return jsonify({"main": existing_json, "espstatuses": espstatuses})
 

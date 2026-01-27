@@ -7,6 +7,7 @@ def main(task_queue, response_queue, test=False):
         from datetime import datetime
         from logging.handlers import TimedRotatingFileHandler
         from utils import read_json_file, write_json_file, get_current_strength
+        from DSL import ApexParser, InterpreterContext, evaluate, DeviceState, DeviceStateMemory, FallbackInstruction, build_interpreter_context
 
         slaves = []
         logger = logging.getLogger(__name__)
@@ -113,6 +114,19 @@ def main(task_queue, response_queue, test=False):
                     thread.start()
                     thread.join()
                     return
+                elif isinstance(task, tuple) and task[0] == "run_command":
+                    # Run a single command for "Run Once" functionality
+                    command = task[1]
+                    try:
+                        result = esp_controller.run_command(command)
+                        if result:
+                            response_queue.put("ok")
+                        else:
+                            response_queue.put("Error: No response from ESP")
+                    except Exception as e:
+                        logger.error(f"Error running command: {e}")
+                        response_queue.put(f"Error: {e}")
+                    return
 
                 if "error" in response.lower():
                     logger.warn(f"Responding with: {response}")
@@ -217,7 +231,7 @@ def main(task_queue, response_queue, test=False):
                             command_str += cmd + ";"
                             map_index_to_item[cmd_idx] = ("sensor", name, read_type)
                             cmd_idx += 1
-                            
+                
                 if command_str:
                     responses = esp_controller.run_command(command_str.strip(";"))
                     
@@ -286,7 +300,207 @@ def main(task_queue, response_queue, test=False):
             except Exception as e:
                 logger.error(f"Error reading sensors/switches: {e}")
 
+        # Device state memory for DSL Defer/MinTime logic
+        device_memory_path = os.path.join("data", "device_memory.json")
+        device_state_memories = {}  # Key: "groupTitle/switchName" -> DeviceStateMemory
+        
+        # Load persisted device memory
+        def load_device_memory():
+            nonlocal device_state_memories
+            try:
+                if os.path.exists(device_memory_path):
+                    saved = read_json_file(device_memory_path)
+                    for key, mem_data in saved.items():
+                        mem = DeviceStateMemory()
+                        mem.current_state = DeviceState.ON if mem_data.get("current_state") == "ON" else DeviceState.OFF
+                        mem.last_transition_time = mem_data.get("last_transition_time", 0)
+                        mem.pending_state = DeviceState.ON if mem_data.get("pending_state") == "ON" else (DeviceState.OFF if mem_data.get("pending_state") == "OFF" else None)
+                        mem.pending_start_time = mem_data.get("pending_start_time", 0)
+                        device_state_memories[key] = mem
+                    logger.info(f"Loaded device memory with {len(device_state_memories)} entries")
+            except Exception as e:
+                logger.warning(f"Could not load device memory: {e}")
+        
+        def save_device_memory():
+            try:
+                to_save = {}
+                for key, mem in device_state_memories.items():
+                    to_save[key] = {
+                        "current_state": mem.current_state.name,
+                        "last_transition_time": mem.last_transition_time,
+                        "pending_state": mem.pending_state.name if mem.pending_state else None,
+                        "pending_start_time": mem.pending_start_time
+                    }
+                write_json_file(device_memory_path, to_save)
+            except Exception as e:
+                logger.error(f"Failed to save device memory: {e}")
 
+        load_device_memory()
+
+        def execute_codegroup_logic():
+            """
+            Execute DSL code for all codegroup switches.
+            - "auto" mode: runs DSL code to determine state
+            - "on"/"off" mode: forces that state
+            Sends commands to ESPs and tracks state in espstatuses.json
+            """
+            try:
+                homepagedata_path = os.path.join("data", "homepagedata.json")
+                espstatuses_path = os.path.join("data", "espstatuses.json")
+                
+                homepagedata = read_json_file(homepagedata_path)
+                espstatuses = read_json_file(espstatuses_path)
+                
+                if "codegroups" not in espstatuses:
+                    espstatuses["codegroups"] = {}
+                
+                if "codegroups" not in homepagedata:
+                    return
+                
+                # Build interpreter context from current sensor/switch data
+                try:
+                    context = build_interpreter_context(os.path.join("data"))
+                except Exception as e:
+                    logger.error(f"Failed to build interpreter context: {e}")
+                    return
+                
+                parser = ApexParser()
+                commands_to_send = []  # List of (device_name, pin, state, fallback_state)
+                current_time_iso = datetime.now().isoformat()
+                
+                # Collect all DSL errors for frontend display
+                all_errors = []
+                
+                for group_name, group_data in homepagedata["codegroups"].items():
+                    if "rows" not in group_data:
+                        continue
+                    
+                    if group_name not in espstatuses["codegroups"]:
+                        espstatuses["codegroups"][group_name] = {}
+                    
+                    for row_name, row_data in group_data["rows"].items():
+                        pin = row_data.get("pin")
+                        code = row_data.get("code", "")
+                        mode = row_data.get("mode", "auto")
+                        
+                        if not pin:
+                            continue  # No pin configured
+                        
+                        memory_key = f"{group_name}/{row_name}"
+                        
+                        # Get or create DeviceStateMemory for this switch
+                        if memory_key not in device_state_memories:
+                            device_state_memories[memory_key] = DeviceStateMemory()
+                        memory = device_state_memories[memory_key]
+                        
+                        target_state = None
+                        fallback_state = None
+                        
+                        if mode == "on":
+                            target_state = DeviceState.ON
+                        elif mode == "off":
+                            target_state = DeviceState.OFF
+                        elif mode == "auto":
+                            if not code.strip():
+                                # No code, skip
+                                continue
+                            
+                            try:
+                                instructions = parser.parse_block(code)
+                                
+                                # Extract fallback state if present
+                                for inst in instructions:
+                                    if isinstance(inst, FallbackInstruction):
+                                        fallback_state = inst.state
+                                        break
+                                
+                                # Collect errors from evaluation
+                                row_errors = []
+                                target_state = evaluate(instructions, context, memory, errors=row_errors)
+                                
+                                # Add context to errors and collect them
+                                for err in row_errors:
+                                    all_errors.append(f"[{group_name}/{row_name}] {err}")
+                            except Exception as e:
+                                logger.error(f"Error evaluating code for {group_name}/{row_name}: {e}")
+                                all_errors.append(f"[{group_name}/{row_name}] Parse error: {e}")
+                                # Use fallback if available
+                                if fallback_state:
+                                    target_state = fallback_state
+                                else:
+                                    continue
+                        else:
+                            continue  # Unknown mode
+                        
+                        # Record the output value in espstatuses
+                        # For on/off, store as string. Future: could be numeric for dosing duration, etc.
+                        output_value = "on" if (target_state == DeviceState.ON) else "off"
+                        prev_status = espstatuses["codegroups"][group_name].get(row_name, {})
+                        prev_output = prev_status.get("output_value")
+                        
+                        # Only update/send if state changed or first time
+                        state_changed = (prev_output is None) or (output_value != prev_output)
+                        
+                        # Only update the timestamp if the state actually changed
+                        if state_changed:
+                            espstatuses["codegroups"][group_name][row_name] = {
+                                "output_value": output_value,
+                                "updated_at": current_time_iso
+                            }
+                        else:
+                            # Keep existing entry (preserves original updated_at)
+                            espstatuses["codegroups"][group_name][row_name] = {
+                                "output_value": output_value,
+                                "updated_at": prev_status.get("updated_at", current_time_iso)
+                            }
+                        
+                        # Queue command to send to ESP
+                        # Use group_name as device name (matches ESP naming convention)
+                        # PWM value: 255 = full on, 0 = off (8-bit resolution per ESP32Code.ino)
+                        pwm_value = 255 if output_value == "on" else 0
+                        commands_to_send.append({
+                            "device": group_name,
+                            "pin": pin,
+                            "state": pwm_value,
+                            "fallback": (255 if fallback_state == DeviceState.ON else 0) if fallback_state else None,
+                            "changed": state_changed
+                        })
+                
+                # Store errors in espstatuses for frontend display
+                # Only keep unique errors and limit to recent ones
+                espstatuses["dsl_errors"] = list(set(all_errors))[:20]  # Max 20 unique errors
+                espstatuses["dsl_errors_updated_at"] = current_time_iso
+                
+                # Send commands to ESPs
+                if commands_to_send:
+                    command_str = ""
+                    for cmd in commands_to_send:
+                        # Format: "DeviceName s pin value fallback"
+                        if cmd["fallback"] is not None:
+                            command_str += f"{cmd['device']} s {cmd['pin']} {cmd['state']} {cmd['fallback']};"
+                        else:
+                            command_str += f"{cmd['device']} s {cmd['pin']} {cmd['state']};"
+                    
+                    if command_str:
+                        logger.debug(f"Sending codegroup commands: {command_str}")
+                        try:
+                            responses = esp_controller.run_command(command_str.strip(";"))
+                            if responses:
+                                for idx_str, result in responses.items():
+                                    if not result.get("status"):
+                                        logger.warning(f"Codegroup command failed: {result.get('message')}")
+                        except Exception as e:
+                            logger.error(f"Error sending codegroup commands: {e}")
+                
+                # Save updated espstatuses
+                write_json_file(espstatuses_path, espstatuses)
+                
+                # Save device memory for Defer/MinTime persistence
+                save_device_memory()
+                
+            except Exception as e:
+                print(f"Error: {e}")
+                logger.error(f"Error in execute_codegroup_logic: {e}")
 
         def load_device_outputs(retries=4):
             nonlocal device_outputs
@@ -310,6 +524,7 @@ def main(task_queue, response_queue, test=False):
         update_frequency = default_update_frequency
         
         last_sync = 0
+        last_codegroup_updated = 0  # Separate tracking for codegroup updates (independent of temporary overwrite)
         
         time.sleep(3.5)
         while True:
@@ -330,9 +545,12 @@ def main(task_queue, response_queue, test=False):
             if (last_updated + update_frequency) < time.time():
                 last_updated = time.time()
                 update_device_outputs(overwrite_schedule=True)
+
+            # Execute codegroup logic on same frequency but separate from temporary overwrite timing
+            if (last_codegroup_updated + default_update_frequency) < time.time():
+                last_codegroup_updated = time.time()
                 read_device_sensors()
-
-
+                execute_codegroup_logic()
 
             seconds = last_updated + update_frequency - time.time()
             if seconds < 0:

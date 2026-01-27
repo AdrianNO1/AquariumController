@@ -1,0 +1,47 @@
+{
+    "codegroups": {
+        "Main": {
+            "Heat 1": {
+                "is_open": true
+            },
+            "Pumpe loft": {
+                "is_open": false
+            },
+            "Chiller": {
+                "is_open": false
+            }
+        }
+    },
+    "switches": {
+        "Main High": {
+            "is_open": true
+        },
+        "Main Low": {
+            "is_open": false
+        },
+        "Loft High": {
+            "is_open": false
+        },
+        "Loft Low": {
+            "is_open": false
+        },
+        "Bad High": {
+            "is_open": true
+        },
+        "Bad Low": {
+            "is_open": false
+        },
+        "Sump High": {
+            "is_open": false
+        },
+        "Sump Med": {
+            "is_open": true
+        },
+        "Sump Low": {
+            "is_open": false
+        },
+        "Frag High": {
+            "is_open": false
+        }
+    }
+}

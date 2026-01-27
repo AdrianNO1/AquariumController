@@ -1,0 +1,14 @@
+{
+    "MockESP32_1/Frontlys": {
+        "current_state": "OFF",
+        "last_transition_time": 0,
+        "pending_state": null,
+        "pending_start_time": 0
+    },
+    "MockESP32_1/Pump 3": {
+        "current_state": "ON",
+        "last_transition_time": 1768163767.881033,
+        "pending_state": null,
+        "pending_start_time": 0
+    }
+}

@@ -291,25 +291,6 @@ void processSchedule(const String& schedule) {
     // Get sync time from schedule
     unsigned long scheduleTime = doc["syncTime"].as<unsigned long>();
     
-    // Update our time if we have syncTime in the schedule
-    if (scheduleTime > 0) {
-        // Set current time based on syncTime
-        struct tm timeinfo;
-        time_t syncTime = scheduleTime;
-        localtime_r(&syncTime, &timeinfo);
-        
-        Serial.print("Syncing time to: ");
-        Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-        
-        timeInfo.lastSyncTime = syncTime;
-        timeInfo.lastSavedTime = syncTime;
-        timeInfo.lastMillis = millis();
-        timeInfo.timeInitialized = true;
-        
-        // Save to EEPROM
-        saveTimeInfo();
-    }
-    
     // Clear existing channel configurations
     activeChannels.clear();
     
@@ -765,7 +746,18 @@ void initializeTime() {
         configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
         
         struct tm timeinfo;
-        if (getLocalTime(&timeinfo)) {
+        bool success = false;
+        
+        // Retry NTP sync for up to 4 minutes (30 attempts * 8 seconds)
+        for (int i = 0; i < 30; i++) {
+            if (getLocalTime(&timeinfo, 8000)) {
+                success = true;
+                break;
+            }
+            Serial.println("Retrying NTP sync... (" + String(i + 1) + "/30)");
+        }
+        
+        if (success) {
             time_t now;
             time(&now);
             timeInfo.lastSyncTime = now;
@@ -777,7 +769,7 @@ void initializeTime() {
             Serial.print("Current time: ");
             Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
         } else {
-            Serial.println("Failed to obtain time from NTP");
+            Serial.println("Failed to obtain time from NTP after retries");
         }
     } else {
         Serial.println("WiFi not connected, can't initialize time via NTP");

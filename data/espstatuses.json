@@ -1,0 +1,138 @@
+{
+    "switches": {
+        "Main High": {
+            "is_open": true,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Main Low": {
+            "is_open": false,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Loft High": {
+            "is_open": false,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Loft Low": {
+            "is_open": false,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Bad High": {
+            "is_open": true,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Bad Low": {
+            "is_open": false,
+            "updated_at": "2026-01-12T20:13:06.033993"
+        },
+        "Sump High": {
+            "is_open": false,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Sump Med": {
+            "is_open": true,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Sump Low": {
+            "is_open": false,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        "Frag High": {
+            "is_open": false,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        }
+    },
+    "sensors": [
+        {
+            "name": "Ph",
+            "type": "ph",
+            "value": 8.4,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "Redox",
+            "type": "redox",
+            "value": 320,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "Temp Main",
+            "type": "temp",
+            "value": 21.4,
+            "updated_at": "2026-01-12T20:13:06.033993"
+        },
+        {
+            "name": "Temp Main2",
+            "type": "temp",
+            "value": 25.8,
+            "updated_at": "2026-01-12T20:13:06.033993"
+        },
+        {
+            "name": "Temp Sump",
+            "type": "temp",
+            "value": 25.6,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "Temp Biljard",
+            "type": "temp",
+            "value": 25.8,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "Temp Loft",
+            "type": "temp",
+            "value": 26,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "Temp Bad",
+            "type": "temp",
+            "value": 26.1,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "AirTemp Main",
+            "type": "temp_air",
+            "value": 25.8,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "AirTemp Kjeller",
+            "type": "temp_air",
+            "value": 26,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        },
+        {
+            "name": "AirTemp Loft",
+            "type": "temp_air",
+            "value": 26.1,
+            "updated_at": "2025-12-27T14:04:38.010451"
+        }
+    ],
+    "updated_at": "2025-12-27T11:54:29.580732",
+    "codegroups": {
+        "Main": {},
+        "Main 1b": {},
+        "Main 2b": {},
+        "Kjeller": {},
+        "Kjeller 2": {},
+        "Biljard": {},
+        "Biljard 2": {},
+        "Bad": {},
+        "Loft": {},
+        "MockESP32_1": {
+            "Frontlys": {
+                "output_value": "off",
+                "updated_at": "2026-01-11T21:39:37.992825"
+            },
+            "Pump 3": {
+                "output_value": "on",
+                "updated_at": "2026-01-11T21:38:00.596080"
+            }
+        }
+    },
+    "dsl_errors": [
+        "[MockESP32_1/Pump 3] Switch 'Switch1' not found"
+    ],
+    "dsl_errors_updated_at": "2026-01-12T20:13:06.041766"
+}

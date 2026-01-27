@@ -1,0 +1,179 @@
+{
+    "mainPump": [
+        {
+            "channel": "Pump 1",
+            "pin": 1
+        },
+        {
+            "channel": "Pump 2",
+            "pin": 3
+        },
+        {
+            "channel": "Pump 3",
+            "pin": 22
+        },
+        {
+            "channel": "Pump 4",
+            "pin": 33
+        }
+    ],
+    "Lys": [
+        {
+            "channel": "Violet",
+            "pin": 27
+        },
+        {
+            "channel": "Blue",
+            "pin": 14
+        },
+        {
+            "channel": "White",
+            "pin": 26
+        },
+        {
+            "channel": "Red",
+            "pin": 33
+        },
+        {
+            "channel": "Royal Blue",
+            "pin": 32
+        },
+        {
+            "channel": "Uv",
+            "pin": 12
+        }
+    ],
+    "Test": [
+        {
+            "channel": "Test Violet",
+            "pin": 13
+        },
+        {
+            "channel": "Test Royal Blue",
+            "pin": 33
+        },
+        {
+            "channel": "Test White",
+            "pin": 14
+        },
+        {
+            "channel": "Test Blue",
+            "pin": 27
+        },
+        {
+            "channel": "Test Red",
+            "pin": 26
+        },
+        {
+            "channel": "Test Uv",
+            "pin": 12
+        }
+    ],
+    "Pump": [
+        {
+            "channel": "Pump 1",
+            "pin": 26
+        },
+        {
+            "channel": "Pump 2",
+            "pin": 33
+        },
+        {
+            "channel": "Pump 3",
+            "pin": 13
+        },
+        {
+            "channel": "Pump 4",
+            "pin": 14
+        },
+        {
+            "channel": "Pump 5",
+            "pin": 27
+        },
+        {
+            "channel": "Pump 6",
+            "pin": 12
+        }
+    ],
+    "mainLys": [
+        {
+            "channel": "Uv",
+            "pin": 12
+        },
+        {
+            "channel": "Violet",
+            "pin": 13
+        },
+        {
+            "channel": "Royal Blue",
+            "pin": 33
+        },
+        {
+            "channel": "Blue",
+            "pin": 14
+        },
+        {
+            "channel": "White",
+            "pin": 27
+        },
+        {
+            "channel": "Red",
+            "pin": 26
+        }
+    ],
+    "Bad": [
+        {
+            "channel": "Bad Violet",
+            "pin": 13
+        },
+        {
+            "channel": "Bad Royal Blue",
+            "pin": 33
+        },
+        {
+            "channel": "Bad Blue",
+            "pin": 14
+        },
+        {
+            "channel": "Bad White",
+            "pin": 27
+        }
+    ],
+    "Loft": [
+        {
+            "channel": "Loft Violet",
+            "pin": 13
+        },
+        {
+            "channel": "Loft Royal Blue",
+            "pin": 33
+        },
+        {
+            "channel": "Loft Blue",
+            "pin": 14
+        },
+        {
+            "channel": "Loft White",
+            "pin": 27
+        }
+    ],
+    "Qt3": [
+        {
+            "channel": "Qt3 Violet",
+            "pin": 13
+        },
+        {
+            "channel": "Qt3 Royal Blue",
+            "pin": 33
+        },
+        {
+            "channel": "Qt3 Blue",
+            "pin": 14
+        },
+        {
+            "channel": "Qt3 White",
+            "pin": 27
+        }
+    ],
+    "": []
+}
