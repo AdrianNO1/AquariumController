@@ -1,4 +1,4 @@
-import json, os, sys, re, time, requests, dotenv
+import io, json, os, sys, re, time, requests, dotenv, zipfile
 dotenv.load_dotenv()
 
 if len(sys.argv) > 1 and sys.argv[1] == "restart":
@@ -60,6 +60,206 @@ throttle_path = os.path.join("data", "throttle.json")
 switches_path = os.path.join("data", "switches.json")
 channels_path = os.path.join("data", "channels.json")
 temporaryoverwritesliders_path = os.path.join("data", "temporaryoverwritesliders.json")
+LOG_DIRECTORIES = {
+    "app": os.path.join("logs", "app"),
+    "manager": os.path.join("logs", "manager")
+}
+LOG_ENTRY_PATTERN = re.compile(r'^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) - (?P<logger>.*?) - (?P<level>[A-Z]+) - (?P<message>.*)$')
+MAX_LOG_DAYS = 30
+
+def clamp_log_days(raw_days, default=7):
+    try:
+        days = int(raw_days)
+    except (TypeError, ValueError):
+        days = default
+    return max(1, min(MAX_LOG_DAYS, days))
+
+def normalize_log_level(level):
+    normalized = str(level or "all").strip().lower()
+    if normalized in ("warn", "warning"):
+        return "WARNING"
+    if normalized == "fatal":
+        return "CRITICAL"
+    if normalized == "all":
+        return "ALL"
+    return normalized.upper()
+
+def format_file_timestamp(dt):
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+def list_recent_log_files(days=7, source="all"):
+    cutoff = datetime.now() - timedelta(days=days)
+    files = []
+
+    for log_source, directory in LOG_DIRECTORIES.items():
+        if source != "all" and log_source != source:
+            continue
+
+        if not os.path.isdir(directory):
+            continue
+
+        for path in glob.glob(os.path.join(directory, "*")):
+            if not os.path.isfile(path):
+                continue
+            if not (path.endswith(".log") or path.endswith(".zip")):
+                continue
+
+            modified = datetime.fromtimestamp(os.path.getmtime(path))
+            if modified < cutoff:
+                continue
+
+            files.append({
+                "source": log_source,
+                "path": path,
+                "name": os.path.basename(path),
+                "modified": modified,
+                "kind": "zip" if path.endswith(".zip") else "log"
+            })
+
+    files.sort(key=lambda item: item["modified"], reverse=True)
+    return files
+
+def iter_log_sources(file_info):
+    path = file_info["path"]
+    if path.endswith(".zip"):
+        try:
+            with zipfile.ZipFile(path, "r") as archive:
+                for member in archive.namelist():
+                    if member.endswith("/"):
+                        continue
+                    with archive.open(member) as zipped_file:
+                        content = zipped_file.read().decode("utf-8", errors="replace").splitlines()
+                    yield member, content
+        except zipfile.BadZipFile:
+            yield os.path.basename(path), [f"Unreadable zip archive: {path}"]
+        return
+
+    with open(path, "r", encoding="utf-8", errors="replace") as log_file:
+        yield os.path.basename(path), log_file.read().splitlines()
+
+def parse_log_entries_from_lines(lines, file_info, member_name, cutoff):
+    entries = []
+    file_label = f"{file_info['name']}::{member_name}" if file_info["kind"] == "zip" else file_info["name"]
+    current_entry = None
+
+    def flush_current():
+        nonlocal current_entry
+        if current_entry and current_entry["timestamp_dt"] >= cutoff:
+            entries.append(current_entry)
+        current_entry = None
+
+    for raw_line in lines:
+        line = raw_line.rstrip("\r\n")
+        match = LOG_ENTRY_PATTERN.match(line)
+
+        if match:
+            flush_current()
+            try:
+                timestamp_dt = datetime.strptime(match.group("timestamp"), "%Y-%m-%d %H:%M:%S,%f")
+            except ValueError:
+                timestamp_dt = file_info["modified"]
+
+            current_entry = {
+                "timestamp": match.group("timestamp"),
+                "timestamp_dt": timestamp_dt,
+                "logger": match.group("logger"),
+                "level": normalize_log_level(match.group("level")),
+                "message": match.group("message"),
+                "source": file_info["source"],
+                "file": file_label
+            }
+            continue
+
+        if not line.strip():
+            continue
+
+        if current_entry is None:
+            current_entry = {
+                "timestamp": format_file_timestamp(file_info["modified"]),
+                "timestamp_dt": file_info["modified"],
+                "logger": file_info["source"],
+                "level": "INFO",
+                "message": line,
+                "source": file_info["source"],
+                "file": file_label
+            }
+        else:
+            current_entry["message"] += "\n" + line
+
+    flush_current()
+    return entries
+
+def collect_log_entries(days=7, source="all"):
+    cutoff = datetime.now() - timedelta(days=days)
+    files = list_recent_log_files(days=days, source=source)
+    entries = []
+
+    for file_info in files:
+        for member_name, lines in iter_log_sources(file_info):
+            entries.extend(parse_log_entries_from_lines(lines, file_info, member_name, cutoff))
+
+    entries.sort(key=lambda entry: entry["timestamp_dt"], reverse=True)
+    return entries, files
+
+def filter_log_entries(entries, level="all", search=""):
+    normalized_level = normalize_log_level(level)
+    search_term = (search or "").strip().lower()
+    filtered_entries = []
+
+    for entry in entries:
+        if normalized_level != "ALL" and entry["level"] != normalized_level:
+            continue
+
+        if search_term:
+            haystack = "\n".join([
+                entry["message"],
+                entry["logger"],
+                entry["file"],
+                entry["source"],
+                entry["level"]
+            ]).lower()
+            if search_term not in haystack:
+                continue
+
+        filtered_entries.append(entry)
+
+    return filtered_entries
+
+def serialize_log_entry(entry):
+    return {
+        "timestamp": entry["timestamp"],
+        "logger": entry["logger"],
+        "level": entry["level"],
+        "message": entry["message"],
+        "source": entry["source"],
+        "file": entry["file"]
+    }
+
+def serialize_log_file(file_info):
+    return {
+        "name": file_info["name"],
+        "source": file_info["source"],
+        "modified": format_file_timestamp(file_info["modified"]),
+        "kind": file_info["kind"]
+    }
+
+def format_log_entry_text(entry):
+    header = f"{entry['timestamp']} - {entry['logger']} - {entry['level']} - {entry['message']}"
+    return f"[{entry['source']}] {entry['file']}\n{header}\n"
+
+def build_log_summary(days, source, level, search, entry_count, file_count):
+    source_label = "app and manager" if source == "all" else source
+    level_label = "all levels" if normalize_log_level(level) == "ALL" else normalize_log_level(level)
+    search_label = search if search else "none"
+    return (
+        "Aquarium log export\n"
+        f"Days: {days}\n"
+        f"Source: {source_label}\n"
+        f"Level: {level_label}\n"
+        f"Search: {search_label}\n"
+        f"Matching entries: {entry_count}\n"
+        f"Files included: {file_count}\n"
+    )
 
 def clear_res_queue():
     while not response_queue.empty():
@@ -78,6 +278,10 @@ def handle_internal_server_error(e):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/logs')
+def logs_page():
+    return render_template('logs.html', default_days=7)
 
 @app.route('/control/<device_type>')
 def control(device_type):
@@ -383,50 +587,89 @@ def update_channels():
 
 @app.route('/getlog')
 def getlog():
-    app.logger.info("getlog request")
-    
-    try:
-        # Get latest log files from both directories
-        app_logs = glob.glob(os.path.join("logs", "app", "*.log"))
-        manager_logs = glob.glob(os.path.join("logs", "manager", "*.log"))
-        
-        latest_app_log = max(app_logs, key=os.path.getctime) if app_logs else None
-        latest_manager_log = max(manager_logs, key=os.path.getctime) if manager_logs else None
-        
-        # Combine logs into a single file
-        timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
-        combined_log_path = os.path.join("logs", f"combined_logs_{timestamp}.txt")
-        
-        with open(combined_log_path, 'w', encoding='utf-8') as outfile:
-            outfile.write("=== APPLICATION LOGS ===\n\n")
-            if latest_app_log:
-                with open(latest_app_log, 'r', encoding='utf-8') as infile:
-                    outfile.write(infile.read())
-            
-            outfile.write("\n\n=== MANAGER LOGS ===\n\n")
-            if latest_manager_log:
-                with open(latest_manager_log, 'r', encoding='utf-8') as infile:
-                    outfile.write(infile.read())
-        
-        # Send the combined file
-        response = send_file(
-            combined_log_path,
-            mimetype='text/plain',
-            as_attachment=True,
-            download_name=f'aquarium_logs_{timestamp}.txt'
-        )
-        
-        # Clean up the combined file after sending
-        @response.call_on_close
-        def cleanup():
-            if os.path.exists(combined_log_path):
-                os.remove(combined_log_path)
-        
-        return response
-        
-    except Exception as e:
-        app.logger.error(f"Error in getlog: {str(e)}")
-        return jsonify({"error": str(e)}), 500
+    return redirect(url_for('download_logs', mode='raw', days=7, source='all'))
+
+@app.route('/api/logs')
+def get_logs_api():
+    days = clamp_log_days(request.args.get("days", 7))
+    source = request.args.get("source", "all").strip().lower()
+    level = request.args.get("level", "all")
+    search = request.args.get("search", "")
+
+    if source not in ("all", "app", "manager"):
+        return jsonify({"error": "invalid source"}), 400
+
+    entries, files = collect_log_entries(days=days, source=source)
+    filtered_entries = filter_log_entries(entries, level=level, search=search)
+
+    response = {
+        "entries": [serialize_log_entry(entry) for entry in filtered_entries],
+        "files": [serialize_log_file(file_info) for file_info in files],
+        "summary": {
+            "days": days,
+            "source": source,
+            "source_label": "app + manager" if source == "all" else source,
+            "level": normalize_log_level(level),
+            "entry_count": len(filtered_entries),
+            "file_count": len(files),
+            "error_count": sum(1 for entry in filtered_entries if entry["level"] == "ERROR"),
+            "warning_count": sum(1 for entry in filtered_entries if entry["level"] == "WARNING")
+        }
+    }
+    return jsonify(response)
+
+@app.route('/logs/download')
+def download_logs():
+    app.logger.info("logs download request")
+    days = clamp_log_days(request.args.get("days", 7))
+    source = request.args.get("source", "all").strip().lower()
+    level = request.args.get("level", "all")
+    search = request.args.get("search", "")
+    mode = request.args.get("mode", "filtered").strip().lower()
+
+    if source not in ("all", "app", "manager"):
+        return jsonify({"error": "invalid source"}), 400
+    if mode not in ("filtered", "raw"):
+        return jsonify({"error": "invalid download mode"}), 400
+
+    entries, files = collect_log_entries(days=days, source=source)
+    filtered_entries = filter_log_entries(entries, level=level, search=search)
+    timestamp = datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        summary = build_log_summary(days, source, level, search, len(filtered_entries), len(files))
+        archive.writestr("README.txt", summary)
+
+        if mode == "filtered":
+            if filtered_entries:
+                filtered_text = "\n".join(format_log_entry_text(entry) for entry in filtered_entries)
+            else:
+                filtered_text = "No log entries matched the selected filter.\n"
+
+            archive.writestr("filtered_logs.txt", filtered_text)
+            archive.writestr("filtered_logs.json", json.dumps([serialize_log_entry(entry) for entry in filtered_entries], indent=2))
+        else:
+            if not files:
+                archive.writestr("no_logs_found.txt", "No log files were found for the selected range.\n")
+
+            for file_info in files:
+                archive_path = os.path.join(file_info["source"], file_info["name"]).replace("\\", "/")
+                archive.write(file_info["path"], arcname=archive_path)
+
+            if filtered_entries and (normalize_log_level(level) != "ALL" or search):
+                archive.writestr(
+                    "filtered_logs.txt",
+                    "\n".join(format_log_entry_text(entry) for entry in filtered_entries)
+                )
+
+    archive_buffer.seek(0)
+    return send_file(
+        archive_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"aquarium_logs_{mode}_{timestamp}.zip"
+    )
 
 
 if __name__ == '__main__':

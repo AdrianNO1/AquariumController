@@ -385,9 +385,7 @@ def main(task_queue, response_queue, test=False):
                             time.sleep(0.05)
             print("built wireless cmd:", wireless_cmd_builder)
             if wireless_cmd_builder:
-                thread = threading.Thread(target=lambda: esp_controller.run_command(wireless_cmd_builder.strip(";")))
-                thread.start()
-                responses = thread.join()
+                responses = esp_controller.run_command(wireless_cmd_builder.strip(";"))
                 if responses:
                     for key in responses:
                         r = responses[key]
@@ -395,6 +393,7 @@ def main(task_queue, response_queue, test=False):
                         if not r["status"]:
                             wireless_cmd_devices[key]["status"] = "Error"
                             wireless_cmd_devices[key]["error"] = r["message"]
+                            logger.error(f"Wireless command failed for {wireless_cmd_devices[key]['name']}: {r['message']}")
                 else:
                     logger.error("Error: esp_controller returned: " + str(responses))
 

@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aquarium Logs</title>
+    <style>
+        :root {
+            --bg: #eef2f5;
+            --panel: #ffffff;
+            --border: #d6dde5;
+            --text: #1d2733;
+            --muted: #667688;
+            --accent: #0f766e;
+            --accent-dark: #115e59;
+            --danger: #b42318;
+            --warning: #b54708;
+            --info: #175cd3;
+            --shadow: 0 18px 45px rgba(16, 24, 40, 0.08);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background:
+                radial-gradient(circle at top right, rgba(15, 118, 110, 0.18), transparent 28%),
+                linear-gradient(180deg, #f7fafc 0%, var(--bg) 100%);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .page {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 32px 20px 48px;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .topbar h1 {
+            margin: 0;
+            font-size: 34px;
+        }
+
+        .topbar p {
+            margin: 6px 0 0;
+            color: var(--muted);
+        }
+
+        .button-row,
+        .filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            box-shadow: var(--shadow);
+        }
+
+        .controls,
+        .summary,
+        .entries,
+        .files {
+            padding: 18px;
+        }
+
+        .controls,
+        .summary {
+            margin-bottom: 18px;
+        }
+
+        .filters {
+            margin-bottom: 14px;
+        }
+
+        label {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 14px;
+            color: var(--muted);
+            min-width: 140px;
+        }
+
+        input,
+        select,
+        button,
+        a.button-link {
+            font: inherit;
+        }
+
+        input,
+        select {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 12px;
+            background: #fff;
+            color: var(--text);
+        }
+
+        input[type="number"] {
+            width: 110px;
+        }
+
+        input[type="text"] {
+            min-width: 240px;
+        }
+
+        button,
+        a.button-link {
+            border: none;
+            border-radius: 10px;
+            padding: 10px 14px;
+            text-decoration: none;
+            cursor: pointer;
+            transition: transform 0.15s ease, background-color 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        button:hover,
+        a.button-link:hover {
+            transform: translateY(-1px);
+        }
+
+        .primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .primary:hover {
+            background: var(--accent-dark);
+        }
+
+        .secondary {
+            background: #d9ece9;
+            color: #10453f;
+        }
+
+        .secondary:hover {
+            background: #c8e2de;
+        }
+
+        .ghost {
+            background: #eff4f8;
+            color: var(--text);
+        }
+
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-top: 14px;
+        }
+
+        .summary-box {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 14px;
+            background: #fbfcfd;
+        }
+
+        .summary-box strong {
+            display: block;
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+
+        .summary-box span {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .log-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+            gap: 18px;
+        }
+
+        .entries-header,
+        .files-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .entries-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-height: 70vh;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .entry {
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            padding: 14px;
+            background: #fcfdff;
+        }
+
+        .entry.error {
+            border-left: 6px solid var(--danger);
+        }
+
+        .entry.warning {
+            border-left: 6px solid var(--warning);
+        }
+
+        .entry.info {
+            border-left: 6px solid var(--info);
+        }
+
+        .entry.critical {
+            border-left: 6px solid #7a271a;
+        }
+
+        .entry-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            align-items: flex-start;
+            margin-bottom: 8px;
+        }
+
+        .badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .badge.level {
+            background: #eef4ff;
+            color: #1849a9;
+        }
+
+        .badge.source {
+            background: #ecfdf3;
+            color: #027a48;
+        }
+
+        .entry-file,
+        .empty-state,
+        .status-line {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .entry-message {
+            white-space: pre-wrap;
+            word-break: break-word;
+            margin: 0;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 13px;
+            line-height: 1.45;
+            background: #f7f9fb;
+            padding: 12px;
+            border-radius: 10px;
+        }
+
+        .file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .file-item {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 12px;
+            background: #fbfcfd;
+        }
+
+        .file-item strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        @media (max-width: 900px) {
+            .log-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .topbar {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="topbar">
+            <div>
+                <h1>Logs</h1>
+                <p>Browse app and manager logs, filter by level, and download the last week as a zip.</p>
+            </div>
+            <div class="button-row">
+                <a class="button-link ghost" href="/">Back</a>
+            </div>
+        </div>
+
+        <div class="card controls">
+            <div class="filters">
+                <label>
+                    Days
+                    <input id="daysInput" type="number" min="1" max="30" value="{{ default_days }}">
+                </label>
+                <label>
+                    Level
+                    <select id="levelSelect">
+                        <option value="all">All</option>
+                        <option value="error">Errors</option>
+                        <option value="warning">Warnings</option>
+                        <option value="info">Info</option>
+                        <option value="critical">Critical</option>
+                        <option value="debug">Debug</option>
+                    </select>
+                </label>
+                <label>
+                    Source
+                    <select id="sourceSelect">
+                        <option value="all">App + Manager</option>
+                        <option value="app">App</option>
+                        <option value="manager">Manager</option>
+                    </select>
+                </label>
+                <label>
+                    Search
+                    <input id="searchInput" type="text" placeholder="device id, timeout, esp_controller...">
+                </label>
+            </div>
+
+            <div class="button-row">
+                <button id="refreshButton" class="primary" type="button">Refresh</button>
+                <a id="downloadFilteredLink" class="button-link secondary" href="/logs/download?mode=filtered">Download current view zip</a>
+                <a id="downloadRawLink" class="button-link ghost" href="/logs/download?mode=raw">Download raw files zip</a>
+            </div>
+        </div>
+
+        <div class="card summary">
+            <div class="entries-header">
+                <strong>Summary</strong>
+                <span id="statusLine" class="status-line">Loading logs...</span>
+            </div>
+            <div class="summary-grid">
+                <div class="summary-box">
+                    <strong>Matching entries</strong>
+                    <span id="entryCount">0</span>
+                </div>
+                <div class="summary-box">
+                    <strong>Files scanned</strong>
+                    <span id="fileCount">0</span>
+                </div>
+                <div class="summary-box">
+                    <strong>Error entries</strong>
+                    <span id="errorCount">0</span>
+                </div>
+                <div class="summary-box">
+                    <strong>Warning entries</strong>
+                    <span id="warningCount">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="log-layout">
+            <div class="card entries">
+                <div class="entries-header">
+                    <strong>Entries</strong>
+                    <span id="entriesMeta" class="status-line"></span>
+                </div>
+                <div id="entriesList" class="entries-list"></div>
+            </div>
+
+            <div class="card files">
+                <div class="files-header">
+                    <strong>Files in range</strong>
+                    <span id="filesMeta" class="status-line"></span>
+                </div>
+                <div id="fileList" class="file-list"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const daysInput = document.getElementById('daysInput');
+        const levelSelect = document.getElementById('levelSelect');
+        const sourceSelect = document.getElementById('sourceSelect');
+        const searchInput = document.getElementById('searchInput');
+        const refreshButton = document.getElementById('refreshButton');
+        const downloadFilteredLink = document.getElementById('downloadFilteredLink');
+        const downloadRawLink = document.getElementById('downloadRawLink');
+        const entriesList = document.getElementById('entriesList');
+        const fileList = document.getElementById('fileList');
+        const statusLine = document.getElementById('statusLine');
+        const entriesMeta = document.getElementById('entriesMeta');
+        const filesMeta = document.getElementById('filesMeta');
+        const entryCount = document.getElementById('entryCount');
+        const fileCount = document.getElementById('fileCount');
+        const errorCount = document.getElementById('errorCount');
+        const warningCount = document.getElementById('warningCount');
+
+        function escapeHtml(text) {
+            return text
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#039;');
+        }
+
+        function getQueryParams() {
+            const days = Math.min(Math.max(parseInt(daysInput.value || '7', 10), 1), 30);
+            daysInput.value = days;
+            return new URLSearchParams({
+                days: String(days),
+                level: levelSelect.value,
+                source: sourceSelect.value,
+                search: searchInput.value.trim()
+            });
+        }
+
+        function updateDownloadLinks() {
+            const query = getQueryParams();
+            downloadFilteredLink.href = `/logs/download?mode=filtered&${query.toString()}`;
+
+            const rawQuery = new URLSearchParams({
+                mode: 'raw',
+                days: query.get('days'),
+                source: query.get('source')
+            });
+            downloadRawLink.href = `/logs/download?${rawQuery.toString()}`;
+        }
+
+        function renderEntries(entries) {
+            if (!entries.length) {
+                entriesList.innerHTML = '<div class="empty-state">No log entries matched this filter.</div>';
+                return;
+            }
+
+            entriesList.innerHTML = entries.map((entry) => `
+                <article class="entry ${entry.level.toLowerCase()}">
+                    <div class="entry-header">
+                        <div>
+                            <div class="badges">
+                                <span class="badge level">${escapeHtml(entry.level)}</span>
+                                <span class="badge source">${escapeHtml(entry.source)}</span>
+                            </div>
+                            <strong>${escapeHtml(entry.timestamp)}</strong>
+                        </div>
+                        <div class="entry-file">${escapeHtml(entry.logger)}</div>
+                    </div>
+                    <div class="entry-file">${escapeHtml(entry.file)}</div>
+                    <pre class="entry-message">${escapeHtml(entry.message)}</pre>
+                </article>
+            `).join('');
+        }
+
+        function renderFiles(files) {
+            if (!files.length) {
+                fileList.innerHTML = '<div class="empty-state">No log files were found for the selected range.</div>';
+                return;
+            }
+
+            fileList.innerHTML = files.map((file) => `
+                <div class="file-item">
+                    <strong>${escapeHtml(file.name)}</strong>
+                    <div class="status-line">Source: ${escapeHtml(file.source)}</div>
+                    <div class="status-line">Modified: ${escapeHtml(file.modified)}</div>
+                    <div class="status-line">Type: ${escapeHtml(file.kind)}</div>
+                </div>
+            `).join('');
+        }
+
+        async function loadLogs() {
+            updateDownloadLinks();
+            statusLine.textContent = 'Loading logs...';
+            entriesList.innerHTML = '<div class="empty-state">Loading logs...</div>';
+
+            try {
+                const response = await fetch(`/api/logs?${getQueryParams().toString()}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                renderEntries(data.entries);
+                renderFiles(data.files);
+
+                entryCount.textContent = data.summary.entry_count;
+                fileCount.textContent = data.summary.file_count;
+                errorCount.textContent = data.summary.error_count;
+                warningCount.textContent = data.summary.warning_count;
+                entriesMeta.textContent = `${data.summary.entry_count} entries`;
+                filesMeta.textContent = `${data.summary.file_count} files`;
+                statusLine.textContent = `Showing the last ${data.summary.days} day(s) from ${data.summary.source_label}.`;
+            } catch (error) {
+                statusLine.textContent = `Could not load logs: ${error.message}`;
+                entriesList.innerHTML = `<div class="empty-state">Could not load logs: ${escapeHtml(error.message)}</div>`;
+                fileList.innerHTML = '';
+            }
+        }
+
+        refreshButton.addEventListener('click', loadLogs);
+        daysInput.addEventListener('change', loadLogs);
+        levelSelect.addEventListener('change', loadLogs);
+        sourceSelect.addEventListener('change', loadLogs);
+        searchInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                loadLogs();
+            }
+        });
+        searchInput.addEventListener('blur', updateDownloadLinks);
+
+        updateDownloadLinks();
+        loadLogs();
+    </script>
+</body>
+</html>
