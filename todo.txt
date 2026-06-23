@@ -1,0 +1,17 @@
+This whole thing is shit
+really shit
+
+fix everything
+rewrite in typescript, probably with next.js and react
+fix the architecture for easy testing and integration tests with proper mqtt mocking
+use fancy SSE
+
+proper CI for easy pi deployment
+proper nosql database. use zod.
+maybe some sort of database seperate from the next.js app, so i can query from outside the pi.
+set up some alert system with errors so I actually notice instead of shit just being logged and archived forever never to be seen again
+
+
+cleanup the dumb https stuff, really unecessary.
+
+types types types types zod types types types types types

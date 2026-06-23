@@ -1,0 +1,28 @@
+DOSING CAN BE CONTROLLED BY DSL CODE:
+have a dose function that takes in some arguments. use a dose calibration function to enable pump for x amount of time and then after that test you get the arguments needed for the dose function!!
+
+
+
+
+MAIN PAGE:
+
+switches:
+configure which esp and which pin it reads from to be closed/open
+configure if open or closed constitutes alarm after being like that for X minutes
+
+manual buttons (flow kill and feeds)
+configure on time. If it is enabled, either by website control or from physical button,
+start a countdown from the configured on time before it turns back off. Show countdown on website.
+
+you can click the name in any row to configure it
+if you click the header of a cell, you can add/remove rows and change the order of rows.
+
+show spinny thing when toggling item on/off/auto before the server responds
+
+dedicated buttons for switching to light/pumps panel
+
+
+
+
+send future data to ESP, like links for lights and pumps, and the on time for the manual buttons
+add fallback if pi stops sending commands for X minutes.
