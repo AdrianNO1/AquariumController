@@ -1,0 +1,10 @@
+logs/*
+__pycache__/
+data/*
+test.json
+secret.json
+key.pem
+test*.py
+cert.pem
+.vscode/
+.env

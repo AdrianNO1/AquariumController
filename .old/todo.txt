@@ -1,0 +1,29 @@
+This whole thing is shit
+really shit
+
+fix everything
+rewrite in typescript, maybe with next.js and react????
+I'm not sure about frameworks, but I want typescript and react.
+fix the architecture for easy testing and (ESPECIALLY) for integration tests with proper mqtt mocking testing every aspect of the system. I want to be able to push to main with confidence I don't fuck existing stuff up.
+All communication with ESPs are through mqtt, I don't think we will have some sensor stuff connected directly to the pi but it's a possibility we need to support that later.
+Yes we need to keep the wierd mqtt message chunking thing in the manager, just a wierd limitation on the ESPs.
+use fancy SSE so the frontend never goes stale
+
+The whole thing is currently running on a PI. I want to interface directly with the PI as little as possible. Is it possible with some proper CI for easy pi deployment??
+What should we use for database? We need something real, not just raw json files... Maybe a nosql database (JSON documents) paired with zod?
+maybe some sort of database seperate from the next.js app, so i can query from outside the pi.
+database should be good for logging, maybe seperate db thing for logging???? Logging could need compression since we should log every interaction between ESPs, the server, frontend and all that stuff (investigate)
+I can easily budget like 10GB a year of storage for logs. If permanent logging turns out to be hard with this limit, we don't need to store it all permanently. The pi currently has 100GB free space.
+set up some alert system with errors so I actually notice instead of shit just being logged and archived forever never to be seen again
+
+
+cleanup the dumb https stuff, really unecessary. I planned to set it up with https for security but it's all just a mess with the certificate stuff and it's only being used locally on this network anyway.
+
+types types types types zod types types types types types
+
+
+Remember to think about the DSL stuff and pump logic with the architecture.
+
+Read old_todo.txt just for a little extra context but I don't really understand everything i wrote down in it so don't take everything there seriously. some of those points are probably already done anyway.
+Also read sketch5.html, that's a prototype for a new frontend with switches, DSL code, pumps, etc. It's to give more control but it's WIP and should not be integrated yet, but just keep it in mind when planning stuff because eventually we will add it.
+
