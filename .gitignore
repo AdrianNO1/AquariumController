@@ -1,1 +1,11 @@
 .vscode/
+.env
+.env.*
+node_modules/
+dist/
+coverage/
+*.db
+*.db-shm
+*.db-wal
+*.log
+.DS_Store

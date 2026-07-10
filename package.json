@@ -1,0 +1,45 @@
+{
+  "name": "aquarium-controller",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.13.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build:packages && npm run build --workspace @aquarium/controller && npm run build --workspace @aquarium/web",
+    "build:packages": "npm run build --workspace @aquarium/contracts && npm run build --workspace @aquarium/esp-protocol",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "dev": "concurrently --names controller,web --prefix-colors cyan,magenta \"npm:dev:controller\" \"npm:dev:web\"",
+    "dev:controller": "npm run dev --workspace @aquarium/controller",
+    "dev:web": "npm run dev --workspace @aquarium/web",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "pretest": "npm run build:packages",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "pretypecheck": "npm run build:packages",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.3",
+    "@vitest/coverage-v8": "^4.1.10",
+    "concurrently": "^10.0.3",
+    "eslint": "^10.6.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.3",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.5",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
+  }
+}

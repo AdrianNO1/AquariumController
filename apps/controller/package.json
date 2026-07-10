@@ -1,0 +1,16 @@
+{
+  "name": "@aquarium/controller",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aquarium/contracts": "*",
+    "fastify": "^5.10.0"
+  }
+}
