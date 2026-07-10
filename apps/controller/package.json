@@ -11,6 +11,14 @@
   },
   "dependencies": {
     "@aquarium/contracts": "*",
-    "fastify": "^5.10.0"
+    "@fastify/helmet": "^13.1.0",
+    "@fastify/static": "^9.3.0",
+    "better-sqlite3": "^12.11.1",
+    "fastify": "^5.10.0",
+    "kysely": "^0.29.3",
+    "mqtt": "^5.15.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
   }
 }

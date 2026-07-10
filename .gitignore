@@ -8,4 +8,5 @@ coverage/
 *.db-shm
 *.db-wal
 *.log
+*.tsbuildinfo
 .DS_Store
