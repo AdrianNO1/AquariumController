@@ -61,15 +61,21 @@ The five-second host refresh and 120-second firmware failover are safety behavio
 
 HTTP mutations remain acknowledged POST/PUT operations. They expose pending, success, failed, timed-out, and outcome-unknown states explicitly.
 
-One `/api/events` EventSource stream carries typed Zod envelopes. The persistent design is:
+One `/api/events` EventSource stream carries typed Zod envelopes. A state revision is consumed only by a committed authoritative state mutation; opening a browser connection, logging raw MQTT traffic, or sending a heartbeat never increments it.
+
+Every state transaction updates the singleton revision and inserts one replayable event into `state.db`'s outbox atomically. A dispatcher mirrors those rows idempotently into `events.db` using a unique state revision. The two database files are never treated as a shared atomic commit boundary. If event mirroring is unavailable, authoritative state and its outbox remain committed and replayable.
+
+The synchronization sequence is:
 
 1. Fetch a snapshot with a monotonically increasing revision.
-2. Open SSE from that revision.
-3. Apply or invalidate TanStack Query data for each committed event.
-4. Reconnect with `Last-Event-ID` and replay retained events.
-5. Emit `resync-required` if the requested revision has aged out.
+2. Open SSE with `afterRevision=<snapshot revision>`; an automatic reconnect's valid `Last-Event-ID` takes precedence.
+3. Buffer live commits while replaying retained outbox events through a high-water revision, then drain the buffer in order.
+4. Emit transient `system.stream-ready` with no SSE ID; only then may the browser call the stream live.
+5. Apply or invalidate TanStack Query data for each sequential committed event. Duplicate revisions are ignored; a gap forces resynchronization.
+6. Reconnect with `Last-Event-ID` and replay retained events.
+7. Emit transient `system.resync-required` and close if the requested revision predates the replay watermark.
 
-Heartbeat comments prevent idle intermediaries from closing the stream. The foundation slice currently emits only a connection event; replay begins when the event store lands.
+Heartbeat comments prevent idle intermediaries from closing the stream, while typed transient heartbeats let the browser detect a silent/stalled connection. Slow clients have bounded queues; overflow forces resynchronization and may never block controller work. Delivery is at least once and browsers deduplicate by state revision. High-volume interaction log IDs use a separate namespace and are never sent wholesale over SSE.
 
 ## Persistence and logging
 

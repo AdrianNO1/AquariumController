@@ -1,12 +1,15 @@
 import { z } from "zod";
 
-export const LEGACY_CHUNK_THRESHOLD_BYTES = 256;
-export const LEGACY_CHUNK_DATA_BYTES = 200;
-export const LEGACY_MAX_CHUNKS = 50;
-export const LEGACY_SCHEDULE_BYTES = 4096;
-export const LEGACY_COMMANDS_PER_DEVICE_PER_BATCH = 3;
+import {
+  LEGACY_CHUNK_DATA_BYTES,
+  LEGACY_CHUNK_THRESHOLD_BYTES,
+  LEGACY_COMMANDS_PER_DEVICE_PER_BATCH,
+  LEGACY_MAX_CHUNKS,
+  utf8ByteLength,
+} from "./limits.js";
 
-const utf8Encoder = new TextEncoder();
+export * from "./limits.js";
+export * from "./schedule.js";
 
 export const espAnnouncementSchema = z.object({
   id: z.string().min(1),
@@ -53,19 +56,6 @@ export function createEspTopicSet(testMode: boolean): EspTopicSet {
     announce: `${prefix}/announce`,
     response: `${prefix}/response`,
   };
-}
-
-export function utf8ByteLength(value: string): number {
-  return utf8Encoder.encode(value).byteLength;
-}
-
-export function assertLegacyScheduleFits(scheduleJson: string): void {
-  const size = utf8ByteLength(scheduleJson);
-  if (size > LEGACY_SCHEDULE_BYTES) {
-    throw new RangeError(
-      `Schedule payload is ${size} bytes; deployed firmware supports at most ${LEGACY_SCHEDULE_BYTES}`,
-    );
-  }
 }
 
 export function encodeLegacyMessage(payload: string): readonly string[] {

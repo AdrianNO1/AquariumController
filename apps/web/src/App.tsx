@@ -44,7 +44,7 @@ function Dashboard(): React.JSX.Element {
           <small>
             {events.lastEvent === null
               ? "Waiting for first event"
-              : `Revision ${events.lastEvent.id}`}
+              : `Revision ${events.currentRevision}`}
           </small>
         </article>
         <article className="status-card status-card-muted">

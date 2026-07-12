@@ -13,7 +13,7 @@
   ],
   "scripts": {
     "build": "npm run build:packages && npm run build --workspace @aquarium/controller && npm run build --workspace @aquarium/web",
-    "build:packages": "npm run build --workspace @aquarium/contracts && npm run build --workspace @aquarium/esp-protocol",
+    "build:packages": "npm run build --workspace @aquarium/contracts && npm run build --workspace @aquarium/domain && npm run build --workspace @aquarium/esp-protocol",
     "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
     "dev": "concurrently --names controller,web --prefix-colors cyan,magenta \"npm:dev:controller\" \"npm:dev:web\"",
     "dev:controller": "npm run dev --workspace @aquarium/controller",

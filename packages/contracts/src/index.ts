@@ -12,30 +12,63 @@ export const healthResponseSchema = z.object({
 
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
-export const systemConnectedEventSchema = z.object({
-  id: z.string().regex(/^\d+$/),
-  type: z.literal("system.connected"),
+export const streamReadyEventSchema = z.object({
+  type: z.literal("system.stream-ready"),
   occurredAt: isoTimestampSchema,
   data: z.object({
-    revision: z.number().int().nonnegative(),
+    currentRevision: z.number().int().nonnegative(),
+    replayedCount: z.number().int().nonnegative(),
   }),
 });
 
 export const resyncRequiredEventSchema = z.object({
-  id: z.string().regex(/^\d+$/),
   type: z.literal("system.resync-required"),
   occurredAt: isoTimestampSchema,
   data: z.object({
+    requestedRevision: z.number().int().nonnegative(),
     earliestAvailableRevision: z.number().int().nonnegative(),
+    currentRevision: z.number().int().nonnegative(),
+    reason: z.string().min(1),
   }),
 });
 
-export const systemEventSchema = z.discriminatedUnion("type", [
-  systemConnectedEventSchema,
+export const streamHeartbeatEventSchema = z.object({
+  type: z.literal("system.heartbeat"),
+  occurredAt: isoTimestampSchema,
+  data: z.object({
+    currentRevision: z.number().int().nonnegative(),
+    serverNow: isoTimestampSchema,
+  }),
+});
+
+export const systemStreamEventSchema = z.discriminatedUnion("type", [
+  streamReadyEventSchema,
   resyncRequiredEventSchema,
+  streamHeartbeatEventSchema,
 ]);
 
-export type SystemEvent = z.infer<typeof systemEventSchema>;
+export type SystemStreamEvent = z.infer<typeof systemStreamEventSchema>;
+
+export const committedStateEventSchema = z.strictObject({
+  revision: z.number().int().positive(),
+  type: z.string().min(1),
+  occurredAt: isoTimestampSchema,
+  entity: z.strictObject({
+    type: z.string().min(1),
+    id: z.string().min(1).nullable(),
+  }),
+  schemaVersion: z.number().int().positive(),
+  data: z.json(),
+});
+
+export type CommittedStateEvent = z.infer<typeof committedStateEventSchema>;
+
+export const controllerStreamEventSchema = z.union([
+  systemStreamEventSchema,
+  committedStateEventSchema,
+]);
+
+export type ControllerStreamEvent = z.infer<typeof controllerStreamEventSchema>;
 
 export const legacyControlAreaSchema = z.enum([
   "lights",

@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  committedStateEventSchema,
+  controllerStreamEventSchema,
   healthResponseSchema,
   legacyControlAreaSchema,
-  systemEventSchema,
+  streamReadyEventSchema,
+  systemStreamEventSchema,
 } from "./index.js";
 
 describe("shared contracts", () => {
@@ -23,14 +26,45 @@ describe("shared contracts", () => {
     expect(legacyControlAreaSchema.safeParse("unknown").success).toBe(false);
   });
 
-  it("requires numeric SSE event identifiers", () => {
-    const result = systemEventSchema.safeParse({
-      id: "event-one",
-      type: "system.connected",
+  it("does not assign a state revision identifier to stream readiness", () => {
+    const parsed = streamReadyEventSchema.parse({
+      type: "system.stream-ready",
       occurredAt: "2026-07-10T12:00:00.000Z",
-      data: { revision: 1 },
+      data: { currentRevision: 42, replayedCount: 3 },
+    });
+
+    expect("id" in parsed).toBe(false);
+  });
+
+  it("rejects incomplete resynchronization control messages", () => {
+    const result = systemStreamEventSchema.safeParse({
+      type: "system.resync-required",
+      occurredAt: "2026-07-10T12:00:00.000Z",
+      data: { earliestAvailableRevision: 10 },
     });
 
     expect(result.success).toBe(false);
+  });
+
+  it("validates versioned committed state events separately from transient controls", () => {
+    const event = committedStateEventSchema.parse({
+      revision: 7,
+      type: "configuration.throttle-updated",
+      occurredAt: "2026-07-10T12:00:00.000Z",
+      entity: { type: "throttle", id: "blue" },
+      schemaVersion: 1,
+      data: { percentage: 75 },
+    });
+
+    expect(controllerStreamEventSchema.parse(event)).toEqual(event);
+    expect(
+      committedStateEventSchema.safeParse({ ...event, revision: 0 }).success,
+    ).toBe(false);
+    expect(
+      committedStateEventSchema.safeParse({
+        ...event,
+        data: { invalid: Number.NaN },
+      }).success,
+    ).toBe(false);
   });
 });
