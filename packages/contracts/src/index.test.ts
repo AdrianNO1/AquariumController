@@ -53,7 +53,10 @@ describe("shared contracts", () => {
       occurredAt: "2026-07-10T12:00:00.000Z",
       entity: { type: "throttle", id: "blue" },
       schemaVersion: 1,
-      data: { percentage: 75 },
+      data: {
+        invalidations: [{ resource: "throttle", id: "blue" }],
+      },
+      retentionClass: "audit",
     });
 
     expect(controllerStreamEventSchema.parse(event)).toEqual(event);
@@ -63,7 +66,21 @@ describe("shared contracts", () => {
     expect(
       committedStateEventSchema.safeParse({
         ...event,
-        data: { invalid: Number.NaN },
+        data: {
+          invalidations: [
+            { resource: "throttle", id: "blue", invalid: Number.NaN },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects excess fields at transient event boundaries", () => {
+    expect(
+      streamReadyEventSchema.safeParse({
+        type: "system.stream-ready",
+        occurredAt: "2026-07-10T12:00:00.000Z",
+        data: { currentRevision: 0, replayedCount: 0, unexpected: true },
       }).success,
     ).toBe(false);
   });

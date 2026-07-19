@@ -1,5 +1,17 @@
 import { createHash } from "node:crypto";
 
+import {
+  boundedTextSchema,
+  eventDirectionSchema,
+  eventOutcomeSchema,
+  identifierSchema,
+  logPayloadSchema,
+  logSeveritySchema,
+  nonnegativeSafeIntegerSchema,
+  positiveSafeIntegerSchema,
+  retentionClassSchema,
+  sha256Schema,
+} from "@aquarium/contracts";
 import type { Kysely } from "kysely";
 import { z } from "zod";
 
@@ -11,53 +23,27 @@ import type {
 } from "../database/index.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 
-export const interactionPayloadSchema = z.record(z.string(), z.json());
+export const interactionPayloadSchema = logPayloadSchema;
 
 export type InteractionPayload = z.infer<typeof interactionPayloadSchema>;
 export type InteractionPayloadValue = InteractionPayload[string];
 
-const eventDirectionSchema = z.enum(["inbound", "outbound", "internal"]);
-const eventOutcomeSchema = z.enum([
-  "pending",
-  "succeeded",
-  "failed",
-  "timed_out",
-  "outcome_unknown",
-  "ignored",
-]);
-const severitySchema = z.enum([
-  "debug",
-  "info",
-  "warning",
-  "error",
-  "critical",
-]);
-const retentionClassSchema = z.enum([
-  "critical",
-  "audit",
-  "operational",
-  "raw",
-  "aggregate",
-]);
-const nullableNonEmptyStringSchema = z.string().min(1).nullable();
-const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
-
 export const interactionLogInputSchema = z
   .strictObject({
-    occurredAtMs: z.number().int().nonnegative(),
+    occurredAtMs: nonnegativeSafeIntegerSchema,
     direction: eventDirectionSchema,
-    kind: z.string().min(1),
-    severity: severitySchema,
-    topic: z.string().min(1).optional(),
-    deviceId: z.string().min(1).optional(),
-    correlationId: z.string().min(1).optional(),
-    operationId: z.string().min(1).optional(),
+    kind: boundedTextSchema,
+    severity: logSeveritySchema,
+    topic: boundedTextSchema.optional(),
+    deviceId: identifierSchema.optional(),
+    correlationId: identifierSchema.optional(),
+    operationId: identifierSchema.optional(),
     outcome: eventOutcomeSchema,
-    durationMs: z.number().int().nonnegative().optional(),
-    byteCount: z.number().int().nonnegative(),
+    durationMs: nonnegativeSafeIntegerSchema.optional(),
+    byteCount: nonnegativeSafeIntegerSchema,
     retentionClass: retentionClassSchema,
     payload: interactionPayloadSchema.optional(),
-    payloadSchemaVersion: z.number().int().positive().optional(),
+    payloadSchemaVersion: positiveSafeIntegerSchema.optional(),
   })
   .superRefine((value, context) => {
     if (
@@ -75,21 +61,21 @@ export type InteractionLogInput = z.infer<typeof interactionLogInputSchema>;
 
 const storedInteractionRowSchema = z
   .strictObject({
-    id: z.number().int().positive(),
-    occurred_at_ms: z.number().int().nonnegative(),
+    id: positiveSafeIntegerSchema,
+    occurred_at_ms: nonnegativeSafeIntegerSchema,
     direction: eventDirectionSchema,
-    kind: z.string().min(1),
-    severity: severitySchema,
-    topic: nullableNonEmptyStringSchema,
-    device_id: nullableNonEmptyStringSchema,
-    correlation_id: nullableNonEmptyStringSchema,
-    operation_id: nullableNonEmptyStringSchema,
+    kind: boundedTextSchema,
+    severity: logSeveritySchema,
+    topic: boundedTextSchema.nullable(),
+    device_id: identifierSchema.nullable(),
+    correlation_id: identifierSchema.nullable(),
+    operation_id: identifierSchema.nullable(),
     outcome: eventOutcomeSchema,
-    duration_ms: z.number().int().nonnegative().nullable(),
-    byte_count: z.number().int().nonnegative(),
+    duration_ms: nonnegativeSafeIntegerSchema.nullable(),
+    byte_count: nonnegativeSafeIntegerSchema,
     retention_class: retentionClassSchema,
     payload_json: z.string().nullable(),
-    payload_schema_version: z.number().int().positive().nullable(),
+    payload_schema_version: positiveSafeIntegerSchema.nullable(),
     payload_sha256: sha256Schema.nullable(),
   })
   .superRefine((value, context) => {
@@ -115,7 +101,7 @@ export interface StoredInteraction {
   readonly occurredAtMs: number;
   readonly direction: EventDirection;
   readonly kind: string;
-  readonly severity: z.infer<typeof severitySchema>;
+  readonly severity: z.infer<typeof logSeveritySchema>;
   readonly topic: string | null;
   readonly deviceId: string | null;
   readonly correlationId: string | null;
@@ -221,6 +207,23 @@ export class InteractionRepository {
       .where("id", "=", id)
       .executeTakeFirst();
     return row === undefined ? null : parseStoredInteraction(row);
+  }
+
+  async listByKindAndOperationId(
+    kind: string,
+    operationId: string,
+  ): Promise<readonly StoredInteraction[]> {
+    const parsedKind = boundedTextSchema.parse(kind);
+    const parsedOperationId = identifierSchema.parse(operationId);
+    const rows = await this.#database
+      .selectFrom("interactions")
+      .selectAll()
+      .where("kind", "=", parsedKind)
+      .where("operation_id", "=", parsedOperationId)
+      .orderBy("id")
+      .limit(2)
+      .execute();
+    return rows.map(parseStoredInteraction);
   }
 
   async listRange(

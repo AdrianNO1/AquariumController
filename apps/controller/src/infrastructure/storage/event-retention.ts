@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-import type { Kysely, Transaction } from "kysely";
+import { sql, type Kysely, type Transaction } from "kysely";
 import { z } from "zod";
 
-import type { EventOutcome, EventsDatabaseSchema } from "../database/index.js";
+import type {
+  EventOutcome,
+  EventsDatabaseSchema,
+  RetentionClass,
+} from "../database/index.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 import {
   assertArchiveComplete,
@@ -19,6 +23,7 @@ import { readEventStorageUsage } from "./event-storage-usage.js";
 
 const DEFAULT_AGGREGATE_BUCKET_MS = 5 * 60 * 1_000;
 const DEFAULT_PROJECTION_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000;
+export const MAX_EVENT_RETENTION_CANDIDATE_BATCH_SIZE = 10_000;
 
 const aggregateDetailsSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -38,6 +43,7 @@ export interface RunEventRetentionRequest {
   readonly runId?: string;
   readonly aggregateBucketMs?: number;
   readonly projectionWindowMs?: number;
+  readonly candidateBatchSize?: number;
   readonly archiveFileWriter?: EventArchiveFileWriter;
 }
 
@@ -48,14 +54,22 @@ export interface EventRetentionRunResult {
   readonly bytesAfter: number;
   readonly interactionsDeleted: number;
   readonly aggregatesDeleted: number;
+  readonly stateEventsDeleted: number;
   readonly archivesCreated: number;
 }
 
 interface RetentionCandidate {
-  readonly recordType: "interaction" | "aggregate";
+  readonly recordType: "interaction" | "aggregate" | "state-event";
   readonly id: number;
   readonly timestampMs: number;
   readonly byteCount: number;
+}
+
+interface RetentionCandidateRow {
+  readonly record_type: string;
+  readonly id: number | string | bigint;
+  readonly timestamp_ms: number | string | bigint;
+  readonly byte_count: number | string | bigint;
 }
 
 interface AggregateSource {
@@ -90,6 +104,17 @@ export async function runEventRetention(
   }
   const projectionWindowMs =
     request.projectionWindowMs ?? DEFAULT_PROJECTION_WINDOW_MS;
+  const candidateBatchSize =
+    request.candidateBatchSize ?? MAX_EVENT_RETENTION_CANDIDATE_BATCH_SIZE;
+  if (
+    !Number.isSafeInteger(candidateBatchSize) ||
+    candidateBatchSize <= 0 ||
+    candidateBatchSize > MAX_EVENT_RETENTION_CANDIDATE_BATCH_SIZE
+  ) {
+    throw new RangeError(
+      `Retention candidate batch size must be between 1 and ${MAX_EVENT_RETENTION_CANDIDATE_BATCH_SIZE}`,
+    );
+  }
   const usageBefore = await readEventStorageUsage(request.database, {
     nowMs: request.nowMs,
     projectionWindowMs,
@@ -106,6 +131,7 @@ export async function runEventRetention(
 
   let interactionsDeleted = 0;
   let aggregatesDeleted = 0;
+  let stateEventsDeleted = 0;
   let archivesCreated = 0;
   try {
     const policies = await request.database
@@ -126,111 +152,134 @@ export async function runEventRetention(
         `${policy.retention_class} byte budget`,
       );
       const repository = new InteractionRepository(request.database);
-      const interactions =
-        request.nowMs === 0
-          ? []
-          : await repository.listRange({
-              rangeStartMs: 0,
-              rangeEndMs: request.nowMs,
-              retentionClass: policy.retention_class,
-            });
-      const aggregateRows = await request.database
-        .selectFrom("event_aggregates")
-        .selectAll()
-        .where("retention_class", "=", policy.retention_class)
-        .where("bucket_end_ms", "<", request.nowMs)
-        .orderBy("bucket_end_ms")
-        .orderBy("id")
-        .execute();
-      const candidates = selectRetentionCandidates(
-        interactions,
-        aggregateRows.map((row) => ({
-          recordType: "aggregate" as const,
-          id: row.id,
-          timestampMs: row.bucket_end_ms,
-          byteCount: row.byte_count,
-        })),
-        request.nowMs - policy.retain_for_ms,
-        policy.byte_budget,
+      let eligibleClassBytes = await readEligibleRetentionClassBytes(
+        request.database,
+        policy.retention_class,
+        request.nowMs,
       );
-      if (candidates.length === 0) continue;
 
-      const interactionIds = candidates.flatMap((candidate) =>
-        candidate.recordType === "interaction" ? [candidate.id] : [],
-      );
-      const aggregateIds = candidates.flatMap((candidate) =>
-        candidate.recordType === "aggregate" ? [candidate.id] : [],
-      );
-      const selectedInteractions = interactions.filter((interaction) =>
-        interactionIds.includes(interaction.id),
-      );
-      let archiveId: string | null = null;
-      if (policy.archive_before_delete === 1) {
-        const rangeStartMs = Math.min(
-          ...candidates.map((candidate) => candidate.timestampMs),
+      while (true) {
+        const orderedCandidates = await readRetentionCandidateBatch(
+          request.database,
+          policy.retention_class,
+          request.nowMs,
+          candidateBatchSize,
         );
-        const rangeEndMs =
-          Math.max(...candidates.map((candidate) => candidate.timestampMs)) + 1;
-        const createdArchive = await createEventArchive({
-          database: request.database,
-          archiveDirectory: request.archiveDirectory,
-          rangeStartMs,
-          rangeEndMs,
-          nowMs: request.nowMs,
-          retentionClass: policy.retention_class,
-          selection: {
+        const candidates = selectRetentionCandidates(
+          orderedCandidates,
+          request.nowMs - policy.retain_for_ms,
+          policy.byte_budget,
+          eligibleClassBytes,
+        );
+        if (candidates.length === 0) break;
+
+        const interactionIds = candidates.flatMap((candidate) =>
+          candidate.recordType === "interaction" ? [candidate.id] : [],
+        );
+        const aggregateIds = candidates.flatMap((candidate) =>
+          candidate.recordType === "aggregate" ? [candidate.id] : [],
+        );
+        const stateEventRevisions = candidates.flatMap((candidate) =>
+          candidate.recordType === "state-event" ? [candidate.id] : [],
+        );
+        const selectedInteractions =
+          interactionIds.length === 0
+            ? []
+            : await repository.listRange({
+                rangeStartMs: 0,
+                rangeEndMs: request.nowMs,
+                retentionClass: policy.retention_class,
+                ids: interactionIds,
+              });
+        if (selectedInteractions.length !== interactionIds.length) {
+          throw new Error(
+            "Retention interaction selection changed before processing",
+          );
+        }
+        let archiveId: string | null = null;
+        if (policy.archive_before_delete === 1) {
+          const rangeStartMs = Math.min(
+            ...candidates.map((candidate) => candidate.timestampMs),
+          );
+          const rangeEndMs =
+            Math.max(...candidates.map((candidate) => candidate.timestampMs)) +
+            1;
+          const createdArchive = await createEventArchive({
+            database: request.database,
+            archiveDirectory: request.archiveDirectory,
+            rangeStartMs,
+            rangeEndMs,
+            nowMs: request.nowMs,
+            retentionClass: policy.retention_class,
+            selection: {
+              interactionIds,
+              aggregateIds,
+              stateEventRevisions,
+            },
+            ...(request.archiveFileWriter === undefined
+              ? {}
+              : { fileWriter: request.archiveFileWriter }),
+          });
+          assertArchiveContainsCandidates(
+            createdArchive.records,
             interactionIds,
             aggregateIds,
-            stateEventRevisions: [],
-          },
-          ...(request.archiveFileWriter === undefined
-            ? {}
-            : { fileWriter: request.archiveFileWriter }),
-        });
-        assertArchiveContainsCandidates(
-          createdArchive.records,
-          interactionIds,
-          aggregateIds,
-        );
-        archiveId = createdArchive.archive.id;
-        if (createdArchive.created) archivesCreated += 1;
-      }
+            stateEventRevisions,
+          );
+          archiveId = createdArchive.archive.id;
+          if (createdArchive.created) archivesCreated += 1;
+        }
 
-      const deleted = await request.database
-        .transaction()
-        .execute(async (transaction) => {
-          if (archiveId !== null) {
-            await assertArchiveComplete(transaction, archiveId);
-          }
-          if (policy.retention_class === "raw") {
-            await aggregateRawInteractions(
+        const deleted = await request.database
+          .transaction()
+          .execute(async (transaction) => {
+            if (archiveId !== null) {
+              await assertArchiveComplete(transaction, archiveId);
+            }
+            if (policy.retention_class === "raw") {
+              await aggregateRawInteractions(
+                transaction,
+                selectedInteractions,
+                aggregateBucketMs,
+              );
+            }
+            const deletedInteractions = await deleteRows(
               transaction,
-              selectedInteractions,
-              aggregateBucketMs,
+              "interactions",
+              interactionIds,
             );
-          }
-          const deletedInteractions = await deleteRows(
-            transaction,
-            "interactions",
-            interactionIds,
-          );
-          const deletedAggregates = await deleteRows(
-            transaction,
-            "event_aggregates",
-            aggregateIds,
-          );
-          if (
-            deletedInteractions !== interactionIds.length ||
-            deletedAggregates !== aggregateIds.length
-          ) {
-            throw new Error(
-              "Retention selection changed before deletion; transaction rolled back",
+            const deletedAggregates = await deleteRows(
+              transaction,
+              "event_aggregates",
+              aggregateIds,
             );
-          }
-          return { deletedInteractions, deletedAggregates };
-        });
-      interactionsDeleted += deleted.deletedInteractions;
-      aggregatesDeleted += deleted.deletedAggregates;
+            const deletedStateEvents = await deleteStateEvents(
+              transaction,
+              stateEventRevisions,
+            );
+            if (
+              deletedInteractions !== interactionIds.length ||
+              deletedAggregates !== aggregateIds.length ||
+              deletedStateEvents !== stateEventRevisions.length
+            ) {
+              throw new Error(
+                "Retention selection changed before deletion; transaction rolled back",
+              );
+            }
+            return {
+              deletedInteractions,
+              deletedAggregates,
+              deletedStateEvents,
+            };
+          });
+        interactionsDeleted += deleted.deletedInteractions;
+        aggregatesDeleted += deleted.deletedAggregates;
+        stateEventsDeleted += deleted.deletedStateEvents;
+        eligibleClassBytes = subtractCandidateBytes(
+          eligibleClassBytes,
+          candidates,
+        );
+      }
     }
 
     const usageAfter = await readEventStorageUsage(request.database, {
@@ -245,6 +294,7 @@ export async function runEventRetention(
         bytes_after: usageAfter.logicalEventBytes,
         interactions_deleted: interactionsDeleted,
         aggregates_deleted: aggregatesDeleted,
+        state_events_deleted: stateEventsDeleted,
         archives_created: archivesCreated,
         error_json: null,
         error_schema_version: null,
@@ -259,6 +309,7 @@ export async function runEventRetention(
       bytesAfter: usageAfter.logicalEventBytes,
       interactionsDeleted,
       aggregatesDeleted,
+      stateEventsDeleted,
       archivesCreated,
     };
   } catch (error) {
@@ -280,6 +331,7 @@ export async function runEventRetention(
         bytes_after: usageAfter.logicalEventBytes,
         interactions_deleted: interactionsDeleted,
         aggregates_deleted: aggregatesDeleted,
+        state_events_deleted: stateEventsDeleted,
         archives_created: archivesCreated,
         error_json: serializeCanonicalJson(failure),
         error_schema_version: 1,
@@ -291,47 +343,128 @@ export async function runEventRetention(
 }
 
 function selectRetentionCandidates(
-  interactions: readonly StoredInteraction[],
-  aggregates: readonly RetentionCandidate[],
+  orderedCandidates: readonly RetentionCandidate[],
   ageCutoffMs: number,
   byteBudget: number,
+  eligibleClassBytes: number,
 ): readonly RetentionCandidate[] {
-  const all = [
-    ...interactions.map((interaction) => ({
-      recordType: "interaction" as const,
-      id: interaction.id,
-      timestampMs: interaction.occurredAtMs,
-      byteCount: interaction.byteCount,
-    })),
-    ...aggregates,
-  ].sort((left, right) => {
-    const timestampDifference = left.timestampMs - right.timestampMs;
-    if (timestampDifference !== 0) return timestampDifference;
-    const typeDifference =
-      left.recordType === right.recordType
-        ? 0
-        : left.recordType < right.recordType
-          ? -1
-          : 1;
-    return typeDifference !== 0 ? typeDifference : left.id - right.id;
-  });
-  let projectedBytes = all.reduce((total, candidate) => {
-    const next = total + candidate.byteCount;
-    if (!Number.isSafeInteger(next)) {
-      throw new RangeError(
-        "Retention byte accounting exceeds safe integer range",
-      );
-    }
-    return next;
-  }, 0);
+  let projectedBytes = eligibleClassBytes;
   const selected: RetentionCandidate[] = [];
-  for (const candidate of all) {
+  for (const candidate of orderedCandidates) {
     if (candidate.timestampMs < ageCutoffMs || projectedBytes > byteBudget) {
       selected.push(candidate);
       projectedBytes -= candidate.byteCount;
     }
   }
   return selected;
+}
+
+async function readRetentionCandidateBatch(
+  database: Kysely<EventsDatabaseSchema>,
+  retentionClass: RetentionClass,
+  beforeMs: number,
+  batchSize: number,
+): Promise<readonly RetentionCandidate[]> {
+  const result = await sql<RetentionCandidateRow>`
+    SELECT record_type, id, timestamp_ms, byte_count
+    FROM (
+      SELECT 'interaction' AS record_type, id, occurred_at_ms AS timestamp_ms, byte_count
+      FROM interactions
+      WHERE retention_class = ${retentionClass} AND occurred_at_ms < ${beforeMs}
+        AND NOT (
+          kind = 'maintenance.backup'
+          AND id = (
+            SELECT id FROM interactions
+            WHERE kind = 'maintenance.backup'
+            ORDER BY occurred_at_ms DESC, id DESC
+            LIMIT 1
+          )
+        )
+      UNION ALL
+      SELECT 'aggregate' AS record_type, id, bucket_end_ms AS timestamp_ms, byte_count
+      FROM event_aggregates
+      WHERE retention_class = ${retentionClass} AND bucket_end_ms < ${beforeMs}
+      UNION ALL
+      SELECT 'state-event' AS record_type, revision AS id, occurred_at_ms AS timestamp_ms, byte_count
+      FROM state_events
+      WHERE retention_class = ${retentionClass} AND occurred_at_ms < ${beforeMs}
+    )
+    ORDER BY timestamp_ms, record_type, id
+    LIMIT ${batchSize}
+  `.execute(database);
+  return result.rows.map((row) => ({
+    recordType: parseRecordType(row.record_type),
+    id: parseSafeNonNegativeInteger(row.id, "Retention candidate identifier"),
+    timestampMs: parseSafeNonNegativeInteger(
+      row.timestamp_ms,
+      "Retention candidate timestamp",
+    ),
+    byteCount: parseSafeNonNegativeInteger(
+      row.byte_count,
+      "Retention candidate byte count",
+    ),
+  }));
+}
+
+async function readEligibleRetentionClassBytes(
+  database: Kysely<EventsDatabaseSchema>,
+  retentionClass: string,
+  beforeMs: number,
+): Promise<number> {
+  const result = await sql<{
+    readonly bytes: number | string | bigint | null;
+  }>`
+    SELECT COALESCE(SUM(byte_count), 0) AS bytes
+    FROM (
+      SELECT byte_count FROM interactions
+      WHERE retention_class = ${retentionClass} AND occurred_at_ms < ${beforeMs}
+      UNION ALL
+      SELECT byte_count FROM event_aggregates
+      WHERE retention_class = ${retentionClass} AND bucket_end_ms < ${beforeMs}
+      UNION ALL
+      SELECT byte_count FROM state_events
+      WHERE retention_class = ${retentionClass} AND occurred_at_ms < ${beforeMs}
+    )
+  `.execute(database);
+  return parseSafeNonNegativeInteger(
+    result.rows[0]?.bytes ?? 0,
+    "Retention class byte count",
+  );
+}
+
+function subtractCandidateBytes(
+  currentBytes: number,
+  candidates: readonly RetentionCandidate[],
+): number {
+  return candidates.reduce((remaining, candidate) => {
+    const next = remaining - candidate.byteCount;
+    if (!Number.isSafeInteger(next) || next < 0) {
+      throw new RangeError("Retention byte accounting became invalid");
+    }
+    return next;
+  }, currentBytes);
+}
+
+function parseRecordType(value: string): RetentionCandidate["recordType"] {
+  if (
+    value === "interaction" ||
+    value === "aggregate" ||
+    value === "state-event"
+  ) {
+    return value;
+  }
+  throw new Error(`SQLite returned unknown retention record type ${value}`);
+}
+
+function parseSafeNonNegativeInteger(
+  value: number | string | bigint,
+  label: string,
+): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new RangeError(`${label} must be a non-negative safe integer`);
+  }
+  return parsed;
 }
 
 async function aggregateRawInteractions(
@@ -462,6 +595,7 @@ function assertArchiveContainsCandidates(
   }[],
   interactionIds: readonly number[],
   aggregateIds: readonly number[],
+  stateEventRevisions: readonly number[],
 ): void {
   const archivedInteractionIds = records.flatMap((record) =>
     record.recordType === "interaction" && record.data.id !== undefined
@@ -473,14 +607,32 @@ function assertArchiveContainsCandidates(
       ? [record.data.id]
       : [],
   );
+  const archivedStateEventRevisions = records.flatMap((record) =>
+    record.recordType === "state-event" && record.data.revision !== undefined
+      ? [record.data.revision]
+      : [],
+  );
   if (
     !sameIntegerSet(archivedInteractionIds, interactionIds) ||
-    !sameIntegerSet(archivedAggregateIds, aggregateIds)
+    !sameIntegerSet(archivedAggregateIds, aggregateIds) ||
+    !sameIntegerSet(archivedStateEventRevisions, stateEventRevisions)
   ) {
     throw new Error(
       "Verified archive does not contain the exact retention selection",
     );
   }
+}
+
+async function deleteStateEvents(
+  transaction: Transaction<EventsDatabaseSchema>,
+  revisions: readonly number[],
+): Promise<number> {
+  if (revisions.length === 0) return 0;
+  const result = await transaction
+    .deleteFrom("state_events")
+    .where("revision", "in", [...revisions])
+    .executeTakeFirstOrThrow();
+  return Number(result.numDeletedRows);
 }
 
 async function deleteRows(

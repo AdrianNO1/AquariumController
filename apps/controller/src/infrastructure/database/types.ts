@@ -20,8 +20,25 @@ export type OverrideStatus =
 export type TimerStatus =
   "inactive" | "pending" | "active" | "expired" | "cancelled";
 export type AlertState = "open" | "acknowledged" | "recovered";
+export type AlertSeverity = "info" | "warning" | "error" | "critical";
 export type ImportStatus =
   "pending" | "validating" | "succeeded" | "failed" | "rolled_back";
+export type ScheduleCompileStatus = "succeeded" | "failed";
+export type ScheduleDeliveryStatus =
+  | "not_required"
+  | "pending"
+  | "in_flight"
+  | "succeeded"
+  | "failed"
+  | "timed_out"
+  | "outcome_unknown"
+  | "unsupported";
+export type AlertObservationSourceType =
+  "device" | "output" | "sensor" | "switch";
+export type AlertNotificationTransition =
+  "opened" | "acknowledged" | "recovered" | "reopened";
+export type NotificationDeliveryStatus =
+  "pending" | "attempting" | "delivered" | "failed" | "outcome_unknown";
 
 export interface DevicesTable {
   id: string;
@@ -212,7 +229,7 @@ export interface AlertRulesTable {
   condition: string;
   threshold: OptionalNullable<number>;
   delay_ms: InsertOptional<number>;
-  severity: string;
+  severity: AlertSeverity;
   enabled: InsertOptional<SqliteBoolean>;
   created_at_ms: number;
   updated_at_ms: number;
@@ -247,12 +264,83 @@ export interface ControlOperationsTable {
   result_schema_version: OptionalNullable<number>;
 }
 
+export interface DeviceScheduleArtifactsTable {
+  device_id: string;
+  source_state_revision: number;
+  compile_status: ScheduleCompileStatus;
+  desired_schedule_hash: OptionalNullable<string>;
+  compiled_payload_json: OptionalNullable<JsonText>;
+  compiled_payload_schema_version: OptionalNullable<number>;
+  byte_count: OptionalNullable<number>;
+  delivery_status: InsertOptional<ScheduleDeliveryStatus>;
+  last_delivery_operation_id: OptionalNullable<string>;
+  compile_error_code: OptionalNullable<string>;
+  compile_error_message: OptionalNullable<string>;
+  delivery_error_code: OptionalNullable<string>;
+  delivery_error_message: OptionalNullable<string>;
+  compiled_at_ms: number;
+  delivery_updated_at_ms: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface SchedulerGuardsTable {
+  job_key: string;
+  scope_key: string;
+  last_started_utc_day_start_ms: OptionalNullable<number>;
+  last_started_at_ms: OptionalNullable<number>;
+  last_operation_id: OptionalNullable<string>;
+  last_success_utc_day_start_ms: OptionalNullable<number>;
+  last_success_at_ms: OptionalNullable<number>;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface AlertConditionStatesTable {
+  alert_rule_id: string;
+  deduplication_key: string;
+  source_type: AlertObservationSourceType;
+  source_id: string;
+  pending_since_ms: number;
+  last_observed_at_ms: number;
+  observation_json: JsonText;
+  observation_schema_version: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface NotificationDeliveriesTable {
+  id: Generated<number>;
+  alert_transition_revision: number;
+  alert_id: string;
+  transition: AlertNotificationTransition;
+  destination_kind: "webhook";
+  destination_key: string;
+  deduplication_key: string;
+  status: InsertOptional<NotificationDeliveryStatus>;
+  attempt_count: InsertOptional<number>;
+  notification_json: JsonText;
+  notification_schema_version: number;
+  created_at_ms: number;
+  attempt_started_at_ms: OptionalNullable<number>;
+  completed_at_ms: OptionalNullable<number>;
+  updated_at_ms: number;
+  last_error_code: OptionalNullable<string>;
+  last_error_message: OptionalNullable<string>;
+  outcome_audit_recorded_at_ms: OptionalNullable<number>;
+}
+
 export interface StateRevisionsTable {
   revision: Generated<number>;
   committed_at_ms: number;
   actor: string;
   mutation_type: string;
   summary: string;
+}
+
+export interface OperatorConcurrencyTable {
+  singleton_key: number;
+  last_operator_revision: number;
 }
 
 export interface StateOutboxTable {
@@ -312,6 +400,11 @@ export interface StateDatabaseSchema {
   alert_rules: AlertRulesTable;
   active_alerts: ActiveAlertsTable;
   control_operations: ControlOperationsTable;
+  device_schedule_artifacts: DeviceScheduleArtifactsTable;
+  scheduler_guards: SchedulerGuardsTable;
+  alert_condition_states: AlertConditionStatesTable;
+  notification_deliveries: NotificationDeliveriesTable;
+  operator_concurrency: OperatorConcurrencyTable;
   state_revisions: StateRevisionsTable;
   state_outbox: StateOutboxTable;
   import_runs: ImportRunsTable;
@@ -328,6 +421,7 @@ export type EventOutcome =
   | "ignored";
 export type RetentionClass =
   "critical" | "audit" | "operational" | "raw" | "aggregate";
+export type EventSeverity = "debug" | "info" | "warning" | "error" | "critical";
 
 export interface StateEventsTable {
   revision: number;
@@ -346,7 +440,7 @@ export interface InteractionsTable {
   occurred_at_ms: number;
   direction: EventDirection;
   kind: string;
-  severity: string;
+  severity: EventSeverity;
   topic: OptionalNullable<string>;
   device_id: OptionalNullable<string>;
   correlation_id: OptionalNullable<string>;
@@ -413,6 +507,7 @@ export interface RetentionRunsTable {
   bytes_after: OptionalNullable<number>;
   interactions_deleted: InsertOptional<number>;
   aggregates_deleted: InsertOptional<number>;
+  state_events_deleted: InsertOptional<number>;
   archives_created: InsertOptional<number>;
   error_json: OptionalNullable<JsonText>;
   error_schema_version: OptionalNullable<number>;

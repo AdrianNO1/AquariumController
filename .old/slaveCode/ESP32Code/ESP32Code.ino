@@ -8,26 +8,43 @@
 #include <SPIFFS.h>
 #include <time.h>  // Added for time functions
 #include <esp_wifi.h>
+#include <esp_sntp.h>
+#include <atomic>
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <cstring>  // for strlcpy, strlen
+#include "firmware-config.h"
 
 unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000; // 5 seconds
-const char* ssid = "REDACTED-WIFI-SSID";
-const char* password = "REDACTED-WIFI-PASSWORD";
-const char* mqtt_server = "192.168.1.73";
-const int mqtt_port = 1883;
 const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
 
 const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;    // Don't change without altering manager.py
+const int MIN_PIN = 0;
+const int MAX_PIN = 63;
+const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
+const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "3.2w";
+const char* VERSION = "4.0.0";
 const bool TEST = false;
-const char* ntpServer = "pool.ntp.org";  // NTP server for time sync
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
+const time_t MIN_VALID_UNIX_TIME = 1735689600; // January 1, 2025 UTC
+const unsigned long NTP_SYNC_TIMEOUT_MS = 15000;
+const unsigned long NTP_RETRY_INTERVAL_MS = 60000;
+const unsigned long NTP_RESYNC_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
 
-StaticJsonDocument<4096> globalDoc;
+std::atomic<bool> ntpTimeAvailable(false);
+bool ntpSyncInProgress = false;
+bool ntpSyncEverAttempted = false;
+bool ntpSyncHasCompleted = false;
+unsigned long ntpSyncStartedAt = 0;
+unsigned long lastNtpSyncAttemptAt = 0;
+unsigned long lastNtpSyncCompletedAt = 0;
+
+JsonDocument globalDoc;
 
 // Chunking configuration
 #define MAX_CHUNK_SIZE 200
@@ -54,6 +71,8 @@ ChunkedMessage currentMessage;
 #define ID_ADDR 64
 #define FREQ_ADDR 128
 #define RES_ADDR 132
+#define NAME_MAX_LENGTH 31
+#define ID_MAX_LENGTH 8
 #define SCHEDULE_UPDATE_INTERVAL 1000  // Check schedule every 1000ms
 
 const unsigned long OVERWRITE_DURATION = 120000; // 120 seconds in milliseconds
@@ -61,7 +80,7 @@ const unsigned long OVERWRITE_DURATION = 120000; // 120 seconds in milliseconds
 struct PinState {
     int lastValue;
     bool isOverwritten;
-    unsigned long overwriteExpiry;
+    unsigned long overwriteStartedAt;
 };
 std::map<int, PinState> pinStates;
 
@@ -84,8 +103,6 @@ char currentSchedule[4096] = {0};
 // Track last day we performed the daily 4 AM restart
 int lastRestartDayOfYear = -1;
 
-unsigned long syncTimeOffset = 0;
-
 // Update the struct to include channel type
 struct ChannelConfig {
     int pin;
@@ -105,6 +122,11 @@ struct TimeInfo {
 };
 TimeInfo timeInfo;
 
+// EEPROM provides only a boot-time estimate. Persisted schedules remain gated
+// until NTP or an explicit MQTT sync confirms the clock during this boot.
+bool scheduleTimeConfirmedThisBoot = false;
+bool scheduleTimeGateNoticePrinted = false;
+
 // EEPROM addresses for time management
 #define TIME_INFO_ADDR 200    // Start address for TimeInfo struct
 
@@ -120,11 +142,19 @@ String generateId() {
 }
 
 // Read string from EEPROM
-String readFromEEPROM(int startAddr) {
+String readFromEEPROM(int startAddr, int maximumLength) {
     String data;
-    char ch;
     int addr = startAddr;
-    while ((ch = EEPROM.read(addr)) != '\0' && addr < EEPROM_SIZE) {
+    int endAddr = startAddr + maximumLength;
+    if (startAddr < 0 || maximumLength < 1 || endAddr >= EEPROM_SIZE) {
+        Serial.println("Invalid EEPROM read range");
+        return data;
+    }
+    while (addr < endAddr) {
+        char ch = EEPROM.read(addr);
+        if (ch == '\0') {
+            break;
+        }
         // Only add printable characters
         if (ch >= 32 && ch <= 126) {  // ASCII printable characters
             data += ch;
@@ -136,11 +166,16 @@ String readFromEEPROM(int startAddr) {
 }
 
 // Write string to EEPROM
-void writeToEEPROM(int startAddr, String data) {
+bool writeToEEPROM(int startAddr, String data, int maximumLength) {
+    int endAddr = startAddr + maximumLength;
+    if (startAddr < 0 || maximumLength < 1 || endAddr >= EEPROM_SIZE) {
+        Serial.println("Invalid EEPROM write range");
+        return false;
+    }
     // Sanitize the input string
     String sanitized = "";
     for (char c : data) {
-        if (c >= 32 && c <= 126) {  // Only allow printable ASCII characters
+        if (c >= 32 && c <= 126 && sanitized.length() < static_cast<size_t>(maximumLength)) {
             sanitized += c;
         }
     }
@@ -168,26 +203,28 @@ void writeToEEPROM(int startAddr, String data) {
         
         if (verification == sanitized) {
             Serial.println("Wrote to EEPROM at address " + String(startAddr) + ": " + sanitized);
+            return true;
         } else {
             Serial.println("EEPROM verification failed! Written: " + sanitized + ", Read: " + verification);
         }
     }
+    return false;
 }
 
 void initializeEEPROM() {
-	String storedName = readFromEEPROM(NAME_ADDR);
+	String storedName = readFromEEPROM(NAME_ADDR, NAME_MAX_LENGTH);
 	if (storedName.length() == 0 || storedName[0] == 0xFF) {	// Check if EEPROM is empty or corrupted
 		Serial.println("Initializing EEPROM with default device name");
-		writeToEEPROM(NAME_ADDR, String(DEFAULT_DEVICE_NAME));
+		writeToEEPROM(NAME_ADDR, String(DEFAULT_DEVICE_NAME), NAME_MAX_LENGTH);
 		deviceName = DEFAULT_DEVICE_NAME;
 	} else {
 		deviceName = storedName;
 	}
 	
-	String storedId = readFromEEPROM(ID_ADDR);
+	String storedId = readFromEEPROM(ID_ADDR, ID_MAX_LENGTH);
 	if (storedId.length() == 0 || storedId[0] == 0xFF) {
 		deviceId = generateId();
-		writeToEEPROM(ID_ADDR, deviceId);
+		writeToEEPROM(ID_ADDR, deviceId, ID_MAX_LENGTH);
 	} else {
 		deviceId = storedId;
 	}
@@ -207,6 +244,14 @@ void initializeEEPROM() {
 		EEPROM.put(RES_ADDR, resolution);
 		EEPROM.commit();
 	}
+	if (!isValidPwmConfiguration(freq, resolution)) {
+		Serial.println("Persisted PWM frequency/resolution pair is unsupported; restoring defaults");
+		freq = DEFAULT_FREQ;
+		resolution = DEFAULT_RES;
+		EEPROM.put(FREQ_ADDR, freq);
+		EEPROM.put(RES_ADDR, resolution);
+		EEPROM.commit();
+	}
 	
 	Serial.println("Device Name: " + deviceName);
 	Serial.println("Device ID: " + deviceId);
@@ -214,33 +259,76 @@ void initializeEEPROM() {
 	Serial.println("Resolution: " + String(resolution) + " bits");
 }
 
-void storeSchedule(const String& schedule) {
-    // Open file for writing
-    File file = SPIFFS.open("/schedule.json", "w");
+bool storeSchedule(const String& schedule) {
+    const char* currentPath = "/schedule.json";
+    const char* nextPath = "/schedule.next";
+    const char* previousPath = "/schedule.previous";
+    if (SPIFFS.exists(nextPath) && !SPIFFS.remove(nextPath)) {
+        Serial.println("Failed to remove stale schedule staging file");
+        return false;
+    }
+
+    File file = SPIFFS.open(nextPath, "w");
     if (!file) {
         Serial.println("Failed to open schedule file for writing");
-        return;
+        return false;
     }
-    
-    // Write the schedule to the file
-    if (file.print(schedule)) {
-        Serial.println("Schedule saved to SPIFFS, size: " + String(schedule.length()) + " bytes");
-    } else {
-        Serial.println("Schedule write failed");
-    }
-    
+
+    size_t written = file.print(schedule);
+    file.flush();
     file.close();
+    if (written != schedule.length()) {
+        Serial.println("Schedule write failed");
+        SPIFFS.remove(nextPath);
+        return false;
+    }
+
+    bool hadCurrent = SPIFFS.exists(currentPath);
+    if (hadCurrent) {
+        if (SPIFFS.exists(previousPath) && !SPIFFS.remove(previousPath)) {
+            Serial.println("Failed to remove stale previous schedule");
+            SPIFFS.remove(nextPath);
+            return false;
+        }
+        if (!SPIFFS.rename(currentPath, previousPath)) {
+            Serial.println("Failed to stage the prior schedule for replacement");
+            SPIFFS.remove(nextPath);
+            return false;
+        }
+    }
+    if (!SPIFFS.rename(nextPath, currentPath)) {
+        Serial.println("Failed to publish the replacement schedule");
+        bool restoredPrior = hadCurrent && SPIFFS.rename(previousPath, currentPath);
+        if (hadCurrent && !restoredPrior) {
+            Serial.println("Failed to restore the prior schedule file; preserving recovery marker");
+        } else {
+            SPIFFS.remove(nextPath);
+        }
+        return false;
+    }
+    if (SPIFFS.exists(previousPath) && !SPIFFS.remove(previousPath)) {
+        Serial.println("Replacement succeeded but prior schedule cleanup failed");
+    }
+    Serial.println("Schedule saved to SPIFFS, size: " + String(schedule.length()) + " bytes");
+    return true;
 }
 
 String loadSchedule() {
-    // Check if file exists
-    if (!SPIFFS.exists("/schedule.json")) {
-        Serial.println("No saved schedule found");
-        return "";
+    const char* schedulePath = "/schedule.json";
+    if (!SPIFFS.exists(schedulePath)) {
+        if (!SPIFFS.exists("/schedule.previous") || !SPIFFS.exists("/schedule.next")) {
+            Serial.println("No saved schedule found");
+            return "";
+        }
+        if (SPIFFS.rename("/schedule.previous", schedulePath)) {
+            Serial.println("Recovered prior schedule after interrupted replacement");
+        } else {
+            schedulePath = "/schedule.previous";
+            Serial.println("Using prior schedule after interrupted replacement");
+        }
     }
-    
-    // Open file for reading
-    File file = SPIFFS.open("/schedule.json", "r");
+
+    File file = SPIFFS.open(schedulePath, "r");
     if (!file) {
         Serial.println("Failed to open schedule file for reading");
         return "";
@@ -248,8 +336,13 @@ String loadSchedule() {
     
     // Read the schedule from the file
     String schedule = "";
-    while (file.available()) {
+    while (file.available() && schedule.length() < sizeof(currentSchedule) - 1) {
         schedule += (char)file.read();
+    }
+    if (file.available()) {
+        file.close();
+        Serial.println("Saved schedule exceeds the firmware buffer; refusing restore");
+        return "";
     }
     
     file.close();
@@ -275,42 +368,429 @@ int getScheduledValue(JsonArray& links, int currentMinute) {
     return 0;
 }
 
+bool isValidPin(int pin) {
+    return pin >= MIN_PIN && pin <= MAX_PIN;
+}
+
+bool isValidDeviceName(const String& name) {
+    if (name.length() < 1 || name.length() > static_cast<size_t>(NAME_MAX_LENGTH)) {
+        return false;
+    }
+    for (size_t index = 0; index < name.length(); index++) {
+        char character = name[index];
+        if (character < 33 || character > 126) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isValidPwmConfiguration(int frequency, int pwmResolution) {
+    if (frequency < 1 || frequency > 40000 || pwmResolution < 1 || pwmResolution > 16) {
+        return false;
+    }
+    return static_cast<uint64_t>(frequency) * (1ULL << pwmResolution) <= LEDC_SOURCE_CLOCK_HZ;
+}
+
+uint32_t pwmMaximumForResolution(int pwmResolution) {
+    return (1UL << pwmResolution) - 1UL;
+}
+
+int rescalePwmValue(int value, int sourceResolution, int targetResolution) {
+    const uint32_t sourceMaximum = pwmMaximumForResolution(sourceResolution);
+    const uint32_t targetMaximum = pwmMaximumForResolution(targetResolution);
+    return static_cast<int>(
+        (static_cast<uint64_t>(value) * targetMaximum) / sourceMaximum
+    );
+}
+
+int scaleNormalizedPwmValue(int value, int targetResolution) {
+    return rescalePwmValue(value, 8, targetResolution);
+}
+
+bool reattachConfiguredPins(
+    int targetFrequency,
+    int targetResolution,
+    int rollbackFrequency,
+    int rollbackResolution
+) {
+    bool wasAttached[MAX_PIN + 1] = {false};
+    int restoreValues[MAX_PIN + 1] = {0};
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        wasAttached[pin] = attachedPins[pin];
+        restoreValues[pin] = lastPinValues[pin];
+        if (wasAttached[pin]) {
+            ledcDetach(pin);
+            attachedPins[pin] = false;
+        }
+    }
+
+    bool targetFailed = false;
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        if (!wasAttached[pin]) {
+            continue;
+        }
+        if (!ledcAttach(pin, targetFrequency, targetResolution)) {
+            targetFailed = true;
+            break;
+        }
+        attachedPins[pin] = true;
+        ledcWrite(
+            pin,
+            rescalePwmValue(
+                restoreValues[pin],
+                rollbackResolution,
+                targetResolution
+            )
+        );
+    }
+    if (!targetFailed) {
+        for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+            if (!wasAttached[pin]) {
+                continue;
+            }
+            const int rescaledValue = rescalePwmValue(
+                restoreValues[pin],
+                rollbackResolution,
+                targetResolution
+            );
+            lastPinValues[pin] = rescaledValue;
+            auto pinState = pinStates.find(pin);
+            if (pinState != pinStates.end()) {
+                pinState->second.lastValue = rescaledValue;
+            }
+        }
+        for (auto& channel : activeChannels) {
+            channel.currentValue = -1;
+        }
+        return true;
+    }
+
+    Serial.println("LEDC configuration failed; rolling every attached pin back");
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        if (attachedPins[pin]) {
+            ledcDetach(pin);
+            attachedPins[pin] = false;
+        }
+    }
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        if (!wasAttached[pin]) {
+            continue;
+        }
+        if (ledcAttach(pin, rollbackFrequency, rollbackResolution)) {
+            attachedPins[pin] = true;
+            ledcWrite(pin, restoreValues[pin]);
+            continue;
+        }
+
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+        lastPinValues[pin] = 0;
+        auto failedPinState = pinStates.find(pin);
+        if (failedPinState != pinStates.end()) {
+            failedPinState->second.lastValue = 0;
+            failedPinState->second.isOverwritten = false;
+            failedPinState->second.overwriteStartedAt = 0;
+        }
+        for (auto& channel : activeChannels) {
+            if (channel.pin == pin) {
+                channel.currentValue = -1;
+                break;
+            }
+        }
+        Serial.println("LEDC rollback failed for pin " + String(pin) + "; output forced off");
+    }
+    return false;
+}
+
+bool parseBoundedDecimal(const String& value, int maximum, int& parsed) {
+    if (value.length() == 0) {
+        return false;
+    }
+    int result = 0;
+    for (size_t index = 0; index < value.length(); index++) {
+        char character = value[index];
+        if (character < '0' || character > '9') {
+            return false;
+        }
+        int digit = character - '0';
+        if (result > (maximum - digit) / 10) {
+            return false;
+        }
+        result = result * 10 + digit;
+    }
+    parsed = result;
+    return true;
+}
+
+bool isCommandWhitespace(char character) {
+    return character == ' ' || character == '\t' || character == '\r' || character == '\n';
+}
+
+void skipCommandWhitespace(const char*& cursor) {
+    while (isCommandWhitespace(*cursor)) {
+        cursor++;
+    }
+}
+
+bool parseCommandInteger(const char*& cursor, int& parsed) {
+    skipCommandWhitespace(cursor);
+    if (*cursor == '\0') {
+        return false;
+    }
+    errno = 0;
+    char* end = nullptr;
+    long result = strtol(cursor, &end, 10);
+    if (end == cursor || errno == ERANGE || result < INT_MIN || result > INT_MAX) {
+        return false;
+    }
+    if (*end != '\0' && !isCommandWhitespace(*end)) {
+        return false;
+    }
+    parsed = static_cast<int>(result);
+    cursor = end;
+    return true;
+}
+
+bool parseSetArguments(const String& value, int& pin, int& output, int& overwrite) {
+    const char* cursor = value.c_str();
+    if (!parseCommandInteger(cursor, pin) || !parseCommandInteger(cursor, output) ||
+        !parseCommandInteger(cursor, overwrite)) {
+        return false;
+    }
+    skipCommandWhitespace(cursor);
+    return *cursor == '\0';
+}
+
+bool parseEditArguments(
+    const String& value,
+    String& deviceNameValue,
+    int& frequencyValue,
+    int& resolutionValue
+) {
+    const char* cursor = value.c_str();
+    skipCommandWhitespace(cursor);
+    const char* nameStart = cursor;
+    while (*cursor != '\0' && !isCommandWhitespace(*cursor)) {
+        cursor++;
+    }
+    size_t nameLength = static_cast<size_t>(cursor - nameStart);
+    if (nameLength < 1 || nameLength > static_cast<size_t>(NAME_MAX_LENGTH)) {
+        return false;
+    }
+    deviceNameValue = "";
+    for (size_t index = 0; index < nameLength; index++) {
+        deviceNameValue += nameStart[index];
+    }
+    if (!parseCommandInteger(cursor, frequencyValue) ||
+        !parseCommandInteger(cursor, resolutionValue)) {
+        return false;
+    }
+    skipCommandWhitespace(cursor);
+    return *cursor == '\0';
+}
+
+bool schedulePointIsValid(JsonVariant point) {
+    if (!point.is<JsonObject>()) {
+        return false;
+    }
+    JsonVariant minuteValue = point["t"];
+    JsonVariant percentageValue = point["p"];
+    return minuteValue.is<int>() && minuteValue.as<int>() >= 0 &&
+        minuteValue.as<int>() <= 1439 && percentageValue.is<int>() &&
+        percentageValue.as<int>() >= 0 && percentageValue.as<int>() <= 100;
+}
+
+bool schedulePinsAreValid(JsonDocument& doc) {
+    JsonVariant channelsValue = doc["c"];
+    JsonVariant syncTimeValue = doc["syncTime"];
+    if (!channelsValue.is<JsonArray>() || !syncTimeValue.is<unsigned long>() ||
+        syncTimeValue.as<unsigned long>() < 1 ||
+        syncTimeValue.as<unsigned long>() > MAX_SYNC_UNIX_TIME) {
+        return false;
+    }
+    JsonArray channels = channelsValue.as<JsonArray>();
+    if (channels.size() > static_cast<size_t>(MAX_PIN + 1)) {
+        return false;
+    }
+    bool seenPins[MAX_PIN + 1] = {false};
+    for (JsonVariant channel : channels) {
+        if (!channel.is<JsonObject>()) {
+            return false;
+        }
+        JsonVariant pinValue = channel["o"];
+        if (!pinValue.is<int>() || !isValidPin(pinValue.as<int>())) {
+            return false;
+        }
+        JsonVariant typeValue = channel["t"];
+        if (!typeValue.is<int>() ||
+            (typeValue.as<int>() != 108 && typeValue.as<int>() != 112)) {
+            return false;
+        }
+        JsonVariant linksValue = channel["l"];
+        if (!linksValue.is<JsonArray>()) {
+            return false;
+        }
+        JsonArray links = linksValue.as<JsonArray>();
+        for (JsonVariant link : links) {
+            if (!link.is<JsonObject>() || !schedulePointIsValid(link["s"]) ||
+                !schedulePointIsValid(link["d"])) {
+                return false;
+            }
+        }
+        int pin = pinValue.as<int>();
+        if (seenPins[pin]) {
+            return false;
+        }
+        seenPins[pin] = true;
+    }
+    return true;
+}
+
+void rollbackNewSchedulePins(bool newlyAttached[MAX_PIN + 1]) {
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        if (!newlyAttached[pin]) {
+            continue;
+        }
+        ledcDetach(pin);
+        attachedPins[pin] = false;
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+        lastPinValues[pin] = 0;
+    }
+}
+
+bool attachMissingSchedulePins(
+    JsonArray& channels,
+    bool newlyAttached[MAX_PIN + 1]
+) {
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        newlyAttached[pin] = false;
+    }
+    for (JsonVariant channel : channels) {
+        int pin = channel["o"].as<int>();
+        if (attachedPins[pin]) {
+            continue;
+        }
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+        if (!ledcAttach(pin, freq, resolution)) {
+            Serial.println("Failed to attach scheduled pin " + String(pin));
+            rollbackNewSchedulePins(newlyAttached);
+            auto failedPinState = pinStates.find(pin);
+            if (failedPinState != pinStates.end()) {
+                failedPinState->second.lastValue = 0;
+                failedPinState->second.isOverwritten = false;
+                failedPinState->second.overwriteStartedAt = 0;
+            }
+            return false;
+        }
+        attachedPins[pin] = true;
+        newlyAttached[pin] = true;
+        ledcWrite(pin, 0);
+        lastPinValues[pin] = 0;
+    }
+    return true;
+}
+
+void turnOffRemovedSchedulePins(JsonArray& nextChannels) {
+    for (const auto& previousChannel : activeChannels) {
+        bool retained = false;
+        for (JsonVariant nextChannel : nextChannels) {
+            if (nextChannel["o"].as<int>() == previousChannel.pin) {
+                retained = true;
+                break;
+            }
+        }
+        if (retained) {
+            continue;
+        }
+
+        int pin = previousChannel.pin;
+        if (attachedPins[pin]) {
+            ledcWrite(pin, 0);
+        } else {
+            pinMode(pin, OUTPUT);
+            digitalWrite(pin, LOW);
+        }
+        lastPinValues[pin] = 0;
+        auto pinState = pinStates.find(pin);
+        if (pinState != pinStates.end()) {
+            pinState->second.lastValue = 0;
+            pinState->second.isOverwritten = false;
+            pinState->second.overwriteStartedAt = 0;
+        }
+        Serial.println("Replacement schedule removed pin " + String(pin) + "; output forced off");
+    }
+}
+
+bool parseSyncTime(const String& value, unsigned long& parsed) {
+    if (value.length() == 0) {
+        return false;
+    }
+    unsigned long result = 0;
+    for (size_t index = 0; index < value.length(); index++) {
+        char character = value[index];
+        if (character < '0' || character > '9') {
+            return false;
+        }
+        unsigned long digit = static_cast<unsigned long>(character - '0');
+        if (result > (MAX_SYNC_UNIX_TIME - digit) / 10UL) {
+            return false;
+        }
+        result = result * 10UL + digit;
+    }
+    if (result < static_cast<unsigned long>(MIN_VALID_UNIX_TIME)) {
+        return false;
+    }
+    parsed = result;
+    return true;
+}
+
 void processSchedule(const String& schedule) {
-    StaticJsonDocument<4096> doc;
+    if (schedule.length() >= sizeof(currentSchedule)) {
+        Serial.println("Schedule exceeds the firmware buffer; keeping outputs safely unchanged");
+        return;
+    }
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, schedule);
     
     if (error) {
         Serial.println("Failed to parse schedule");
         return;
     }
+    if (!schedulePinsAreValid(doc)) {
+        Serial.println("Schedule structure is invalid; keeping outputs safely unchanged");
+        return;
+    }
 
-    // Store the schedule
-    storeSchedule(schedule);
+    JsonArray channels = doc["c"].as<JsonArray>();
+    bool newlyAttached[MAX_PIN + 1] = {false};
+    if (!attachMissingSchedulePins(channels, newlyAttached)) {
+        Serial.println("Persisted schedule could not attach every output; keeping schedule disabled");
+        return;
+    }
+
     strlcpy(currentSchedule, schedule.c_str(), sizeof(currentSchedule));
-    
-    // Get sync time from schedule
-    unsigned long scheduleTime = doc["syncTime"].as<unsigned long>();
-    
+    turnOffRemovedSchedulePins(channels);
+
     // Clear existing channel configurations
     activeChannels.clear();
     
     // Setup channels
-    JsonArray channels = doc["c"].as<JsonArray>();
     for (JsonVariant channel : channels) {
         int pin = channel["o"].as<int>();
         // Use as<int>() instead of as<char>() and then cast to int8_t
         int8_t type = (int8_t)channel["t"].as<int>();
         
         // Initialize channel
-        activeChannels.push_back({pin, 0, type});
+        // -1 is outside the valid 0-100% range and forces the first schedule
+        // loop to write the physical pin, including a zero target.
+        activeChannels.push_back({pin, -1, type});
         
-        // Setup PWM for this pin
-        if (!attachedPins[pin]) {
-            if (ledcAttach(pin, freq, resolution)) {
-                attachedPins[pin] = true;
-                ledcWrite(pin, 0);
-            }
-        }
+        // Restored EEPROM time never authorizes output during this boot.
+        ledcWrite(pin, 0);
+        lastPinValues[pin] = 0;
     }
 }
 
@@ -373,7 +853,7 @@ unsigned long calculateHash(const String& str) {
 }
 
 void announcePresence() {
-	StaticJsonDocument<200> doc;
+	JsonDocument doc;
 	doc["name"] = deviceName;
 	doc["freq"] = freq;
 	doc["res"] = resolution;
@@ -384,11 +864,11 @@ void announcePresence() {
 	// Calculate and send a hash of the schedule instead of the entire schedule
 	if (strlen(currentSchedule) > 0) {
 		// Parse the schedule to remove syncTime before hashing
-		StaticJsonDocument<4096> scheduleDoc;
+		JsonDocument scheduleDoc;
 		deserializeJson(scheduleDoc, currentSchedule);
 		
 		// Create a copy without syncTime for consistent hashing
-		StaticJsonDocument<4096> channelsOnlyDoc;
+		JsonDocument channelsOnlyDoc;
 		channelsOnlyDoc["c"] = scheduleDoc["c"];
 		
 		// Serialize back to a string and calculate hash
@@ -414,40 +894,47 @@ void announcePresence() {
 }
 
 String handleScheduleCommand(const String& scheduleJson) {
+    if (scheduleJson.length() >= sizeof(currentSchedule)) {
+        return "E: Schedule too large";
+    }
     // Verify JSON is valid
-    StaticJsonDocument<4096> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, scheduleJson);
     if (error) {
         return "E: Invalid JSON";
     }
+    if (!schedulePinsAreValid(doc)) {
+        return "E: Invalid schedule";
+    }
     
-    // Store and process the schedule
-    storeSchedule(scheduleJson);
+    JsonArray channels = doc["c"].as<JsonArray>();
+    bool newlyAttached[MAX_PIN + 1] = {false};
+    if (!attachMissingSchedulePins(channels, newlyAttached)) {
+        return "E: Schedule output attach failed";
+    }
+    if (!storeSchedule(scheduleJson)) {
+        rollbackNewSchedulePins(newlyAttached);
+        return "E: Schedule storage failed";
+    }
     strlcpy(currentSchedule, scheduleJson.c_str(), sizeof(currentSchedule));
-    
-    // Set time offset
-    syncTimeOffset = doc["syncTime"].as<unsigned long>() - (millis() / 1000);
-    
+
+    turnOffRemovedSchedulePins(channels);
+
     // Clear and setup channels
     activeChannels.clear();
     
     // Setup channels
-    JsonArray channels = doc["c"].as<JsonArray>();
     for (JsonVariant channel : channels) {
         int pin = channel["o"].as<int>();
         // Use as<int>() instead of as<char>() and then cast to int8_t
         int8_t type = (int8_t)channel["t"].as<int>();
         
         // Initialize channel
-        activeChannels.push_back({pin, 0, type});
+        // Force a replacement schedule to write even when its first target is
+        // zero or matches the previous schedule's cached percentage.
+        activeChannels.push_back({pin, -1, type});
         
-        // Setup PWM for this pin
-        if (!attachedPins[pin]) {
-            if (ledcAttach(pin, freq, resolution)) {
-                attachedPins[pin] = true;
-                ledcWrite(pin, 0);
-            }
-        }
+        // All new pins were attached and held low before durable publication.
     }
     
     // Return a simple confirmation instead of the entire schedule
@@ -459,22 +946,25 @@ String handleCommand(String command, String args) {
 	String response = "E: Invalid command";
 	if (command == "s") {
 		int pin, value, overwrite;
-		if (sscanf(args.c_str(), "%d %d %d", &pin, &value, &overwrite) == 3) {
+		if (parseSetArguments(args, pin, value, overwrite)) {
 			Serial.println("Pin: " + String(pin));
 			Serial.println("Value: " + String(value));
 			Serial.println("Overwrite: " + String(overwrite));
-			if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
+			if (!isValidPin(pin)) {
+				response = "E: Invalid pin";
+			} else if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
+				const int pwmValue = scaleNormalizedPwmValue(value, resolution);
 				if (!attachedPins[pin]) {
 					if (ledcAttach(pin, freq, resolution)) {
 						attachedPins[pin] = true;
-						ledcWrite(pin, value);
-						lastPinValues[pin] = value;
+						ledcWrite(pin, pwmValue);
+						lastPinValues[pin] = pwmValue;
 						
 						// Update pin state with overwrite information
 						if (overwrite == 1) {
-							pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
+							pinStates[pin] = {pwmValue, true, millis()};
 						} else {
-							pinStates[pin] = {value, false, 0};
+							pinStates[pin] = {pwmValue, false, 0};
 						}
 						
 						response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
@@ -482,14 +972,14 @@ String handleCommand(String command, String args) {
 						response = "E: LEDC attach failed";
 					}
 				} else {
-					ledcWrite(pin, value);
-					lastPinValues[pin] = value;
+					ledcWrite(pin, pwmValue);
+					lastPinValues[pin] = pwmValue;
 					
 					// Update pin state with overwrite information
 					if (overwrite == 1) {
-						pinStates[pin] = {value, true, millis() + OVERWRITE_DURATION};
+						pinStates[pin] = {pwmValue, true, millis()};
 					} else {
-						pinStates[pin] = {value, false, 0};
+						pinStates[pin] = {pwmValue, false, 0};
 					}
 					
 					response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
@@ -507,84 +997,61 @@ String handleCommand(String command, String args) {
 			response = "o";
 		}
 		else if (command == "e") {
-			String args_array[4];
-			int current_index = 0;
-			int last_space = 0;
-			int next_space = args.indexOf(' ');
-			
-			while (next_space >= 0 && current_index < 4) {
-				args_array[current_index++] = args.substring(last_space, next_space);
-				last_space = next_space + 1;
-				next_space = args.indexOf(' ', last_space);
+			String newName;
+			int newFreq;
+			int newRes;
+			if (!parseEditArguments(args, newName, newFreq, newRes)) {
+				return "E: Invalid configuration";
 			}
-			if (last_space < args.length()) {
-				args_array[current_index++] = args.substring(last_space);
+			if (!isValidDeviceName(newName) ||
+				!isValidPwmConfiguration(newFreq, newRes)) {
+				return "E: Invalid configuration";
 			}
-	
-			// args_array[0] is the new name
-			// args_array[1] is the new frequency
-			// args_array[2] is the new resolution
-
-      
-			
-			String newName = args_array[0];
-			int newFreq = args_array[1].toInt();
-			int newRes = args_array[2].toInt();
 
      		Serial.println(deviceName + " " + newName + " " + String(newFreq) + " " + String(newRes));
-			
-			if (true) {
-				bool needReattach = false;
-				
-				// Check and update name if different
-				if (newName != deviceName) {
-					writeToEEPROM(NAME_ADDR, newName);
-					deviceName = readFromEEPROM(NAME_ADDR);
-				}
-				
-				// Check and update frequency if different
-				if (newFreq != freq && newFreq) {
-					freq = newFreq;
-					EEPROM.put(FREQ_ADDR, freq);
-					needReattach = true;
-				}
-				
-				// Check and update resolution if different
-				if (newRes != resolution && newRes >= 1 && newRes <= 16) {
-					resolution = newRes;
-					EEPROM.put(RES_ADDR, resolution);
-					needReattach = true;
-				}
-				
-				EEPROM.commit();
-				
-				// If frequency or resolution changed, reattach all active pins
-				if (needReattach) {
-					for (int pin = 0; pin < 64; pin++) {
-						if (attachedPins[pin]) {
-							ledcDetach(pin);
-							if (ledcAttach(pin, freq, resolution)) {
-								ledcWrite(pin, lastPinValues[pin]);
-							}
-						}
-					}
-				}
-				
-				response = deviceName + " " + String(freq) + " " + String(resolution);
-			} else {
-				response = "E: Invalid arguments format";
+
+			String oldName = deviceName;
+			int oldFreq = freq;
+			int oldRes = resolution;
+			bool needReattach = newFreq != oldFreq || newRes != oldRes;
+			if (needReattach &&
+				!reattachConfiguredPins(newFreq, newRes, oldFreq, oldRes)) {
+				return "E: LEDC reattach failed";
 			}
+
+			bool persisted = newName == oldName ||
+				writeToEEPROM(NAME_ADDR, newName, NAME_MAX_LENGTH);
+			EEPROM.put(FREQ_ADDR, newFreq);
+			EEPROM.put(RES_ADDR, newRes);
+			persisted = EEPROM.commit() && persisted;
+			if (!persisted) {
+				Serial.println("Configuration persistence failed; rolling back");
+				writeToEEPROM(NAME_ADDR, oldName, NAME_MAX_LENGTH);
+				EEPROM.put(FREQ_ADDR, oldFreq);
+				EEPROM.put(RES_ADDR, oldRes);
+				EEPROM.commit();
+				if (needReattach) {
+					reattachConfiguredPins(oldFreq, oldRes, newFreq, newRes);
+				}
+				return "E: Configuration persistence failed";
+			}
+
+			deviceName = newName;
+			freq = newFreq;
+			resolution = newRes;
+			response = deviceName + " " + String(freq) + " " + String(resolution);
 		}
 	}
 	else if (command == "sync") {
-		unsigned long serverTime = args.toInt();
-		if (serverTime > 0) {
+		unsigned long serverTime;
+		if (parseSyncTime(args, serverTime)) {
 			// Update our internal time
 			time_t syncTime = serverTime;
 			timeInfo.lastSyncTime = syncTime;
 			timeInfo.lastSavedTime = syncTime;
 			timeInfo.lastMillis = millis();
 			timeInfo.timeInitialized = true;
+			scheduleTimeConfirmedThisBoot = true;
 			saveTimeInfo();
 			
 			struct tm timeinfo;
@@ -599,17 +1066,24 @@ String handleCommand(String command, String args) {
 	}
 	else if (command == "r") {
         int pin;
-        char extra[32];
-        int count = sscanf(args.c_str(), "%d %31s", &pin, extra);
-        
-        if (count > 1) {
+        const char* cursor = args.c_str();
+        bool parsed = parseCommandInteger(cursor, pin);
+        if (parsed) {
+            skipCommandWhitespace(cursor);
+        }
+
+        if (!parsed) {
+            response = "E: Invalid arguments";
+        } else if (*cursor != '\0') {
             response = "E: Metadata not supported";
-        } else if (count == 1) {
+        } else if (!isValidPin(pin)) {
+            response = "E: Invalid pin";
+        } else if (attachedPins[pin]) {
+            response = "E: Pin is configured as output";
+        } else {
             pinMode(pin, INPUT);
             int val = analogRead(pin);
             response = "r " + String(pin) + " " + String(val);
-        } else {
-			response = "E: Invalid arguments";
         }
 	}
 
@@ -632,7 +1106,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 	}
 	Serial.println("Message content: " + message);
 
-	if (!TEST && String(topic) == "aquarium/command" || TEST && String(topic) == "test/aquarium/command") {
+	if ((!TEST && String(topic) == "aquarium/command") || (TEST && String(topic) == "test/aquarium/command")) {
 		// Check if this is a chunked message
 		if (message.startsWith("chunk:")) {
 			handleChunkedMessage(message.substring(6));
@@ -658,10 +1132,10 @@ void callback(char* topic, byte* payload, unsigned int length) {
 		}
 
 		// Create JSON document for responses
-		StaticJsonDocument<512> responses;
+		JsonDocument responses;
 		responses["id"] = deviceId;
 		responses["name"] = deviceName;
-		JsonArray commands = responses.createNestedArray("responses");
+		JsonArray commands = responses["responses"].to<JsonArray>();
 
 		// Handle multiple commands separated by semicolon
 		int startPos = 0;
@@ -670,7 +1144,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 		while ((endPos = message.indexOf(';', startPos)) != -1) {
 			String response = processCommand(message.substring(startPos, endPos));
 			if (response.length() > 0) {
-				JsonObject cmd = commands.createNestedObject();
+				JsonObject cmd = commands.add<JsonObject>();
 				cmd["index"] = cmdIndex;
 				cmd["response"] = response;
 			}
@@ -681,7 +1155,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 		if (startPos < message.length()) {
 			String response = processCommand(message.substring(startPos));
 			if (response.length() > 0) {
-				JsonObject cmd = commands.createNestedObject();
+				JsonObject cmd = commands.add<JsonObject>();
 				cmd["index"] = cmdIndex;
 				cmd["response"] = response;
 			}
@@ -739,40 +1213,84 @@ String processCommand(String message) {
 	return handleCommand(command, args);
 }
 
-// Initialize time from NTP server
-void initializeTime() {
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println("Initializing time via NTP");
-        configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-        
-        struct tm timeinfo;
-        bool success = false;
-        
-        // Retry NTP sync for up to 4 minutes (30 attempts * 8 seconds)
-        for (int i = 0; i < 30; i++) {
-            if (getLocalTime(&timeinfo, 8000)) {
-                success = true;
-                break;
-            }
-            Serial.println("Retrying NTP sync... (" + String(i + 1) + "/30)");
-        }
-        
-        if (success) {
-            time_t now;
-            time(&now);
+void onNtpTimeAvailable(struct timeval*) {
+    ntpTimeAvailable.store(true);
+}
+
+void beginNtpSync() {
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+
+    ntpSyncStartedAt = millis();
+    lastNtpSyncAttemptAt = ntpSyncStartedAt;
+    ntpSyncInProgress = true;
+    ntpSyncEverAttempted = true;
+
+    Serial.println("Starting asynchronous NTP synchronization");
+    configTime(gmtOffset_sec, daylightOffset_sec, ntp_server);
+}
+
+void serviceTimeSynchronization() {
+    if (ntpTimeAvailable.exchange(false)) {
+        time_t now;
+        time(&now);
+
+        if (now >= MIN_VALID_UNIX_TIME) {
             timeInfo.lastSyncTime = now;
             timeInfo.lastSavedTime = now;
             timeInfo.lastMillis = millis();
             timeInfo.timeInitialized = true;
+            scheduleTimeConfirmedThisBoot = true;
             saveTimeInfo();
-            Serial.println("Time initialized via NTP");
+
+            ntpSyncInProgress = false;
+            ntpSyncHasCompleted = true;
+            lastNtpSyncCompletedAt = millis();
+
+            struct tm timeinfo;
+            localtime_r(&now, &timeinfo);
+            Serial.println("Time synchronized via NTP");
             Serial.print("Current time: ");
             Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
         } else {
-            Serial.println("Failed to obtain time from NTP after retries");
+            Serial.println("NTP reported an invalid time; waiting for the next retry");
         }
+    }
+
+    const unsigned long currentMillis = millis();
+    if (WiFi.status() != WL_CONNECTED) {
+        return;
+    }
+
+    // All elapsed-time checks use unsigned subtraction. The 15-second,
+    // 60-second, and six-hour intervals remain safe across millis() rollover.
+    if (ntpSyncInProgress) {
+        if (currentMillis - ntpSyncStartedAt >= NTP_SYNC_TIMEOUT_MS) {
+            ntpSyncInProgress = false;
+            Serial.println("NTP synchronization timed out; control remains online and retry is scheduled");
+        }
+        return;
+    }
+
+    const bool resyncDue = !ntpSyncHasCompleted ||
+        currentMillis - lastNtpSyncCompletedAt >= NTP_RESYNC_INTERVAL_MS;
+    const bool retryDue = !ntpSyncEverAttempted ||
+        currentMillis - lastNtpSyncAttemptAt >= NTP_RETRY_INTERVAL_MS;
+
+    if (resyncDue && retryDue) {
+        beginNtpSync();
+    }
+}
+
+// Configure NTP without waiting for DNS or a server response.
+void initializeTime() {
+    sntp_set_time_sync_notification_cb(onNtpTimeAvailable);
+
+    if (WiFi.status() == WL_CONNECTED) {
+        beginNtpSync();
     } else {
-        Serial.println("WiFi not connected, can't initialize time via NTP");
+        Serial.println("WiFi not connected; NTP will start after WiFi reconnects");
     }
 }
 
@@ -797,7 +1315,7 @@ void loadTimeInfo() {
     EEPROM.get(TIME_INFO_ADDR, timeInfo);
     
     // Verify if the loaded data makes sense
-    if (timeInfo.lastSavedTime < 1735689600) { // Jan 1, 2025 as a sanity check
+    if (timeInfo.lastSavedTime < MIN_VALID_UNIX_TIME) {
         Serial.println("Invalid time data in EEPROM, resetting");
         timeInfo.timeInitialized = false;
         return;
@@ -864,6 +1382,13 @@ void setup() {
 		processSchedule(savedSchedule);
 	}
 	
+	if ((strlen(mqtt_username) == 0) != (strlen(mqtt_password) == 0)) {
+		Serial.println("MQTT username and password must either both be set or both be empty");
+		while (true) {
+			delay(1000);
+		}
+	}
+
 	setup_wifi();
 	initializeTime();
 	
@@ -879,6 +1404,8 @@ void loop() {
 		WiFi.reconnect();
 		delay(200);
 	}
+
+	serviceTimeSynchronization();
 
 	if (!client.connected()) {
 		unsigned long currentMillis = millis();
@@ -897,7 +1424,10 @@ void loop() {
 			Serial.println("WiFi status - SSID: " + String(WiFi.SSID()) + 
 										" Signal strength: " + String(WiFi.RSSI()) + "dBm");
 			
-			if (client.connect(clientId.c_str())) {
+			const bool mqttConnected = strlen(mqtt_username) == 0
+				? client.connect(clientId.c_str())
+				: client.connect(clientId.c_str(), mqtt_username, mqtt_password);
+			if (mqttConnected) {
 				Serial.println("MQTT connected");
 				if (TEST) {
 					client.subscribe("test/aquarium/command");
@@ -949,11 +1479,10 @@ void loop() {
 		// Only update if SCHEDULE_UPDATE_INTERVAL has passed
 		if (currentMillis - lastScheduleUpdate >= SCHEDULE_UPDATE_INTERVAL) {
 			lastScheduleUpdate = currentMillis;
-			
-			// Get current minute of day (0-1439)
-			int currentMinute = getCurrentMinuteOfDay();
-			
-			if (currentMinute > 0 || timeInfo.timeInitialized) {
+
+			if (timeInfo.timeInitialized && scheduleTimeConfirmedThisBoot) {
+				// Get current minute of day (0-1439). Midnight is a valid zero.
+				int currentMinute = getCurrentMinuteOfDay();
 				deserializeJson(globalDoc, currentSchedule);
 				
 				// Process each channel in the array
@@ -983,14 +1512,20 @@ void loop() {
 											  " (" + String(targetValue) + "%) at minute " + String(currentMinute) +
 											  " [Type: " + (type == 112 ? "pump" : "light") + "]");
 								ledcWrite(pin, pwmValue);
+								lastPinValues[pin] = pwmValue;
+								auto scheduledPinState = pinStates.find(pin);
+								if (scheduledPinState != pinStates.end()) {
+									scheduledPinState->second.lastValue = pwmValue;
+								}
 								activeChannels[j].currentValue = targetValue;
 							}
 							break;
 						}
 					}
 				}
-			} else {
-				Serial.println("Skipping schedule update: Time not initialized");
+			} else if (!scheduleTimeGateNoticePrinted) {
+				Serial.println("Persisted schedule is safely off until time is confirmed this boot");
+				scheduleTimeGateNoticePrinted = true;
 			}
 		}
 	}
@@ -1034,7 +1569,7 @@ void checkOverwriteExpiries() {
         int pin = pair.first;
         PinState& state = pair.second;
 
-        if (state.isOverwritten && currentMillis >= state.overwriteExpiry) {
+        if (state.isOverwritten && currentMillis - state.overwriteStartedAt >= OVERWRITE_DURATION) {
             Serial.println("Overwrite expired for pin " + String(pin));
             state.isOverwritten = false;
             
@@ -1049,13 +1584,23 @@ void checkOverwriteExpiries() {
 				}
             }
 
-            // If not controlled by schedule (or no schedule), turn it off
-            if (!controlledBySchedule) {
-                Serial.println("No scheduled value for pin " + String(pin) + ", turning off");
+            // Without a fresh clock confirmation there is no safe scheduled
+            // value to restore when a manual overwrite expires.
+            if (!controlledBySchedule || !scheduleTimeConfirmedThisBoot) {
+                Serial.println("No confirmed scheduled value for pin " + String(pin) + ", turning off");
                 ledcWrite(pin, 0);
                 lastPinValues[pin] = 0;
+				state.lastValue = 0;
+			} else {
+				// The cached percentage still describes the value from before the
+				// override. Invalidate it so a flat schedule is physically restored.
+				for (auto& channel : activeChannels) {
+					if (channel.pin == pin) {
+						channel.currentValue = -1;
+						break;
+					}
+				}
             }
-            // If controlled by schedule, it will be updated in the next schedule loop
         }
     }
 }
@@ -1071,17 +1616,45 @@ void handleChunkedMessage(String chunkData) {
         return;
     }
     
-    int chunkIndex = chunkData.substring(0, firstColon).toInt();
-    int totalChunks = chunkData.substring(firstColon + 1, secondColon).toInt();
-    bool isLast = chunkData.substring(secondColon + 1, thirdColon).toInt() == 1;
+    int chunkIndex;
+    int totalChunks;
+    if (!parseBoundedDecimal(chunkData.substring(0, firstColon), MAX_CHUNKS - 1, chunkIndex) ||
+        !parseBoundedDecimal(chunkData.substring(firstColon + 1, secondColon), MAX_CHUNKS, totalChunks)) {
+        Serial.println("Invalid chunk number; ignoring message");
+        return;
+    }
+    String isLastValue = chunkData.substring(secondColon + 1, thirdColon);
+    bool isLast = isLastValue == "1";
     String data = chunkData.substring(thirdColon + 1);
+
+    if (chunkIndex < 0 || chunkIndex >= MAX_CHUNKS ||
+        totalChunks < 1 || totalChunks > MAX_CHUNKS ||
+        chunkIndex >= totalChunks ||
+        (isLastValue != "0" && isLastValue != "1") ||
+        isLast != (chunkIndex == totalChunks - 1) ||
+        data.length() > MAX_CHUNK_SIZE) {
+        Serial.println("Invalid chunk metadata; ignoring message");
+        return;
+    }
     
     Serial.println("Received chunk " + String(chunkIndex + 1) + " of " + String(totalChunks) + 
                   ", isLast: " + String(isLast) + ", size: " + String(data.length()) + " bytes");
     
     // Initialize or update chunked message
-    if (chunkIndex == 0 || currentMessage.lastChunkTime == 0 || 
-        millis() - currentMessage.lastChunkTime > CHUNK_TIMEOUT) {
+    bool startsNewAssembly = chunkIndex == 0 || currentMessage.lastChunkTime == 0 ||
+        millis() - currentMessage.lastChunkTime > CHUNK_TIMEOUT;
+    if (!startsNewAssembly && totalChunks != currentMessage.totalChunks) {
+        Serial.println("Chunk total changed during assembly; resetting message");
+        for (int i = 0; i < MAX_CHUNKS; i++) {
+            currentMessage.chunks[i].data[0] = '\0';
+            currentMessage.chunks[i].received = false;
+        }
+        currentMessage.totalChunks = 0;
+        currentMessage.complete = false;
+        currentMessage.lastChunkTime = 0;
+        return;
+    }
+    if (startsNewAssembly) {
         // Reset current message if this is the first chunk or if timeout occurred
         Serial.println("Initializing new chunked message with " + String(totalChunks) + " chunks");
         for (int i = 0; i < MAX_CHUNKS; i++) {
@@ -1142,10 +1715,10 @@ void handleChunkedMessage(String chunkData) {
 
 void processCompleteMessage(String message) {
     // Create JSON document for responses
-    StaticJsonDocument<512> responses;
+    JsonDocument responses;
     responses["id"] = deviceId;
     responses["name"] = deviceName;
-    JsonArray commands = responses.createNestedArray("responses");
+    JsonArray commands = responses["responses"].to<JsonArray>();
     
     // Handle multiple commands separated by semicolon
     int startPos = 0;
@@ -1154,7 +1727,7 @@ void processCompleteMessage(String message) {
     while ((endPos = message.indexOf(';', startPos)) != -1) {
         String response = processCommand(message.substring(startPos, endPos));
         if (response.length() > 0) {
-            JsonObject cmd = commands.createNestedObject();
+            JsonObject cmd = commands.add<JsonObject>();
             cmd["index"] = cmdIndex;
             cmd["response"] = response;
         }
@@ -1165,7 +1738,7 @@ void processCompleteMessage(String message) {
     if (startPos < message.length()) {
         String response = processCommand(message.substring(startPos));
         if (response.length() > 0) {
-            JsonObject cmd = commands.createNestedObject();
+            JsonObject cmd = commands.add<JsonObject>();
             cmd["index"] = cmdIndex;
             cmd["response"] = response;
         }

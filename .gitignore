@@ -1,9 +1,12 @@
 .vscode/
 .env
 .env.*
+.old/slaveCode/ESP32Code/firmware-config.h
 node_modules/
 dist/
 coverage/
+playwright-report/
+test-results/
 .data/
 *.db
 *.db-shm

@@ -1,119 +1,571 @@
 # Target architecture
 
-Status: accepted foundation decision, 2026-07-10.
+Status: implemented architecture, updated 2026-07-19. Historical local evidence
+is identified below; final settled-tree validation after the latest firmware,
+API, alert/SSE, archive, and backup-artifact hardening is pending. This document
+does not claim that the local stack is currently running. Physical ESP flashing,
+Raspberry Pi deployment, and production configuration remain operator-run
+release steps.
 
 ## Decision
 
-Build a TypeScript modular monolith. One controller process will own HTTP, SSE, MQTT, scheduling, persistence, alerts, and hardware-facing adapters. The browser is a React single-page application. Mosquitto remains a separate broker process.
+AquariumController is a TypeScript modular monolith. One long-lived controller
+process owns HTTP, server-sent events, MQTT, scheduling, persistence, alerts,
+and hardware-facing adapters. The browser is a React single-page application.
+Mosquitto remains a separate broker process.
 
-This is intentionally not a Next.js application and not a set of microservices. The dashboard is local-network software with no SEO or server-rendering requirement, while MQTT, timers, schedule evaluation, and alerting need one predictable long-lived owner. Vite and Fastify provide those two lifecycles directly with less operational surface on the Pi.
+This is intentionally neither a Next.js application nor a set of microservices.
+The dashboard is local-network software with no SEO or server-rendering need,
+while the MQTT queue, five-second refresh, daily jobs, state revision, and
+shutdown sequence need one predictable owner. The controller must not be
+horizontally scaled: the deployed ESP protocol has no request identifier and
+requires one global wire operation in flight.
 
 ## Technology baseline
 
-| Concern            | Choice                                         | Reason                                                                         |
-| ------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------ |
-| Runtime            | Node.js 24 LTS                                 | Supported LTS line for both development and ARM64 deployment                   |
-| Language           | TypeScript 5.9, strict mode                    | One type system across UI, controller, domain, and tests                       |
-| UI                 | React 19, Vite 8, React Router, TanStack Query | Local SPA, fast builds, explicit routing and server-state ownership            |
-| Controller/API     | Fastify 5 with Pino                            | Long-lived process, low overhead, structured logging, test injection           |
-| Runtime validation | Zod 4                                          | Validate HTTP, SSE, MQTT, configuration, and persisted JSON at boundaries      |
-| State database     | SQLite WAL via Kysely and better-sqlite3       | Transactional single-writer storage without another database service on the Pi |
-| Event database     | A second SQLite database                       | High-volume retention cannot block or endanger control state                   |
-| MQTT               | Mosquitto 2 and MQTT.js 5 using MQTT 3.1.1     | Matches deployed ESP firmware and supports real-broker tests                   |
-| Tests              | Vitest, Testcontainers, Playwright, fast-check | Pure logic, real MQTT behavior, browser behavior, and protocol invariants      |
-| Deployment         | Docker Compose and an immutable ARM64 image    | Repeatable Pi deployment and rollback without editing the Pi application tree  |
+| Concern             | Choice                                                        | Current status                                                             |
+| ------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Runtime             | Node.js 24 LTS, npm 11                                        | Locked in the workspace and CI                                             |
+| Language            | TypeScript 5.9, strict mode                                   | Shared by application, UI, contracts, and tests                            |
+| UI                  | React 19, Vite 8, React Router 8, TanStack Query 5            | Control, logs, alerts, snapshot, and SSE component code exists             |
+| Controller/API      | Fastify 5 with Pino                                           | Composed as the server process                                             |
+| Boundary validation | Zod 4                                                         | Used for HTTP, SSE, MQTT-adjacent state, and persisted document boundaries |
+| State persistence   | SQLite WAL through Kysely and `better-sqlite3`                | Normalized `STRICT` schema and additive migrations exist                   |
+| Event persistence   | Separate SQLite WAL database                                  | Structured logs, replay, retention, aggregate, and archive metadata exist  |
+| MQTT                | MQTT.js 5 using MQTT 3.1.1 against Mosquitto 2                | Unit plus pinned-Mosquitto restart/fault/namespace evidence passes         |
+| Tests               | Vitest, Testing Library, fake ESP, Testcontainers, Playwright | Unit, integration, and retry-free production-browser lanes pass            |
+| Deployment          | Docker Compose and multi-architecture image                   | Local amd64 Compose and emulated ARM64 startup validated                   |
 
-SQLite is not exposed over the network. External tools query authenticated read/export API endpoints. This avoids opening a database port and keeps schema changes behind a stable contract. State and event databases will be backed up independently.
+SQLite is never exposed over the network. The HTTP API supplies typed read,
+mutation, log-query, and export boundaries instead.
 
 ## Repository boundaries
 
 ```text
 apps/
-  controller/      Fastify composition root; later MQTT, DB, clock and notifier adapters
-  web/             React application
+  controller/
+    src/application/       alerts, configuration, registry, operations,
+                           overrides, reconciliation, scheduling, snapshot
+    src/infrastructure/    SQLite, import, MQTT, notifications, storage
+    src/*.ts               Fastify routes, composition, server and storage CLI
+  web/                     React SPA, typed API clients and state coordinator
 packages/
-  contracts/       Shared Zod HTTP and SSE contracts
-  esp-protocol/    Legacy MQTT wire compatibility; no domain policy
-  domain/          Pure schedules, pumps, DSL and alarms (next milestone)
+  contracts/               shared strict Zod HTTP/SSE/log/override contracts
+  domain/                  pure schedule evaluation, compilation and rounding
+  esp-protocol/            deployed MQTT grammar, limits, serialization/hash
+  fake-esp/                independent firmware-semantic test actors
 ```
 
-Infrastructure stays in the controller application until a boundary has more than one real implementation. Domain code receives explicit ports such as `Clock`, `DeviceTransport`, repositories, and `Notifier`; it never imports Fastify, MQTT.js, SQLite, or Raspberry Pi APIs.
+Pure domain code receives explicit ports and does not import Fastify, MQTT.js,
+SQLite, or Raspberry Pi APIs. Infrastructure remains in the controller app
+until a boundary needs another real implementation.
+
+## Controller runtime
+
+The server currently composes both SQLite databases, state-outbox mirroring,
+snapshot/configuration/log/alert repositories, daily retention, and—when
+explicitly enabled—the MQTT runtime. The MQTT runtime owns:
+
+- the persistent device registry, online/stale/offline transitions, and built-in
+  not-online alert evaluation for enabled devices;
+- one globally serialized legacy transport and durable operation states;
+- deterministic schedule artifact compilation and hash-based reconciliation;
+- five-second output refresh with no overlap or catch-up burst;
+- manual-override overlays and an outcome-unknown latch;
+- announcement and persisted daily 05:00 UTC time synchronization; and
+- metadata-only MQTT/scheduler interaction logging.
+
+The implemented HTTP surface includes health, distinct liveness/readiness,
+snapshot, SSE, configuration mutations, operation details, alert-rule
+mutation/history/acknowledgement, manual-override commands, and bounded logs
+query/export. When `AQUARIUM_WEB_ROOT` is set, the controller serves the
+production-built SPA and its same-origin `/api` routes with a restrictive CSP,
+immutable hashed assets, no-cache HTML, and a non-API SPA fallback. Local source
+development can still use Vite. The React manual-override surface uses the typed
+start/extend/cancel/reconcile API,
+server-derived countdowns and explicit pending/active/unknown/failed/expired/
+cancelled states without optimistic actuator success or retry.
+
+All route identifiers are limited to 128 characters, matching Fastify's maximum
+route-parameter length. `/api/events` and `/api/logs/export` accept GET only;
+implicit Fastify HEAD routes are disabled for both streaming/export surfaces.
+Firmware synchronization accepts signed 32-bit Unix epoch seconds from 1 through
+2,147,483,647. Device configuration validates frequency and resolution both
+individually and jointly: resolution is 1-16 bits and
+`frequencyHz * 2^resolutionBits` may not exceed 80,000,000.
+
+Alert notification delivery is optional and has no default destination.
+`AQUARIUM_ALERT_WEBHOOK_URL` enables a durable one-attempt webhook dispatcher;
+`AQUARIUM_ALERT_WEBHOOK_KEY` defaults to `primary`, and
+`AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS` defaults to 10,000 ms and accepts 1-60,000
+ms. Optional
+`AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME` and
+`AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE` must be supplied together. Any
+supplementary setting without a URL fails configuration. Development/test URLs
+must use loopback HTTP; production requires HTTPS. The runtime recovers an
+interrupted attempt as `outcome_unknown`, never retries a terminal delivery,
+starts before alert-producing runtimes, and drains after those producers stop
+but before the databases close. With no URL, no destination, delivery intent,
+dispatcher, or polling runtime is created.
+
+Built-in alert rules are seeded automatically. Seeding and notification delivery
+transitions to `attempting`, `delivered`, `failed`, or `outcome_unknown` commit a
+global state revision/outbox event with precise invalidations for the owning
+alert/rule state. These background commits do not advance the operator
+concurrency floor. Recovery from an interrupted webhook attempt remains
+`outcome_unknown`; the dispatcher never guesses that delivery failed safely
+enough to retry.
+
+## Configuration reference
+
+Configuration is read from the process environment and validated before any
+database or network runtime starts. Values shown as paths are resolved to
+absolute paths. Production mode deliberately requires each persistent path
+individually; setting only the shared data directory is not a production
+substitute.
+
+| Variable                                           | Default / requirement         | Validation and effect                                                                                                                                  |
+| -------------------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AQUARIUM_RUNTIME_MODE`                            | `development`                 | `development`, `test`, or `production`. Production activates the explicit-path and network interlocks below.                                           |
+| `AQUARIUM_HOST`                                    | `127.0.0.1`                   | Non-empty HTTP bind host.                                                                                                                              |
+| `AQUARIUM_PORT`                                    | `3001`                        | Integer 1-65,535.                                                                                                                                      |
+| `AQUARIUM_SSE_REPLAY_LIMIT`                        | `1000`                        | Integer 1-10,000; replay reads fetch at most this limit plus one row and require a fresh snapshot when the bounded window is exceeded.                 |
+| `AQUARIUM_WEB_ROOT`                                | unset                         | Optional SPA build root, resolved to an absolute path. The production image sets `/app/apps/web/dist`; a missing configured root fails startup.        |
+| `AQUARIUM_DATA_DIRECTORY`                          | `.data`                       | Base for non-production path defaults.                                                                                                                 |
+| `AQUARIUM_STATE_DB_PATH`                           | `<data>/state.db`             | Must be set explicitly in production.                                                                                                                  |
+| `AQUARIUM_EVENTS_DB_PATH`                          | `<data>/events.db`            | Must be set explicitly in production.                                                                                                                  |
+| `AQUARIUM_ARCHIVE_DIRECTORY`                       | `<data>/archives`             | Must be set explicitly in production.                                                                                                                  |
+| `AQUARIUM_BACKUP_DIRECTORY`                        | `<data>/backups`              | Must be set explicitly in production.                                                                                                                  |
+| `AQUARIUM_BACKUP_FRESHNESS_THRESHOLD_MS`           | `129600000` (36 hours)        | Integer 60,000-2,592,000,000 (30 days); a missing or older successful backup opens the critical backup-freshness alert.                                |
+| `AQUARIUM_RETENTION_STALE_RUN_AFTER_MS`            | `21600000` (6 hours)          | Integer 60,000-604,800,000; running retention rows older than this are recovered as failed.                                                            |
+| `AQUARIUM_STORAGE_HEALTH_INTERVAL_MS`              | `300000` (5 minutes)          | Integer 10,000-86,400,000.                                                                                                                             |
+| `AQUARIUM_STORAGE_MINIMUM_FREE_BYTES`              | `1073741824` (1 GiB)          | Positive safe integer; opens the low-free-space rule below this value.                                                                                 |
+| `AQUARIUM_STORAGE_MAXIMUM_PROJECTED_YEAR_BYTES`    | `10737418240` (10 GiB)        | Positive safe integer; opens the projection rule above this value.                                                                                     |
+| `AQUARIUM_ALERT_WEBHOOK_URL`                       | unset                         | Enables webhook intent and delivery. Development/test require loopback HTTP; production requires HTTPS; credentials, query, and fragment are rejected. |
+| `AQUARIUM_ALERT_WEBHOOK_KEY`                       | `primary` when a URL is set   | Typed destination identifier; setting it without a URL is invalid.                                                                                     |
+| `AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS`                | `10000` when a URL is set     | Integer 1-60,000; setting it without a URL is invalid.                                                                                                 |
+| `AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME`          | unset                         | Optional non-reserved HTTP header name; must be paired with the value and a URL.                                                                       |
+| `AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE`         | unset                         | Secret value; must be non-empty, single-line, paired with the name, and supplied only through operator-managed configuration.                          |
+| `AQUARIUM_MQTT_ENABLED`                            | `false`                       | Exact string `true` or `false`. No broker client exists while false.                                                                                   |
+| `AQUARIUM_MQTT_BROKER_URL`                         | required when MQTT is enabled | Absolute `mqtt://` or `mqtts://` URL. Development/test require a loopback host.                                                                        |
+| `AQUARIUM_MQTT_TOPIC_NAMESPACE`                    | required when MQTT is enabled | `test` or `production`. Development/test require `test`; production requires `production`.                                                             |
+| `AQUARIUM_MQTT_RESPONSE_TIMEOUT_MS`                | `5000`                        | Integer 100-60,000. Timeout produces an explicit unknown outcome, never a blind retry.                                                                 |
+| `AQUARIUM_MQTT_DISCOVERY_INTERVAL_MS`              | `60000`                       | Integer 1,000-3,600,000 and, when MQTT is enabled, shorter than the stale threshold.                                                                   |
+| `AQUARIUM_PRODUCTION_MQTT_CONFIRMATION`            | unset                         | Production MQTT requires exact value `ENABLE_PRODUCTION_AQUARIUM_MQTT`; this is an operator interlock, not a secret.                                   |
+| `NODE_ENV`                                         | unset                         | Production MQTT is prohibited when this is `test`, even if every other production interlock is supplied.                                               |
+| `AQUARIUM_DEVICE_ANNOUNCEMENT_PERSIST_INTERVAL_MS` | `30000`                       | Integer 1,000-3,600,000 and shorter than the stale threshold.                                                                                          |
+| `AQUARIUM_DEVICE_STALE_AFTER_MS`                   | `90000`                       | Integer 2,000-86,400,000; must be shorter than offline.                                                                                                |
+| `AQUARIUM_DEVICE_OFFLINE_AFTER_MS`                 | `300000`                      | Integer 3,000-604,800,000.                                                                                                                             |
+| `AQUARIUM_DEVICE_HEALTH_SWEEP_INTERVAL_MS`         | `5000`                        | Integer 500-60,000 and shorter than the stale threshold.                                                                                               |
+
+No checked-in environment file is required or read by the application. Secret
+values and real production destinations belong in an operator-managed
+deployment environment, never a checked-in file.
 
 ## Legacy ESP compatibility boundary
 
-The following are wire contracts, not patterns to spread through the new code:
+These constraints are compatibility contracts, not patterns to spread through
+the application:
 
 - MQTT 3.1.1, QoS 0, non-retained messages.
-- `aquarium/command`, `aquarium/announce`, and `aquarium/response`; test traffic uses `test/aquarium/...`.
-- Semicolon-separated commands with response indexes scoped to the published batch.
-- At most three commands per target device in a batch.
-- Payloads over 256 UTF-8 bytes use `chunk:index:total:isLast:data` frames with at most 200 data bytes and 50 chunks.
-- The active firmware schedule JSON limit is 4096 bytes even though chunk storage is larger.
-- Compact schedule serialization and its unsigned 32-bit DJB2 hash must be deterministic.
+- The ESP32 uses plaintext MQTT and supports either an explicit username/
+  password pair or an intentionally anonymous listener. It does not support
+  `mqtts://`. Production must therefore use an authenticated plaintext listener
+  restricted to the trusted aquarium LAN unless a future TLS firmware is
+  implemented and physically validated.
+- Production topics are `aquarium/command`, `aquarium/announce`, and
+  `aquarium/response`; development and test clients may use only
+  `test/aquarium/*`.
+- Semicolon-separated batches use response indexes scoped to the batch and at
+  most three commands per physical device.
+- Payloads over 256 UTF-8 bytes use
+  `chunk:index:total:isLast:data`, with at most 200 data bytes and 50 chunks.
+- The active firmware's 4096-byte C-string schedule buffer makes 4095 UTF-8
+  bytes the conservative serialized-document limit.
+- Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
+  the hash excludes the changing `syncTime` field.
+- Firmware `4.0.0` is the exact supported release. Every other announced
+  version remains visible but is marked `firmware_outdated`, excluded from
+  actuator work, and shown with an install-4.0.0 message in the frontend.
 
-The deployed ESP firmware is a compatibility target. Routine controller work must not require reflashing every ESP. Firmware changes are considered only when they provide a clear safety or reliability win that justifies the operational cost, and the server adapter continues to support the deployed protocol during any rollout.
+There is no request ID in responses and no message ID in chunk frames. Every
+ESP shares one chunk-reassembly buffer. The adapter therefore holds one global
+wire queue. A timeout means actuator outcome is unknown; it is never permission
+to retry an actuator command blindly. Reconciliation is the only route back to
+a known state.
 
-There is no request ID in responses and no message ID in chunk frames. ESPs have one global chunk reassembly buffer. The adapter must therefore hold one global wire mutex and allow only one legacy batch in flight. The controller must not be horizontally scaled. A timeout means the actuator outcome is unknown; it is not permission to blindly retry a command.
+The five-second host refresh and 120-second firmware overwrite are safety
+behavior. Firmware 4.0.0 uses rollover-safe elapsed-time expiry and invalidates
+its scheduled-output cache after override expiry, PWM reattachment, and
+schedule replacement. The command wire continues to carry normalized 0-255 duty
+values. Firmware scales each value into the configured 1-16-bit LEDC range, and
+a resolution reattachment rescales the scheduled/current-overwrite caches and
+physical output so an unchanged normalized request cannot change intensity.
+Frequency/resolution pairs obey the same joint 80 MHz LEDC bound enforced by the
+controller. Firmware also updates its physical-output bookkeeping on every
+scheduled write. Startup NTP is asynchronous and configured through the ignored
+firmware header, so unavailable DNS/NTP cannot delay MQTT or manual control.
+Boot-loaded schedule pins are held off until either NTP or the controller `sync`
+command confirms time during that boot; restored EEPROM time alone never
+authorizes schedule actuation. Failed NTP attempts retry without blocking.
+Independent fake tests pin the actuator semantics, and the real
+sketch compiles warning-free with Arduino CLI 1.5.0, ESP32 core 3.3.8,
+ArduinoJson 7.4.3, and PubSubClient 2.8. Flashing every deployed ESP remains an
+external release action. The focused 2026-07-19 compile used 1,036,431 bytes of
+flash and 63,180 bytes of global RAM, leaving 264,500 bytes for local variables;
+this targeted result is not a substitute for final settled-tree validation.
 
-The five-second host refresh and 120-second firmware failover are safety behavior. During host control, commands refresh a temporary firmware override. If the controller disappears, the ESP resumes its stored schedule after that override expires. Migration tests must prove this behavior before the old controller is retired.
+## Realtime and consistency model
 
-## Realtime model
+Every authoritative state transaction increments the singleton revision and
+inserts one versioned event into `state.db.state_outbox` atomically. A dispatcher
+mirrors published rows idempotently into `events.db.state_events`. The two files
+are deliberately not treated as a cross-database transaction: if the event
+database is unavailable, authoritative state and its unpublished outbox row
+remain committed and replayable.
 
-HTTP mutations remain acknowledged POST/PUT operations. They expose pending, success, failed, timed-out, and outcome-unknown states explicitly.
+That global revision is the contiguous snapshot/SSE/audit cursor; background
+device, scheduler, alert, and maintenance changes advance it as well as user
+changes. Optimistic concurrency for operator-owned mutations uses the separate
+singleton `operator_concurrency.last_operator_revision` as a floor. A submitted
+snapshot token is accepted when it is at least that floor and no greater than
+the current global revision, so unrelated background activity does not reject a
+valid draft while any intervening operator commit does.
 
-One `/api/events` EventSource stream carries typed Zod envelopes. A state revision is consumed only by a committed authoritative state mutation; opening a browser connection, logging raw MQTT traffic, or sending a heartbeat never increments it.
+The guard first write-locks the operator singleton inside the same SQLite
+transaction that reads state and applies the mutation. A real change inserts
+one global revision/outbox event and advances the floor to that new revision; a
+verified no-op consumes neither. Migration seeds the floor from the existing
+global high-water mark, and a committed legacy import advances it. Long-lived
+browser forms pin their token at the first user interaction instead of replacing
+it with a newer SSE cursor; a preserved conflicting draft requires an explicit
+rebase after the authoritative snapshot refreshes. Immediate, draft-free actions
+may use the current live token.
 
-Every state transaction updates the singleton revision and inserts one replayable event into `state.db`'s outbox atomically. A dispatcher mirrors those rows idempotently into `events.db` using a unique state revision. The two database files are never treated as a shared atomic commit boundary. If event mirroring is unavailable, authoritative state and its outbox remain committed and replayable.
+Automatic alert-rule seeding and delivery-state changes are visible global
+state, so they use the same revision/outbox mechanism and precise alert/rule
+invalidations. They intentionally do not update the operator floor: an automatic
+delivery transition must update snapshots and SSE clients without falsely
+conflicting with an unrelated human draft.
 
-The synchronization sequence is:
+Browser synchronization is:
 
-1. Fetch a snapshot with a monotonically increasing revision.
-2. Open SSE with `afterRevision=<snapshot revision>`; an automatic reconnect's valid `Last-Event-ID` takes precedence.
-3. Buffer live commits while replaying retained outbox events through a high-water revision, then drain the buffer in order.
-4. Emit transient `system.stream-ready` with no SSE ID; only then may the browser call the stream live.
-5. Apply or invalidate TanStack Query data for each sequential committed event. Duplicate revisions are ignored; a gap forces resynchronization.
-6. Reconnect with `Last-Event-ID` and replay retained events.
-7. Emit transient `system.resync-required` and close if the requested revision predates the replay watermark.
+1. Read `/api/snapshot` and its monotonically increasing revision.
+2. Open `/api/events?afterRevision=<revision>`; valid `Last-Event-ID` takes
+   precedence on automatic reconnect.
+3. Replay retained events through a high-water mark while buffering concurrent
+   commits, then emit transient `system.stream-ready`.
+4. Ignore duplicate revisions. A gap, explicit `system.resync-required`, or
+   stale heartbeat closes the stream and forces a new snapshot.
+5. Refetch the authoritative snapshot after contiguous invalidations rather
+   than constructing control state optimistically in the browser.
 
-Heartbeat comments prevent idle intermediaries from closing the stream, while typed transient heartbeats let the browser detect a silent/stalled connection. Slow clients have bounded queues; overflow forces resynchronization and may never block controller work. Delivery is at least once and browsers deduplicate by state revision. High-volume interaction log IDs use a separate namespace and are never sent wholesale over SSE.
+The stream has bounded per-client queues. Overflow forces resynchronization and
+cannot block controller work. Published outbox history keeps the newest 10,000
+revisions and prunes at most 1,000 rows per pass; an unpublished revision is a
+hard pruning watermark.
 
-## Persistence and logging
+## Database representation
 
-`state.db` will normalize devices, channel mappings, schedule graphs, throttles, timers, alarm configuration, and migration metadata. JSON text is reserved for genuinely document-shaped DSL/configuration payloads and is validated with Zod on every read and write.
+The storage model is relational first, not a JSON-document database.
 
-`events.db` will store structured interactions with direction, kind, topic, device/correlation context, outcome, payload, and byte count. Pino service logs go to stdout and production uses a capped, compressed Docker log driver.
+`state.db` contains normalized tables for mapping profiles, devices, outputs,
+throttles, channels, pin mappings, schedules, schedule points, control
+operations, overrides, timers, sensors, switches, calibrations, alert rules and
+lifecycle state, revisions/outbox, import audit, compiled device artifacts,
+scheduler guards, alert delay state, and notification delivery intent.
+Foreign keys, uniqueness, `CHECK` constraints, UTC-only schedules, and indexes
+encode invariants that would be fragile inside one large document.
 
-Ten gigabytes per year is about 27 MB per day. A five-second loop runs 17,280 times daily, so permanently storing verbose raw payloads can exceed the budget. Safety, alarm, configuration, command-outcome, and error events remain durable; high-volume raw traffic gets a measured retention window, aggregation, and optional daily compressed archives. Disk usage and retention failures are alert conditions.
+`events.db` contains mirrored committed events, structured interactions,
+five-minute aggregates, archive metadata, retention policies, and retention
+runs. Separating it keeps high-volume maintenance away from authoritative
+control state. State uses `synchronous=FULL`; events uses `synchronous=NORMAL`;
+both use WAL, foreign keys, a 5-second busy timeout, and a 64 MiB journal-size
+limit.
 
-## Test strategy
+JSON text is limited to data that is genuinely variable or wire-shaped:
 
-- Unit tests use pure functions, injected clocks, and an in-memory transport fake.
-- MQTT integration tests start a pinned Mosquitto container and independent MQTT.js fake ESP actors. The broker itself is not mocked.
-- Protocol fixtures cover discovery, announcements, batching, chunk boundaries, malformed messages, response correlation, timeout/unknown outcome, schedule size/hash, and namespace isolation.
-- Playwright later drives the complete React/Fastify application against the real integration stack.
-- Firmware compilation and wire fixtures enter CI before firmware behavior is changed.
+- versioned operation requests/results and event envelopes;
+- typed interaction payloads, alert details/observations, and notifications;
+- optional device/sensor/switch metadata and timer/rule configuration;
+- compiled firmware schedule documents; and
+- import/DSL diagnostics and archive metadata.
+
+Application-owned JSON is paired with a positive schema-version column and
+SQLite `json_valid` constraints. Implemented readers parse it through strict
+JSON/Zod boundaries, verify stored hashes where defined, and fail loudly on
+corruption. Frequently filtered fields such as revision, status, timestamps,
+device, outcome, severity, and retention class remain ordinary indexed columns.
+
+## Logging, retention, and compression
+
+There are two intentionally different log streams:
+
+1. Fastify/Pino emits structured process and request logs to stdout. Current
+   redaction covers authorization/cookie/set-cookie fields and common secret,
+   password, and token keys. Both Compose definitions use Docker's `local` log
+   driver, capped at five compressed 10 MiB files per service.
+2. `events.db.interactions` stores queryable domain/runtime history with
+   direction, kind, severity, topic, device/correlation/operation identifiers,
+   outcome, duration, byte count, retention class, and an optional versioned
+   payload. Persisted payload redaction happens before canonical serialization
+   and SHA-256 calculation. Raw MQTT payloads and response bodies are not
+   retained by the runtime logger. Backup attempts add a metadata-only
+   `maintenance.backup` audit interaction containing success/failure and
+   severity, with no paths, secrets, raw errors, or database payloads.
+
+The controller boundary adds `http.response-outcome` rows for every
+POST/PUT/PATCH/DELETE response and every status at or above 500, including reads.
+They contain only the normalized method, Fastify route template (or null), and
+status: 2xx/3xx is audit/info/succeeded, 4xx is audit/warning/failed, and 5xx is
+critical/critical/failed. Non-mutation reads below 500 are omitted. Domain
+mutation details remain authoritative in state events. Detached interaction
+writes do not delay or change the HTTP response, report persistence failure to
+Pino, and drain after the runtimes/coordinators stop but before `events.db`
+closes.
+
+Unexpected runtime callback failures add a critical
+`controller.runtime-callback-error` row containing only a sanitized error class
+and error name. Exception messages and stacks are never stored there.
+
+Normal five-second ticks are omitted. Routine successful PWM operations,
+announcements, command batches, and successful responses use `raw`; diagnostic,
+audit, and outcome-unknown paths use longer classes.
+
+Alert transitions (open, acknowledge, reopen, recover) are never throttled.
+Repeated matching observations for an unchanged still-true alert create at most
+one additional state event per hour, bounding history volume without hiding a
+transition.
+
+Default live logical budgets and ages are:
+
+| Class       | Retention age | Live byte budget | Before deletion                                      |
+| ----------- | ------------: | ---------------: | ---------------------------------------------------- |
+| raw         |        7 days |          512 MiB | Aggregate into five-minute summaries; no raw archive |
+| operational |      180 days |            2 GiB | Verified archive                                     |
+| aggregate   |       3 years |            1 GiB | Verified archive                                     |
+| audit       |       3 years |            2 GiB | Verified archive                                     |
+| critical    |      10 years |            1 GiB | Verified archive                                     |
+
+Retention runs once per UTC day at or after 03:00 using a persisted guard,
+recovers stale `running` records after the configured threshold, and records
+success/failure in `retention_runs`. Candidates are selected by age or byte
+budget across interactions, aggregates, and mirrored state events in a single
+deterministic order. The job reads internal candidate batches capped at 10,000
+and carries aggregation and byte-budget accounting across batches instead of
+materializing a whole retention class. A class requiring archive is never
+deleted unless each exact selection has been written and re-read as a complete,
+verified archive. The same job deletes successful `set_pwm` operation rows older
+than seven days only when no override, artifact, or scheduler guard references
+them. Terminal notification deliveries older than 180 days are removed only
+when a newer terminal result exists for the same alert/destination; pending and
+attempting rows plus the newest terminal result are retained. Terminal delivery
+metadata is mirrored idempotently to `events.db` before that state history can
+age out. Terminal state and a null audit checkpoint commit together; recorder
+failure leaves the row eligible for bounded startup/dispatch backfill, and a
+notification-specific unique operation ID makes a crash between event write and
+checkpoint update safe to replay. Unaudited terminal rows cannot be pruned. The
+job then drains orphan `state_revisions` after outbox pruning while retaining the
+current revision and remaining notification references. All state-side
+deletions use deterministic batches capped at 10,000 and write one durable
+operational or critical maintenance diagnostic.
+
+Archives are deterministic newline-terminated NDJSON compressed using Node's
+native Zstandard implementation (`.ndjson.zst`). Verification checks compressed
+size/SHA-256, uncompressed size/content SHA-256, schema, record count/type
+counts, range, and retention class before deletion. New metadata stores a
+portable filename rather than an absolute host path; legacy absolute rows are
+rebased to an explicitly supplied archive directory. `verify-archive-set`
+rechecks every complete archive and writes a deterministic versioned manifest
+for a separate archive-directory backup/restore.
+
+Archive creation is monotonic under concurrency. The first creator reserves a
+pending row; only a failed row can be explicitly retried. A completed archive is
+never moved back to pending or failed because another creator loses the race.
+Before deletion, the winning artifact is re-read and verified. A losing creator
+returns that same completed artifact, while failure cleanup can only change its
+own still-pending reservation. This prevents source deletion before a verified
+winner exists.
+
+Storage projection measures logical bytes, SQLite allocation/reclaimable pages,
+archive sizes/compression
+ratio, failed/pending work, and a seven-day annualized ingest estimate. Turning
+those measurements into alerts is composed through a separate non-overlapping
+storage-health coordinator. It runs immediately at startup and then at
+`AQUARIUM_STORAGE_HEALTH_INTERVAL_MS` (default 300,000; valid 10,000-86,400,000
+ms) after the prior check settles, so delayed checks never create a catch-up
+burst. It records six typed sensors/rules on a disabled virtual device:
+
+- minimum available bytes across the state DB, events DB, archive, and backup
+  filesystems;
+- projected upper-bound tracked storage after one year;
+- retention failures after the latest successful retention run;
+- failed archives after the latest completed archive;
+- whether the latest recorded backup outcome failed; and
+- whether no successful backup exists or the latest success is older than
+  `AQUARIUM_BACKUP_FRESHNESS_THRESHOLD_MS`.
+
+`AQUARIUM_STORAGE_MINIMUM_FREE_BYTES` defaults to 1,073,741,824 (1 GiB), and
+`AQUARIUM_STORAGE_MAXIMUM_PROJECTED_YEAR_BYTES` defaults to 10,737,418,240
+(10 GiB). Exact observation timestamps drive normal alert open/recovery.
+Startup measurement/storage/evaluation failure aborts startup; a later check
+failure is logged and retried at the next interval. Each failure count returns
+to zero after its next success. Retention uses completion time, archives use
+creation time, and both use SQLite insertion order as the equal-timestamp
+tie-break so same-millisecond batched outcomes recover correctly. Separate
+backup rules distinguish a failed latest attempt from a missing/stale success;
+a later verified backup recovers both observations.
+
+## Backup and restore
+
+The controller runs a non-overlapping verified database backup every day at
+02:00 UTC. Freshness never trusts a successful interaction row by itself. The
+latest successful row must contain its canonical `createdAt`, and only the exact
+configured `backup-<createdAt>/manifest.json` artifact is considered—there is no
+directory scan or fallback to an older row. The artifact receives full schema-v2
+manifest, checksum, SQLite integrity/foreign-key, and replay-boundary
+verification. Startup runs one promptly when that verified artifact is missing,
+invalid, or older than the configured threshold. Storage health reads the same
+verified timestamp, preventing a deleted or corrupt artifact from appearing
+fresh. The newest three canonically named, fully verified backups are retained;
+unknown, malformed, damaged, or symlinked entries are never deleted
+automatically.
+
+Verification is serialized and deduplicated. A cached valid or invalid result is
+reused only while strong `lstat` identity is unchanged for the configured root,
+backup directory, manifest, and both database files: device, inode, type, size,
+nanosecond modification/change times, and root location must still match.
+Identity is checked before and after full verification. Root/ancestor realpath
+mismatch, candidate symlinks, replacement, deletion, or same-size modification
+forces rejection or re-verification. Focused evidence on 2026-07-19 passed 21/21
+tests across the four backup/coordinator/health files; final settled-tree
+validation remains pending.
+
+The storage CLI accepts only explicit paths. A backup atomically reserves its
+timestamped directory, captures the state revision, then uses SQLite's online
+backup API to copy events before state. Each copy is checkpointed into one
+standalone database file with no WAL sidecar dependency. Its schema-v2 manifest
+records the capture, copied-events, and copied-state revision boundaries
+alongside size, SHA-256, and integrity status; verification also checks foreign
+keys. Verification requires the actual database boundaries to match, events not
+to lead state, and contiguous outbox coverage across the copy gap. Every
+retained outbox row is reconciled against
+the copied event: matching rows are byte-checked, while absent rows have their
+publication/retry checkpoint reset for immediate idempotent replay after
+restore. This recovery-first rule is bounded by outbox retention and may
+temporarily resurrect recently age-pruned state events. Schema-v1 manifests are
+rejected because they contain no coherence boundary. Both source paths must
+already be regular files, preventing a missing events path from being created
+as a logging side effect. After the attempt, the runtime/command records one
+metadata-only audit outcome in the source events database. A backup error remains
+visible if diagnostic persistence also fails; the command surfaces both in an
+`AggregateError`.
+
+Restore runs the full checksum, schema, boundary, coverage, and replay-checkpoint
+verification first and atomically publishes adjacent temporary files with a
+no-replace hard link to two new, nonexistent destinations. It never overwrites a
+live path, including if a destination appears during restore. An operator must
+perform final path switching during a controlled outage and keep the prior
+verified databases available for rollback. Exact commands are in the README.
+
+The two-database backup does not duplicate retained `.ndjson.zst` payloads.
+Those files are the long-term log copy after live-row deletion and must be
+backed up as their own archive-directory asset. Before and after that external
+copy, run `verify-archive-set` with the matching `events.db`, archive directory,
+and a new explicit manifest output, then compare/preserve the deterministic
+manifest. Archives are not automatically deleted because they may be the only
+remaining payload copy. Their bytes are included in storage projection and
+free-space alerts, but backup-directory copies are not; the three-backup cap and
+an operator-selected archive offload/lifecycle remain production requirements.
+
+## Test and CI architecture
+
+Executable CI separates failure domains into six validation jobs:
+
+- `static-unit`: `npm ci`, format check, lint, typecheck, unit tests, and build;
+- `critical`: the high-value contract/domain/protocol/fake/controller selection;
+- `integration`: real digest-pinned Mosquitto/Testcontainers coverage and the
+  production-namespace assertion;
+- `browser`: pinned Chromium, production builds, Playwright/axe, and
+  failure-only trace/screenshot/video artifacts;
+- `firmware`: cached pinned Arduino/ESP32 toolchain compilation of firmware
+  4.0.0;
+- `container`: amd64 Compose health/restart/hardening plus an emulated ARM64
+  HTTP/SQLite integrity smoke.
+
+A separately gated `publish-image` job performs multi-architecture GHCR
+publishing through a run-unique tag, gated to default-branch pushes and an
+explicit `AQUARIUM_GHCR_IMAGE` repository variable. It fails closed unless
+registry inspection proves the tag absent, records the returned manifest digest,
+and starts amd64 and ARM64 smoke containers from that exact digest before the job
+succeeds.
+
+The container layer is independent evidence: the pinned Node 24/npm 11
+multi-stage Dockerfile builds native `better-sqlite3` for amd64 and ARM64. The
+local Compose profile runs the production-built SPA/controller, pinned
+Mosquitto 2.0.22, and two persistent fake actors. The profile shares only the
+broker network namespace, so the controller and actors retain their existing
+literal-loopback broker guard; captured traffic remains under
+`test/aquarium/*`.
+
+Pull-request code never runs on a Pi. No deploy workflow exists. The hosted
+repository is currently public and is not a trusted release source until the
+historical Dropbox token is revoked, the aquarium Wi-Fi password is rotated,
+and Git history is sanitized. Secret scanning and push protection are enabled,
+but they do not revoke already exposed credentials. Enabling GHCR publishing and
+any future protected deployment still requires sanitized history plus external
+GitHub repository/environment configuration. GitHub Free does not charge
+standard hosted Actions minutes for public repositories; private repositories
+use an included quota. Free-plan protected branches apply to public repositories,
+while private-repository branch protection requires an eligible paid plan. See
+GitHub's official [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+documentation.
 
 ## Deployment direction
 
-CI first runs formatting, linting, type checking, unit/integration tests, and builds. It then produces an immutable ARM64 image for GHCR. A deploy-only runner on the Pi may run only protected main/environment jobs: pull by digest, back up SQLite, run additive migrations, update Compose, verify HTTP and MQTT health, and roll back to the prior digest on failure. Pull-request code never executes on the Pi.
+The eventual LAN deployment uses plain HTTP and explicit database, archive,
+backup, broker, and topic configuration. Production MQTT requires production
+runtime mode, the production namespace, an explicit broker URL, and the exact
+confirmation interlock; tests are forbidden from selecting it. Remote access,
+TLS termination, and authentication belong behind a deliberately configured
+network boundary, not inside this application.
 
-The LAN deployment uses plain HTTP and removes application-managed certificates. Broker and controller ports remain limited to the trusted LAN/Compose network. Remote access, if ever required, belongs behind a deliberately configured Tailscale or reverse-proxy boundary.
+`compose.production.yaml` is deliberately a fail-closed template: it constructs
+the image reference from separately required
+`AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
+`AQUARIUM_CONTROLLER_IMAGE_SHA256` values. Compose inserts the literal
+`@sha256:` separator, and the latter value must be the published 64-character
+hex digest, so a mutable tag such as `latest` can never become the selected
+artifact. Docker rejects an invalid digest before starting the service. The
+template also requires an HTTP bind address/port, production
+broker URL, exact MQTT confirmation, and four host storage directories. It does
+not create an anonymous production broker or infer a database path. The image
+runs as UID/GID 1000 with all capabilities dropped, `no-new-privileges`, a
+read-only root filesystem, and explicit state/events/archive/backup mounts.
+The optional webhook URL, destination key, timeout, authentication header name,
+and secret header value use Compose environment pass-through: unset values stay
+absent and operator-supplied values are never embedded in this file. The
+deployment preflight renders with `config --quiet` so it does not print them.
+Controller readiness probes both databases and, when enabled, the subscribed
+MQTT transport; liveness reports only process/HTTP responsiveness.
 
-## Migration sequence
+The supervised Pi procedure is in `docs/production-deployment.md`. Its preflight
+requires the four bind directories to be absolute, owned by UID/GID 1000, mode
+0700, and above an explicit free-space floor; validates the exact digest
+rendering; and pulls without starting a service. The runbook separately gates
+startup on readiness and SQLite integrity, verifies archive copies using a
+matching events-database backup and deterministic archive-set manifests, and
+restores rollback databases and archives into new paths rather than overwriting
+evidence.
 
-1. Foundation (this slice): workspace, strict contracts, ESP framing tests, Fastify health/SSE, React shell, CI checks.
-2. Persistence: Kysely migrations, state/event databases, atomic import and validation report for legacy JSON.
-3. MQTT adapter: global wire mutex, discovery/registry, response correlation, fake ESP and real Mosquitto integration tests.
-4. Scheduling: UTC interpolation, compact schedule compiler/hash, time sync, five-second refresh and 120-second failover tests.
-5. Control UI: snapshot/SSE state, schedules, devices, pending acknowledgements, logs, alarms, timers, and later the DSL/dosing workflow.
-6. Operations: alert adapter, retention budgets, backups, ARM64 image, staged Pi deployment and rollback.
-
-## Primary references
-
-- [Node.js releases](https://nodejs.org/en/about/previous-releases)
-- [Vite releases](https://vite.dev/releases)
-- [Fastify documentation](https://fastify.dev/docs/latest/Reference/)
-- [Zod](https://zod.dev/)
-- [Kysely](https://kysely.dev/docs/getting-started)
-- [MQTT.js](https://github.com/mqttjs/MQTT.js)
-- [Server-sent events standard](https://html.spec.whatwg.org/multipage/server-sent-events.html)
+The local stack command is `npm run stack:test:up`, with UI/API on
+`http://127.0.0.1:3001` and Mosquitto on loopback port 18883. The Docker `local`
+log driver caps each service at five compressed 10 MiB files. CPU, memory, PID,
+restart, and graceful-stop policies are explicit and the controller is never
+horizontally scaled. Historical evidence recorded before the latest hardening
+included a healthy amd64 stack, persistence
+across controller/fake recreation, non-root/read-only checks, a bounded
+test-topic capture, and a successful emulated ARM64 database migration and HTTP
+startup. Current running status and final current-tree validation are not claimed.

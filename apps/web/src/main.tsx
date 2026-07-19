@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 
 import App from "./App.js";
+import { ControllerStateProvider } from "./controller-state-provider.js";
 import "./styles.css";
 
 const root = document.getElementById("root");
@@ -23,9 +24,11 @@ const queryClient = new QueryClient({
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      <ControllerStateProvider>
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      </ControllerStateProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

@@ -46,7 +46,9 @@ export class MemoryFakeEspPersistence implements FakeEspPersistence {
     };
   }
 
-  public writeEeprom(values: Omit<FakeEspPersistenceSnapshot, "schedule">): void {
+  public writeEeprom(
+    values: Omit<FakeEspPersistenceSnapshot, "schedule">,
+  ): void {
     this.deviceName = values.deviceName;
     this.deviceId = values.deviceId;
     this.frequency = values.frequency;

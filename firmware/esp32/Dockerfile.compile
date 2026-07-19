@@ -1,0 +1,38 @@
+FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS compiler
+
+ARG ARDUINO_CLI_VERSION=1.5.0
+ARG ESP32_CORE_VERSION=3.3.8
+ARG ARDUINOJSON_VERSION=7.4.3
+ARG PUBSUBCLIENT_VERSION=2.8
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && curl --fail --location --show-error \
+        "https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz" \
+        | tar --extract --gzip --directory /usr/local/bin arduino-cli \
+    && rm --recursive --force /var/lib/apt/lists/*
+
+RUN arduino-cli core update-index \
+    && arduino-cli core install "esp32:esp32@${ESP32_CORE_VERSION}" \
+    && arduino-cli lib install \
+        "ArduinoJson@${ARDUINOJSON_VERSION}" \
+        "PubSubClient@${PUBSUBCLIENT_VERSION}"
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends python3 \
+    && rm --recursive --force /var/lib/apt/lists/*
+
+WORKDIR /src/ESP32Code
+
+COPY .old/slaveCode/ESP32Code/ESP32Code.ino ./ESP32Code.ino
+COPY .old/slaveCode/ESP32Code/firmware-config.example.h ./firmware-config.h
+
+RUN arduino-cli compile \
+    --fqbn esp32:esp32:esp32 \
+    --build-path /tmp/aquarium-esp32-build \
+    --warnings all \
+    .
+
+FROM scratch
+
+COPY --from=compiler /tmp/aquarium-esp32-build/ESP32Code.ino.bin /ESP32Code.ino.bin

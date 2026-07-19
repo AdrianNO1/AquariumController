@@ -1,0 +1,78 @@
+name: aquarium-controller
+
+x-compressed-logging: &compressed-logging
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "5"
+    compress: "true"
+
+services:
+  controller:
+    image: ${AQUARIUM_CONTROLLER_IMAGE_REPOSITORY:?Set the controller image repository}@sha256:${AQUARIUM_CONTROLLER_IMAGE_SHA256:?Set the immutable 64-character image digest}
+    pull_policy: always
+    user: "1000:1000"
+    read_only: true
+    init: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    ports:
+      - name: http
+        target: 3001
+        host_ip: ${AQUARIUM_HTTP_BIND_ADDRESS:?Set AQUARIUM_HTTP_BIND_ADDRESS explicitly}
+        published: ${AQUARIUM_HTTP_PORT:?Set AQUARIUM_HTTP_PORT explicitly}
+        protocol: tcp
+    environment:
+      - NODE_ENV=production
+      - AQUARIUM_RUNTIME_MODE=production
+      - AQUARIUM_HOST=0.0.0.0
+      - AQUARIUM_PORT=3001
+      - AQUARIUM_WEB_ROOT=/app/apps/web/dist
+      - AQUARIUM_STATE_DB_PATH=/var/lib/aquarium/state/state.db
+      - AQUARIUM_EVENTS_DB_PATH=/var/lib/aquarium/events/events.db
+      - AQUARIUM_ARCHIVE_DIRECTORY=/var/lib/aquarium/archives
+      - AQUARIUM_BACKUP_DIRECTORY=/var/lib/aquarium/backups
+      - AQUARIUM_MQTT_ENABLED=true
+      - AQUARIUM_MQTT_BROKER_URL=${AQUARIUM_MQTT_BROKER_URL:?Set the production MQTT broker URL explicitly}
+      - AQUARIUM_MQTT_TOPIC_NAMESPACE=production
+      - AQUARIUM_PRODUCTION_MQTT_CONFIRMATION=${AQUARIUM_PRODUCTION_MQTT_CONFIRMATION:?Set the production MQTT safety confirmation explicitly}
+      - AQUARIUM_ALERT_WEBHOOK_URL
+      - AQUARIUM_ALERT_WEBHOOK_KEY
+      - AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS
+      - AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME
+      - AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE
+    volumes:
+      - type: bind
+        source: ${AQUARIUM_STATE_HOST_DIRECTORY:?Set the state database host directory}
+        target: /var/lib/aquarium/state
+      - type: bind
+        source: ${AQUARIUM_EVENTS_HOST_DIRECTORY:?Set the events database host directory}
+        target: /var/lib/aquarium/events
+      - type: bind
+        source: ${AQUARIUM_ARCHIVE_HOST_DIRECTORY:?Set the archive host directory}
+        target: /var/lib/aquarium/archives
+      - type: bind
+        source: ${AQUARIUM_BACKUP_HOST_DIRECTORY:?Set the backup host directory}
+        target: /var/lib/aquarium/backups
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health/ready').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    logging: *compressed-logging
+    restart: unless-stopped
+    stop_grace_period: 1m
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.5

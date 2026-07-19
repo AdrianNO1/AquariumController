@@ -1,6 +1,8 @@
 export {
   WebhookAlertNotifier,
   WebhookDeliveryError,
+  validateWebhookAlertNotifierOptions,
+  type ValidatedWebhookAlertNotifierOptions,
   type WebhookAlertNotifierOptions,
   type WebhookAuthHeader,
   type WebhookDeliveryFailureCode,

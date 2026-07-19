@@ -10,7 +10,7 @@ import {
   type ParsedJsonDocument,
 } from "./strict-json.js";
 
-export const LEGACY_IMPORTER_VERSION = "legacy-json-v1";
+export const LEGACY_IMPORTER_VERSION = "legacy-json-v2";
 
 const CORE_FILES = ["links.json", "channels.json", "throttle.json"] as const;
 const SKIPPED_FILES = [
@@ -473,12 +473,18 @@ function parseLinks(
     if (segments.length !== linksValue.length || segments.length === 0) {
       continue;
     }
-    const firstSegment = segments[0];
+    const normalizedSegments = normalizeSafeLegacySegments(
+      channelName,
+      channelPath,
+      segments,
+      issues,
+    );
+    const firstSegment = normalizedSegments[0];
     if (firstSegment === undefined) continue;
     coordinateMismatchCount += validateScheduleGraph(
       channelName,
       channelPath,
-      segments,
+      normalizedSegments,
       issues,
     );
     if (kind !== null) {
@@ -488,7 +494,9 @@ function parseLinks(
         displayOrder,
         points: [
           toSchedulePoint(firstSegment.source),
-          ...segments.map((segment) => toSchedulePoint(segment.target)),
+          ...normalizedSegments.map((segment) =>
+            toSchedulePoint(segment.target),
+          ),
         ],
       });
     }
@@ -509,6 +517,86 @@ function parseLinks(
     });
   }
   return channels;
+}
+
+function normalizeSafeLegacySegments(
+  channelName: string,
+  channelPath: string,
+  parsedSegments: readonly ParsedSegment[],
+  issues: LegacyImportIssue[],
+): readonly ParsedSegment[] {
+  const segments = [...parsedSegments];
+  const initial = segments[0];
+  const second = segments[1];
+  if (
+    initial !== undefined &&
+    second !== undefined &&
+    initial.source.minuteOfDay === 0 &&
+    initial.target.minuteOfDay === 0 &&
+    initial.source.percentage === initial.target.percentage &&
+    second.source.minuteOfDay === initial.target.minuteOfDay &&
+    second.source.percentage === initial.target.percentage
+  ) {
+    segments.shift();
+    issues.push({
+      severity: "warning",
+      code: "duplicate-initial-segment-removed",
+      sourceFile: "links.json",
+      sourcePath: `${channelPath}.links[0]`,
+      message: `${channelName} has an exact duplicate initial segment at minute 0; it is removed without changing output.`,
+    });
+  }
+
+  const terminal = segments.at(-1);
+  const previous = segments.at(-2);
+  if (
+    terminal !== undefined &&
+    previous !== undefined &&
+    terminal.source.minuteOfDay === 1_439 &&
+    terminal.target.minuteOfDay === 1_439 &&
+    terminal.source.percentage === terminal.target.percentage &&
+    previous.target.minuteOfDay === terminal.source.minuteOfDay &&
+    previous.target.percentage === terminal.source.percentage
+  ) {
+    segments.pop();
+    issues.push({
+      severity: "warning",
+      code: "duplicate-terminal-segment-removed",
+      sourceFile: "links.json",
+      sourcePath: `${channelPath}.links[${parsedSegments.length - 1}]`,
+      message: `${channelName} has an exact duplicate terminal segment at minute 1439; it is removed without changing output.`,
+    });
+  }
+
+  const last = segments.at(-1);
+  if (
+    last !== undefined &&
+    last.target.minuteOfDay < 1_439 &&
+    last.target.percentage === 0
+  ) {
+    segments.push({
+      source: last.target,
+      target: {
+        minuteOfDay: 1_439,
+        percentage: 0,
+        x: null,
+        y: null,
+      },
+    });
+    issues.push({
+      severity: "warning",
+      code: "implicit-zero-tail-materialized",
+      sourceFile: "links.json",
+      sourcePath: `${channelPath}.links[${parsedSegments.length - 1}].target.time`,
+      message: `${channelName} ends at minute ${last.target.minuteOfDay} with zero output; the firmware's implicit zero remainder is materialized through minute 1439.`,
+      details: {
+        originalEndMinute: last.target.minuteOfDay,
+        materializedEndMinute: 1_439,
+      },
+    });
+  }
+
+  return segments;
 }
 
 function parseSegment(

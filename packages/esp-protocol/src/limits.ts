@@ -1,13 +1,32 @@
 export const LEGACY_CHUNK_THRESHOLD_BYTES = 256;
 export const LEGACY_CHUNK_DATA_BYTES = 200;
 export const LEGACY_MAX_CHUNKS = 50;
-export const LEGACY_SCHEDULE_BYTES = 4096;
+export const LEGACY_MAX_SYNC_TIME = 2_147_483_647;
+// currentSchedule is a 4096-byte C string buffer. One byte is required for the
+// terminating NUL written by strlcpy, leaving 4095 safe payload bytes.
+export const LEGACY_SCHEDULE_BYTES = 4095;
 export const LEGACY_COMMANDS_PER_DEVICE_PER_BATCH = 3;
+export const ESP32_LEDC_SOURCE_CLOCK_HZ = 80_000_000;
 
 const utf8Encoder = new TextEncoder();
 
 export function utf8ByteLength(value: string): number {
   return utf8Encoder.encode(value).byteLength;
+}
+
+export function isSupportedEsp32PwmConfiguration(
+  pwmFrequencyHz: number,
+  pwmResolutionBits: number,
+): boolean {
+  return (
+    Number.isInteger(pwmFrequencyHz) &&
+    pwmFrequencyHz >= 1 &&
+    pwmFrequencyHz <= 40_000 &&
+    Number.isInteger(pwmResolutionBits) &&
+    pwmResolutionBits >= 1 &&
+    pwmResolutionBits <= 16 &&
+    pwmFrequencyHz * 2 ** pwmResolutionBits <= ESP32_LEDC_SOURCE_CLOCK_HZ
+  );
 }
 
 export function assertLegacyScheduleFits(scheduleJson: string): void {

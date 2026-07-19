@@ -10,7 +10,7 @@ const HELP = `Usage:
   npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <directory> --commit --state-db <file>
 
 Options:
-  --source <directory>  Legacy JSON directory. Defaults to .old/data.
+  --source <directory>  Explicit legacy JSON directory; always required.
   --commit              Commit only when the complete analysis is valid.
   --state-db <file>     Explicit state.db path; required with --commit.
   --help                Show this help.
@@ -20,7 +20,7 @@ Dry-run is the default and never opens or writes a database.`;
 async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
-      source: { type: "string", default: ".old/data" },
+      source: { type: "string" },
       commit: { type: "boolean", default: false },
       "state-db": { type: "string" },
       help: { type: "boolean", short: "h", default: false },
@@ -31,6 +31,12 @@ async function main(): Promise<void> {
   if (values.help) {
     process.stdout.write(`${HELP}\n`);
     return;
+  }
+
+  if (values.source === undefined || values.source.trim().length === 0) {
+    throw new TypeError(
+      "--source is required; there is no implicit legacy or production data path.",
+    );
   }
 
   const sourceDirectory = resolve(values.source);

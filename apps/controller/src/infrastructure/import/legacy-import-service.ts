@@ -3,7 +3,13 @@ import { createHash } from "node:crypto";
 import type { Kysely, Transaction } from "kysely";
 import { z } from "zod";
 
-import type { StateDatabaseSchema } from "../database/index.js";
+import {
+  acquireOperatorConcurrencyFloor,
+  advanceOperatorConcurrencyFloor,
+  serializeStateOutboxEnvelope,
+  STATE_OUTBOX_ENVELOPE_SCHEMA_VERSION,
+  type StateDatabaseSchema,
+} from "../database/index.js";
 import {
   analyzeLegacySource,
   type LegacyImportIssue,
@@ -79,6 +85,8 @@ export async function importLegacyDirectory(
   const revision = await options.database
     .transaction()
     .execute(async (transaction) => {
+      const lockedOperatorFloor =
+        await acquireOperatorConcurrencyFloor(transaction);
       const existing = await transaction
         .selectFrom("import_runs")
         .select("id")
@@ -138,11 +146,24 @@ export async function importLegacyDirectory(
           entity_id: importRunId,
           occurred_at_ms: nowMs,
           retention_class: "audit",
-          payload_json: JSON.stringify(outboxPayload),
-          payload_schema_version: 1,
+          payload_json: serializeStateOutboxEnvelope(
+            JSON.stringify(outboxPayload),
+            outboxPayload.schemaVersion,
+            [
+              { resource: "import_run", id: importRunId },
+              { resource: "controller", id: null },
+            ],
+          ),
+          payload_schema_version: STATE_OUTBOX_ENVELOPE_SCHEMA_VERSION,
           available_at_ms: nowMs,
         })
         .executeTakeFirstOrThrow();
+
+      await advanceOperatorConcurrencyFloor(
+        transaction,
+        lockedOperatorFloor,
+        stateRevision.revision,
+      );
 
       await transaction
         .updateTable("import_runs")

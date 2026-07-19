@@ -1,0 +1,161 @@
+name: aquarium-test
+
+x-compressed-logging: &compressed-logging
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "5"
+    compress: "true"
+
+x-node-hardening: &node-hardening
+  read_only: true
+  init: true
+  user: "1000:1000"
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  logging: *compressed-logging
+  restart: unless-stopped
+  stop_grace_period: 1m
+  pids_limit: 256
+  mem_limit: 768m
+  cpus: 1.5
+
+services:
+  mosquitto:
+    profiles: [test]
+    image: eclipse-mosquitto:2.0.22@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c
+    user: "1883:1883"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - "127.0.0.1:${AQUARIUM_TEST_MQTT_PORT:-18883}:1883"
+      - "127.0.0.1:${AQUARIUM_TEST_HTTP_PORT:-3001}:3001"
+    volumes:
+      - type: bind
+        source: ./deployment/mosquitto/mosquitto.local.conf
+        target: /mosquitto/config/mosquitto.conf
+        read_only: true
+      - type: volume
+        source: mosquitto-data
+        target: /mosquitto/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mosquitto_sub",
+          "--host",
+          "127.0.0.1",
+          "--topic",
+          "$$SYS/broker/version",
+          "-C",
+          "1",
+          "-W",
+          "3",
+        ]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 5s
+    logging: *compressed-logging
+    restart: unless-stopped
+    stop_grace_period: 30s
+    pids_limit: 128
+    mem_limit: 128m
+    cpus: 0.5
+
+  controller:
+    profiles: [test]
+    <<: *node-hardening
+    image: aquarium-controller:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: service:mosquitto
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+        restart: true
+    environment:
+      NODE_ENV: test
+      AQUARIUM_RUNTIME_MODE: test
+      AQUARIUM_HOST: 0.0.0.0
+      AQUARIUM_PORT: "3001"
+      AQUARIUM_WEB_ROOT: /app/apps/web/dist
+      AQUARIUM_STATE_DB_PATH: /var/lib/aquarium/state/state.db
+      AQUARIUM_EVENTS_DB_PATH: /var/lib/aquarium/events/events.db
+      AQUARIUM_ARCHIVE_DIRECTORY: /var/lib/aquarium/archives
+      AQUARIUM_BACKUP_DIRECTORY: /var/lib/aquarium/backups
+      AQUARIUM_MQTT_ENABLED: "true"
+      AQUARIUM_MQTT_BROKER_URL: mqtt://127.0.0.1:1883
+      AQUARIUM_MQTT_TOPIC_NAMESPACE: test
+    volumes:
+      - controller-state:/var/lib/aquarium/state
+      - controller-events:/var/lib/aquarium/events
+      - controller-archives:/var/lib/aquarium/archives
+      - controller-backups:/var/lib/aquarium/backups
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health/ready').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 18
+      start_period: 10s
+
+  fake-esps:
+    profiles: [test]
+    <<: *node-hardening
+    image: aquarium-controller:local
+    network_mode: service:mosquitto
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+        restart: true
+    command:
+      - node
+      - packages/fake-esp/dist/launcher.js
+      - --broker
+      - mqtt://127.0.0.1:1883
+      - --store
+      - /var/lib/fake-esp
+      - --namespace
+      - test/aquarium
+      - --device
+      - reef-left:ReefLeft:000000A1
+      - --device
+      - reef-right:ReefRight:000000B2
+    volumes:
+      - fake-esp-data:/var/lib/fake-esp
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const fs=require('node:fs');for(const device of ['reef-left','reef-right'])JSON.parse(fs.readFileSync(`/var/lib/fake-esp/$${device}/eeprom.json`,'utf8'))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 18
+      start_period: 10s
+
+volumes:
+  mosquitto-data:
+  controller-state:
+  controller-events:
+  controller-archives:
+  controller-backups:
+  fake-esp-data:

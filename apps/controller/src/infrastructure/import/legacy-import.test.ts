@@ -3,7 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 
-import { openStateDatabase } from "../database/index.js";
+import {
+  openStateDatabase,
+  parseStoredStateOutboxEnvelope,
+} from "../database/index.js";
 import {
   analyzeLegacyDirectory,
   type LegacyImportReport,
@@ -33,30 +36,32 @@ afterEach(async () => {
 });
 
 describe("legacy JSON import", () => {
-  it("reproduces every known fatal finding and audited disposition from .old/data", async () => {
+  it("accepts the audited production snapshot with only explicit safe normalizations", async () => {
     const report = await analyzeLegacyDirectory(resolve(".old/data"));
 
-    expect(report.valid).toBe(false);
-    expect(report.canCommit).toBe(false);
-    expect(report.errorCount).toBe(35);
-    expect(countIssues(report, "zero-duration-segment")).toBe(3);
-    expect(countIssues(report, "schedule-end-minute")).toBe(24);
-    expect(countIssues(report, "mapping-references-missing-channel")).toBe(8);
-    expect(countIssues(report, "case-distinct-channel-names-preserved")).toBe(
-      6,
-    );
-    expect(countIssues(report, "orphan-schedule-preserved")).toBe(31);
-    expect(countIssues(report, "canonical-route-channel-missing")).toBe(24);
-    expect(countIssues(report, "legacy-throttle-default-materialized")).toBe(6);
+    expect(report).toMatchObject({
+      importerVersion: "legacy-json-v2",
+      sourceFingerprint:
+        "15580a1ec55c1181db2a5d78f494ba18bc195f47a135b4b700028d5854033275",
+      valid: true,
+      canCommit: true,
+      errorCount: 0,
+      warningCount: 85,
+    });
+    expect(countIssues(report, "implicit-zero-tail-materialized")).toBe(30);
+    expect(countIssues(report, "duplicate-initial-segment-removed")).toBe(1);
+    expect(countIssues(report, "duplicate-terminal-segment-removed")).toBe(5);
+    expect(countIssues(report, "orphan-schedule-preserved")).toBe(37);
+    expect(countIssues(report, "legacy-throttle-default-materialized")).toBe(5);
     expect(countIssues(report, "inconsistent-editor-coordinate")).toBe(2);
     expect(countIssues(report, "skipped-legacy-file")).toBe(4);
     expect(report.normalizedCounts).toEqual({
       throttles: 11,
-      channels: 53,
-      schedules: 53,
-      schedulePoints: 213,
-      mappingProfiles: 8,
-      pinMappings: 40,
+      channels: 66,
+      schedules: 66,
+      schedulePoints: 318,
+      mappingProfiles: 7,
+      pinMappings: 34,
     });
     expect(
       report.files.map(({ fileName, rootRecordCount, nestedRecordCount }) => ({
@@ -65,11 +70,11 @@ describe("legacy JSON import", () => {
         nestedRecordCount,
       })),
     ).toEqual([
-      { fileName: "links.json", rootRecordCount: 53, nestedRecordCount: 160 },
-      { fileName: "channels.json", rootRecordCount: 9, nestedRecordCount: 40 },
+      { fileName: "links.json", rootRecordCount: 66, nestedRecordCount: 228 },
+      { fileName: "channels.json", rootRecordCount: 7, nestedRecordCount: 34 },
       {
         fileName: "throttle.json",
-        rootRecordCount: 5,
+        rootRecordCount: 6,
         nestedRecordCount: null,
       },
       {
@@ -148,6 +153,39 @@ describe("legacy JSON import", () => {
     ).toContain("never executed");
   });
 
+  it("normalizes only output-equivalent zero boundary segments and tails", async () => {
+    const directory = await createValidFixture();
+    const zero = { time: 0, percentage: 0, x: 0, y: 250 };
+    const end = { time: 1439, percentage: 0, x: 930, y: 250 };
+    await writeJson(join(directory, "links.json"), {
+      "bad Blue": {
+        type: "bad",
+        links: [
+          { source: zero, target: zero },
+          {
+            source: zero,
+            target: { time: 274, percentage: 0, x: 177, y: 250 },
+          },
+        ],
+      },
+      "Bad Blue": {
+        type: "bad",
+        links: [
+          { source: zero, target: end },
+          { source: end, target: end },
+        ],
+      },
+    });
+
+    const report = await analyzeLegacyDirectory(directory);
+
+    expect(report.valid).toBe(true);
+    expect(countIssues(report, "duplicate-initial-segment-removed")).toBe(1);
+    expect(countIssues(report, "duplicate-terminal-segment-removed")).toBe(1);
+    expect(countIssues(report, "implicit-zero-tail-materialized")).toBe(1);
+    expect(report.normalizedCounts.schedulePoints).toBe(5);
+  });
+
   it("keeps dry-run completely read-only even when a database is supplied", async () => {
     const directory = await createValidFixture();
     const database = await openStateDatabase({
@@ -168,26 +206,52 @@ describe("legacy JSON import", () => {
       await expectTableCount(database, "channels", 0);
       await expectTableCount(database, "state_revisions", 0);
       await expectTableCount(database, "state_outbox", 0);
+      await expect(
+        database
+          .selectFrom("operator_concurrency")
+          .select("last_operator_revision")
+          .executeTakeFirstOrThrow(),
+      ).resolves.toEqual({ last_operator_revision: 0 });
     } finally {
       await database.destroy();
     }
   });
 
   it("aborts an invalid requested commit without recording partial audit rows", async () => {
-    const directory = await createTemporaryDirectory();
+    const directory = await createValidFixture();
+    await writeJson(join(directory, "links.json"), {
+      "bad Blue": {
+        type: "bad",
+        links: [
+          {
+            source: { time: 0, percentage: 0 },
+            target: { time: 274, percentage: 50 },
+          },
+        ],
+      },
+      "Bad Blue": {
+        type: "bad",
+        links: [
+          {
+            source: { time: 0, percentage: 0 },
+            target: { time: 1439, percentage: 0 },
+          },
+        ],
+      },
+    });
     const database = await openStateDatabase({
       filename: join(directory, "state.db"),
     });
     try {
       const result = await importLegacyDirectory({
-        sourceDirectory: resolve(".old/data"),
+        sourceDirectory: directory,
         dryRun: false,
         database,
         nowMs: 100,
       });
 
       expect(result.committed).toBe(false);
-      expect(result.report.errorCount).toBe(35);
+      expect(countIssues(result.report, "schedule-end-minute")).toBe(1);
       await expectTableCount(database, "import_runs", 0);
       await expectTableCount(database, "throttles", 0);
       await expectTableCount(database, "channels", 0);
@@ -214,6 +278,12 @@ describe("legacy JSON import", () => {
       expect(result.committed).toBe(true);
       expect(result.revision).toBe(1);
       expect(result.importRunId).not.toBeNull();
+      await expect(
+        database
+          .selectFrom("operator_concurrency")
+          .select("last_operator_revision")
+          .executeTakeFirstOrThrow(),
+      ).resolves.toEqual({ last_operator_revision: 1 });
       expect(
         await database
           .selectFrom("channels")
@@ -250,16 +320,19 @@ describe("legacy JSON import", () => {
         { minute_of_day: 0, percentage: 0, editor_x: null, editor_y: null },
         { minute_of_day: 1439, percentage: 0, editor_x: null, editor_y: null },
       ]);
-      expect(
-        await database
-          .selectFrom("state_outbox")
-          .select(["revision", "event_type", "retention_class"])
-          .executeTakeFirstOrThrow(),
-      ).toEqual({
+      const outbox = await database
+        .selectFrom("state_outbox")
+        .selectAll()
+        .executeTakeFirstOrThrow();
+      expect(outbox).toMatchObject({
         revision: 1,
         event_type: "legacy-import.completed",
         retention_class: "audit",
       });
+      expect(parseStoredStateOutboxEnvelope(outbox).invalidations).toEqual([
+        { resource: "import_run", id: result.importRunId },
+        { resource: "controller", id: null },
+      ]);
       const importRun = await database
         .selectFrom("import_runs")
         .select(["status", "dry_run", "report_json"])
@@ -286,6 +359,12 @@ describe("legacy JSON import", () => {
       await expectTableCount(database, "import_runs", 1);
       await expectTableCount(database, "channels", 2);
       await expectTableCount(database, "state_revisions", 1);
+      await expect(
+        database
+          .selectFrom("operator_concurrency")
+          .select("last_operator_revision")
+          .executeTakeFirstOrThrow(),
+      ).resolves.toEqual({ last_operator_revision: 1 });
     } finally {
       await database.destroy();
     }
@@ -326,6 +405,12 @@ describe("legacy JSON import", () => {
       await expectTableCount(database, "schedule_points", 0);
       await expectTableCount(database, "state_revisions", 0);
       await expectTableCount(database, "state_outbox", 0);
+      await expect(
+        database
+          .selectFrom("operator_concurrency")
+          .select("last_operator_revision")
+          .executeTakeFirstOrThrow(),
+      ).resolves.toEqual({ last_operator_revision: 0 });
     } finally {
       await database.destroy();
     }

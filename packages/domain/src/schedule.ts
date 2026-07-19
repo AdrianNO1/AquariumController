@@ -316,7 +316,14 @@ export function evaluateLegacySchedulePercentOrZero(
         return Math.trunc(segment.source.percent);
       }
 
-      return Math.trunc(interpolateSegment(segment, minute));
+      const progress = Math.fround(
+        (minute - segment.source.minute) /
+          (segment.target.minute - segment.source.minute),
+      );
+      const delta = Math.fround(
+        (segment.target.percent - segment.source.percent) * progress,
+      );
+      return Math.trunc(Math.fround(segment.source.percent + delta));
     }
   }
 

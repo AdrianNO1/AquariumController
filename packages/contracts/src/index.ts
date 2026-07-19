@@ -1,8 +1,14 @@
 import { z } from "zod";
 
-export const isoTimestampSchema = z.string().datetime({ offset: true });
+import { committedStateEventSchema } from "./controller.js";
+import { controlAreaSlugSchema, isoTimestampSchema } from "./primitives.js";
 
-export const healthResponseSchema = z.object({
+export * from "./controller.js";
+export * from "./logs.js";
+export * from "./manual-overrides.js";
+export * from "./primitives.js";
+
+export const healthResponseSchema = z.strictObject({
   service: z.literal("aquarium-controller"),
   status: z.literal("ok"),
   version: z.string().min(1),
@@ -12,19 +18,19 @@ export const healthResponseSchema = z.object({
 
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
-export const streamReadyEventSchema = z.object({
+export const streamReadyEventSchema = z.strictObject({
   type: z.literal("system.stream-ready"),
   occurredAt: isoTimestampSchema,
-  data: z.object({
+  data: z.strictObject({
     currentRevision: z.number().int().nonnegative(),
     replayedCount: z.number().int().nonnegative(),
   }),
 });
 
-export const resyncRequiredEventSchema = z.object({
+export const resyncRequiredEventSchema = z.strictObject({
   type: z.literal("system.resync-required"),
   occurredAt: isoTimestampSchema,
-  data: z.object({
+  data: z.strictObject({
     requestedRevision: z.number().int().nonnegative(),
     earliestAvailableRevision: z.number().int().nonnegative(),
     currentRevision: z.number().int().nonnegative(),
@@ -32,10 +38,10 @@ export const resyncRequiredEventSchema = z.object({
   }),
 });
 
-export const streamHeartbeatEventSchema = z.object({
+export const streamHeartbeatEventSchema = z.strictObject({
   type: z.literal("system.heartbeat"),
   occurredAt: isoTimestampSchema,
-  data: z.object({
+  data: z.strictObject({
     currentRevision: z.number().int().nonnegative(),
     serverNow: isoTimestampSchema,
   }),
@@ -49,20 +55,6 @@ export const systemStreamEventSchema = z.discriminatedUnion("type", [
 
 export type SystemStreamEvent = z.infer<typeof systemStreamEventSchema>;
 
-export const committedStateEventSchema = z.strictObject({
-  revision: z.number().int().positive(),
-  type: z.string().min(1),
-  occurredAt: isoTimestampSchema,
-  entity: z.strictObject({
-    type: z.string().min(1),
-    id: z.string().min(1).nullable(),
-  }),
-  schemaVersion: z.number().int().positive(),
-  data: z.json(),
-});
-
-export type CommittedStateEvent = z.infer<typeof committedStateEventSchema>;
-
 export const controllerStreamEventSchema = z.union([
   systemStreamEventSchema,
   committedStateEventSchema,
@@ -70,18 +62,5 @@ export const controllerStreamEventSchema = z.union([
 
 export type ControllerStreamEvent = z.infer<typeof controllerStreamEventSchema>;
 
-export const legacyControlAreaSchema = z.enum([
-  "lights",
-  "pumps",
-  "testlights",
-  "bad",
-  "loft",
-  "biljard",
-  "frag",
-  "qt1",
-  "qt2",
-  "qt3",
-  "qt4",
-]);
-
+export const legacyControlAreaSchema = controlAreaSlugSchema;
 export type LegacyControlArea = z.infer<typeof legacyControlAreaSchema>;

@@ -1,4 +1,28 @@
 export {
+  ALERT_HISTORY_DELIVERY_LIMIT,
+  AlertHistoryRepository,
+  InvalidAlertHistoryCursorError,
+  InvalidPersistedAlertHistoryError,
+} from "./alert-history-repository.js";
+export {
+  ControlOperationRepository,
+  DeviceOperationDeviceNotFoundError,
+  DeviceOperationRevisionConflictError,
+  InvalidDeviceOperationTransitionError,
+  type CreatePendingDeviceOperationInput,
+  type CreatePendingUserConfigurationOperationInput,
+  type CreatedUserConfigurationOperation,
+  type InterruptedOperationRecovery,
+  type StoredDeviceOperation,
+} from "./control-operation-repository.js";
+export {
+  ControlOperationRetentionRepository,
+  DEFAULT_CONTROL_OPERATION_DELETE_BATCH_SIZE,
+  DEFAULT_ROUTINE_CONTROL_OPERATION_RETENTION_MS,
+  type PruneRoutineControlOperationsInput,
+  type PruneRoutineControlOperationsResult,
+} from "./control-operation-retention.js";
+export {
   closeControllerDatabases,
   DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
   DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES,
@@ -9,32 +33,107 @@ export {
   type ControllerDatabases,
   type DatabaseConnectionOptions,
 } from "./connection.js";
-export { migrateEventsDatabase, migrateStateDatabase } from "./migrate.js";
 export {
+  ControllerConfigurationRepository,
+  type ControllerConfigurationRepositoryOptions,
+} from "./controller-configuration-repository.js";
+export { DeviceScheduleArtifactRepository } from "./device-schedule-artifact-repository.js";
+export { ManualOverrideRepository } from "./manual-override-repository.js";
+export {
+  DEFAULT_NOTIFICATION_DELIVERY_DELETE_BATCH_SIZE,
+  DEFAULT_NOTIFICATION_DELIVERY_RETENTION_MS,
+  MAX_NOTIFICATION_DELIVERY_DELETE_BATCH_SIZE,
+  NotificationDeliveryRetentionRepository,
+  type PruneHistoricalNotificationDeliveriesInput,
+  type PruneHistoricalNotificationDeliveriesResult,
+} from "./notification-delivery-retention.js";
+export {
+  CONTROL_AREA_DEFINITIONS,
+  ControllerSnapshotRepository,
+  InvalidPersistedSnapshotDataError,
+  RECENT_OPERATION_LIMIT,
+  type ControllerSnapshotRepositoryOptions,
+} from "./controller-snapshot-repository.js";
+export {
+  EVENTS_INITIAL_MIGRATION_NAME,
+  EVENTS_NOTIFICATION_OUTCOME_MIGRATION_NAME,
+  EVENTS_QUERY_MIGRATION_NAME,
+  EVENTS_RETENTION_MIGRATION_NAME,
+  migrateEventsDatabase,
+  migrateEventsDatabaseTo,
+  migrateStateDatabase,
+  migrateStateDatabaseTo,
+  STATE_INITIAL_MIGRATION_NAME,
+  STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
+  STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
+  STATE_RUNTIME_MIGRATION_NAME,
+  type EventsMigrationTarget,
+  type StateMigrationTarget,
+} from "./migrate.js";
+export { RefreshProjectionRepository } from "./refresh-projection-repository.js";
+export {
+  OnlineDeviceRepository,
+  SchedulerGuardRepository,
+} from "./scheduler-guard-repository.js";
+export {
+  acquireOperatorConcurrencyFloor,
+  advanceOperatorConcurrencyFloor,
+  commitConditionalStateChange,
   commitStateChange,
   mirrorPendingStateEvents,
+  parseStoredStateOutboxEnvelope,
   readCurrentStateRevision,
+  serializeStateOutboxEnvelope,
+  STATE_OUTBOX_ENVELOPE_SCHEMA_VERSION,
   StateEventMirrorConflictError,
+  toCommittedStateEvent,
   type CommittedStateChange,
+  type ConditionalCommittedStateChange,
+  type ConditionalStateChangeEvent,
+  type ConditionalStateMutation,
+  type OperatorConcurrencyGuard,
   type StateChangeEvent,
+  type StateChangePostOutboxHook,
+  type StateChangePostOutboxContext,
   type StateDatabaseTransaction,
   type StateEventMirrorOptions,
   type StateEventMirrorResult,
   type StoredStateOutboxEvent,
 } from "./state-outbox.js";
+export {
+  DEFAULT_RETAINED_STATE_OUTBOX_REVISIONS,
+  DEFAULT_STATE_OUTBOX_PRUNE_BATCH_SIZE,
+  MAX_STATE_OUTBOX_PRUNE_BATCH_SIZE,
+  prunePublishedStateOutbox,
+  type PrunePublishedStateOutboxOptions,
+  type PrunePublishedStateOutboxResult,
+} from "./state-outbox-retention.js";
+export {
+  DEFAULT_STATE_REVISION_DELETE_BATCH_SIZE,
+  MAX_STATE_REVISION_DELETE_BATCH_SIZE,
+  StateRevisionRetentionRepository,
+  type PruneOrphanedStateRevisionsInput,
+  type PruneOrphanedStateRevisionsResult,
+} from "./state-revision-retention.js";
 export type {
   ActiveAlertsTable,
+  AlertConditionStatesTable,
+  AlertNotificationTransition,
+  AlertObservationSourceType,
+  AlertSeverity,
   AlertRulesTable,
   AlertState,
   ChannelsTable,
   ControlOperationsTable,
   DeviceStatus,
+  DeviceScheduleArtifactsTable,
   DevicesTable,
   DslProgramRevisionsTable,
   EventAggregatesTable,
   EventArchivesTable,
   EventDirection,
   EventOutcome,
+  EventSeverity,
   EventsDatabaseSchema,
   ImportIssuesTable,
   ImportRunsTable,
@@ -42,6 +141,9 @@ export type {
   InteractionsTable,
   JsonText,
   MappingProfilesTable,
+  NotificationDeliveriesTable,
+  NotificationDeliveryStatus,
+  OperatorConcurrencyTable,
   OperationStatus,
   OutputsTable,
   OverrideStatus,
@@ -51,9 +153,12 @@ export type {
   RetentionClass,
   RetentionPoliciesTable,
   RetentionRunsTable,
+  ScheduleCompileStatus,
+  ScheduleDeliveryStatus,
   SchedulePointsTable,
   SchedulesTable,
   SensorsTable,
+  SchedulerGuardsTable,
   SqliteBoolean,
   StateDatabaseSchema,
   StateEventsTable,

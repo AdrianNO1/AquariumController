@@ -18,6 +18,8 @@ const RETENTION_CLASSES = [
 export interface EventStorageUsageOptions {
   readonly nowMs: number;
   readonly projectionWindowMs?: number;
+  readonly backupFreshnessThresholdMs?: number;
+  readonly latestVerifiedBackupAtMs?: number | null;
 }
 
 export interface RetentionBudgetStatus {
@@ -51,6 +53,8 @@ export interface EventStorageUsage {
   readonly pendingArchiveCount: number;
   readonly failedRetentionRunCount: number;
   readonly runningRetentionRunCount: number;
+  readonly latestBackupOutcomeFailed: 0 | 1;
+  readonly successfulBackupMissingOrStale: 0 | 1;
   readonly retentionBudgets: readonly RetentionBudgetStatus[];
 }
 
@@ -73,6 +77,16 @@ export async function readEventStorageUsage(
   if (!Number.isSafeInteger(projectionWindowMs) || projectionWindowMs <= 0) {
     throw new RangeError("Projection window must be a positive safe integer");
   }
+  const backupFreshnessThresholdMs =
+    options.backupFreshnessThresholdMs ?? 36 * 60 * 60 * 1_000;
+  if (
+    !Number.isSafeInteger(backupFreshnessThresholdMs) ||
+    backupFreshnessThresholdMs <= 0
+  ) {
+    throw new RangeError(
+      "Backup freshness threshold must be a positive safe integer",
+    );
+  }
   const windowStartMs = Math.max(0, options.nowMs - projectionWindowMs);
 
   const [
@@ -82,10 +96,12 @@ export async function readEventStorageUsage(
     recentInteractionBytes,
     recentStateEventBytes,
     archiveSummary,
-    failedArchiveSummary,
+    failedArchiveCount,
     pendingArchiveSummary,
-    failedRunSummary,
+    failedRetentionRunCount,
     runningRunSummary,
+    latestBackupOutcomeFailed,
+    latestSuccessfulBackupAtMs,
     policies,
     pageCountResult,
     pageSizeResult,
@@ -124,10 +140,14 @@ export async function readEventStorageUsage(
       ])
       .where("status", "=", "complete")
       .executeTakeFirstOrThrow(),
-    countArchives(database, "failed"),
+    countUnresolvedArchiveFailures(database),
     countArchives(database, "pending"),
-    countRetentionRuns(database, "failed"),
+    countUnresolvedRetentionFailures(database),
     countRetentionRuns(database, "running"),
+    readLatestBackupOutcomeFailed(database),
+    options.latestVerifiedBackupAtMs === undefined
+      ? readLatestSuccessfulBackupAtMs(database)
+      : Promise.resolve(options.latestVerifiedBackupAtMs),
     database
       .selectFrom("retention_policies")
       .select(["retention_class", "byte_budget"])
@@ -192,6 +212,25 @@ export async function readEventStorageUsage(
     completeArchiveBytes,
     pendingArchiveBytes,
   ]);
+  if (latestSuccessfulBackupAtMs !== null) {
+    assertNonNegativeSafeInteger(
+      latestSuccessfulBackupAtMs,
+      "Latest successful backup time",
+    );
+  }
+  if (
+    latestSuccessfulBackupAtMs !== null &&
+    latestSuccessfulBackupAtMs > options.nowMs
+  ) {
+    throw new RangeError(
+      "Latest successful backup time cannot be in the future",
+    );
+  }
+  const successfulBackupMissingOrStale =
+    latestSuccessfulBackupAtMs === null ||
+    options.nowMs - latestSuccessfulBackupAtMs > backupFreshnessThresholdMs
+      ? 1
+      : 0;
   return {
     measuredAtMs: options.nowMs,
     projectionWindowMs,
@@ -213,10 +252,12 @@ export async function readEventStorageUsage(
       trackedStorageBytes,
       projectedAnnualIngestBytes,
     ]),
-    failedArchiveCount: toSafeNonNegativeInteger(failedArchiveSummary.count),
+    failedArchiveCount,
     pendingArchiveCount: toSafeNonNegativeInteger(pendingArchiveSummary.count),
-    failedRetentionRunCount: toSafeNonNegativeInteger(failedRunSummary.count),
+    failedRetentionRunCount,
     runningRetentionRunCount: toSafeNonNegativeInteger(runningRunSummary.count),
+    latestBackupOutcomeFailed,
+    successfulBackupMissingOrStale,
     retentionBudgets,
   };
 }
@@ -245,7 +286,7 @@ function sumBytesByRetentionClass(
 
 function countArchives(
   database: Kysely<EventsDatabaseSchema>,
-  status: "pending" | "failed",
+  status: "pending",
 ): Promise<CountBytesRow> {
   return database
     .selectFrom("event_archives")
@@ -257,9 +298,94 @@ function countArchives(
     .executeTakeFirstOrThrow();
 }
 
+async function countUnresolvedArchiveFailures(
+  database: Kysely<EventsDatabaseSchema>,
+): Promise<number> {
+  const result = await sql<{ readonly count: number | string | bigint }>`
+    WITH latest_success AS (
+      SELECT created_at_ms, rowid AS outcome_rowid
+      FROM event_archives
+      WHERE status = 'complete'
+      ORDER BY created_at_ms DESC, rowid DESC
+      LIMIT 1
+    )
+    SELECT COUNT(*) AS count
+    FROM event_archives AS failed
+    WHERE failed.status = 'failed'
+      AND (
+        NOT EXISTS (SELECT 1 FROM latest_success)
+        OR failed.created_at_ms > (SELECT created_at_ms FROM latest_success)
+        OR (
+          failed.created_at_ms = (SELECT created_at_ms FROM latest_success)
+          AND failed.rowid > (SELECT outcome_rowid FROM latest_success)
+        )
+      )
+  `.execute(database);
+  return toSafeNonNegativeInteger(result.rows[0]?.count ?? 0);
+}
+
+async function countUnresolvedRetentionFailures(
+  database: Kysely<EventsDatabaseSchema>,
+): Promise<number> {
+  const result = await sql<{ readonly count: number | string | bigint }>`
+    WITH latest_success AS (
+      SELECT completed_at_ms, rowid AS outcome_rowid
+      FROM retention_runs
+      WHERE status = 'succeeded' AND completed_at_ms IS NOT NULL
+      ORDER BY completed_at_ms DESC, rowid DESC
+      LIMIT 1
+    )
+    SELECT COUNT(*) AS count
+    FROM retention_runs AS failed
+    WHERE failed.status = 'failed'
+      AND failed.completed_at_ms IS NOT NULL
+      AND (
+        NOT EXISTS (SELECT 1 FROM latest_success)
+        OR failed.completed_at_ms > (SELECT completed_at_ms FROM latest_success)
+        OR (
+          failed.completed_at_ms = (SELECT completed_at_ms FROM latest_success)
+          AND failed.rowid > (SELECT outcome_rowid FROM latest_success)
+        )
+      )
+  `.execute(database);
+  return toSafeNonNegativeInteger(result.rows[0]?.count ?? 0);
+}
+
+async function readLatestBackupOutcomeFailed(
+  database: Kysely<EventsDatabaseSchema>,
+): Promise<0 | 1> {
+  const latest = await database
+    .selectFrom("interactions")
+    .select("outcome")
+    .where("kind", "=", "maintenance.backup")
+    .orderBy("occurred_at_ms", "desc")
+    .orderBy("id", "desc")
+    .executeTakeFirst();
+  if (latest === undefined) return 0;
+  if (latest.outcome === "failed") return 1;
+  if (latest.outcome === "succeeded") return 0;
+  throw new Error(
+    `Latest maintenance.backup interaction has invalid outcome ${latest.outcome}`,
+  );
+}
+
+async function readLatestSuccessfulBackupAtMs(
+  database: Kysely<EventsDatabaseSchema>,
+): Promise<number | null> {
+  const latest = await database
+    .selectFrom("interactions")
+    .select("occurred_at_ms")
+    .where("kind", "=", "maintenance.backup")
+    .where("outcome", "=", "succeeded")
+    .orderBy("occurred_at_ms", "desc")
+    .orderBy("id", "desc")
+    .executeTakeFirst();
+  return latest?.occurred_at_ms ?? null;
+}
+
 function countRetentionRuns(
   database: Kysely<EventsDatabaseSchema>,
-  status: "running" | "failed",
+  status: "running",
 ): Promise<Pick<CountBytesRow, "count">> {
   return database
     .selectFrom("retention_runs")

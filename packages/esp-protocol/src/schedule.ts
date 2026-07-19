@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { assertLegacyScheduleFits } from "./limits.js";
+import { assertLegacyScheduleFits, LEGACY_MAX_SYNC_TIME } from "./limits.js";
 
 export const LEGACY_LIGHT_CHANNEL_TYPE = 108;
 export const LEGACY_PUMP_CHANNEL_TYPE = 112;
@@ -29,7 +29,7 @@ export const legacyScheduleCoreSchema = z.strictObject({
 });
 
 export const legacyScheduleDocumentSchema = legacyScheduleCoreSchema.extend({
-  syncTime: z.number().int().positive(),
+  syncTime: z.number().int().positive().max(LEGACY_MAX_SYNC_TIME),
 });
 
 export type LegacyScheduleChannel = z.infer<typeof legacyScheduleChannelSchema>;

@@ -7,10 +7,13 @@
     "build": "tsc --project tsconfig.json",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
+    "storage": "tsx src/storage-cli.ts",
+    "storage:prod": "node dist/storage-cli.js",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "dependencies": {
     "@aquarium/contracts": "*",
+    "@aquarium/domain": "*",
     "@aquarium/esp-protocol": "*",
     "@fastify/helmet": "^13.1.0",
     "@fastify/static": "^9.3.0",

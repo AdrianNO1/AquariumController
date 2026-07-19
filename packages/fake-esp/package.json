@@ -11,6 +11,11 @@
   },
   "scripts": {
     "build": "tsc --project tsconfig.json",
+    "start": "node dist/launcher.js",
+    "test": "vitest run --root ../.. packages/fake-esp",
     "typecheck": "tsc --project tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "mqtt": "^5.15.2"
   }
 }

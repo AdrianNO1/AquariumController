@@ -12,6 +12,8 @@ const RESERVED_AUTH_HEADERS = new Set([
   "content-type",
   "host",
   "transfer-encoding",
+  "x-aquarium-event-revision",
+  "x-aquarium-payload-version",
 ]);
 
 export type WebhookRuntime = "development" | "test" | "production";
@@ -28,10 +30,15 @@ export interface WebhookAlertNotifierOptions {
   readonly authHeader?: WebhookAuthHeader;
 }
 
+export interface ValidatedWebhookAlertNotifierOptions {
+  readonly url: URL;
+  readonly runtime: WebhookRuntime;
+  readonly timeoutMs: number;
+  readonly authHeader?: WebhookAuthHeader;
+}
+
 export type WebhookDeliveryFailureCode =
-  | "timeout"
-  | "transport"
-  | "http-status";
+  "timeout" | "transport" | "http-status";
 
 export class WebhookDeliveryError extends Error {
   override readonly name = "WebhookDeliveryError";
@@ -42,9 +49,8 @@ export class WebhookDeliveryError extends Error {
     code: WebhookDeliveryFailureCode,
     message: string,
     statusCode: number | null = null,
-    cause?: Error,
   ) {
-    super(message, cause === undefined ? undefined : { cause });
+    super(message);
     this.code = code;
     this.statusCode = statusCode;
   }
@@ -65,13 +71,14 @@ function parseWebhookUrl(rawUrl: string, runtime: WebhookRuntime): URL {
   let url: URL;
   try {
     url = new URL(rawUrl);
-  } catch (error) {
-    throw new TypeError("Webhook URL must be an absolute URL", {
-      cause: error,
-    });
+  } catch {
+    throw new TypeError("Webhook URL must be an absolute URL");
   }
   if (url.username.length > 0 || url.password.length > 0) {
     throw new TypeError("Webhook URL must not contain credentials");
+  }
+  if (url.search.length > 0) {
+    throw new TypeError("Webhook URL must not contain a query string");
   }
   if (url.hash.length > 0) {
     throw new TypeError("Webhook URL must not contain a fragment");
@@ -91,11 +98,7 @@ function parseWebhookUrl(rawUrl: string, runtime: WebhookRuntime): URL {
 
 function validateTimeout(timeoutMs: number | undefined): number {
   const value = timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  if (
-    !Number.isSafeInteger(value) ||
-    value <= 0 ||
-    value > MAX_TIMEOUT_MS
-  ) {
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TIMEOUT_MS) {
     throw new RangeError(
       `Webhook timeout must be an integer between 1 and ${MAX_TIMEOUT_MS} milliseconds`,
     );
@@ -124,7 +127,25 @@ function validateAuthHeader(
       "Webhook authentication header value must be non-empty and single-line",
     );
   }
+  try {
+    const headers = new Headers();
+    headers.set(authHeader.name, authHeader.value);
+  } catch {
+    throw new TypeError("Webhook authentication header value is invalid");
+  }
   return { name: authHeader.name, value: authHeader.value };
+}
+
+export function validateWebhookAlertNotifierOptions(
+  options: WebhookAlertNotifierOptions,
+): ValidatedWebhookAlertNotifierOptions {
+  const authHeader = validateAuthHeader(options.authHeader);
+  return {
+    url: parseWebhookUrl(options.url, options.runtime),
+    runtime: options.runtime,
+    timeoutMs: validateTimeout(options.timeoutMs),
+    ...(authHeader === undefined ? {} : { authHeader }),
+  };
 }
 
 /**
@@ -133,30 +154,31 @@ function validateAuthHeader(
  * durable outbox worker rather than an implicit fetch retry loop.
  */
 export class WebhookAlertNotifier implements AlertNotifier {
-  private readonly url: URL;
-  private readonly timeoutMs: number;
-  private readonly authHeader: WebhookAuthHeader | undefined;
+  readonly #url: URL;
+  readonly #timeoutMs: number;
+  readonly #authHeader: WebhookAuthHeader | undefined;
 
   constructor(options: WebhookAlertNotifierOptions) {
-    this.url = parseWebhookUrl(options.url, options.runtime);
-    this.timeoutMs = validateTimeout(options.timeoutMs);
-    this.authHeader = validateAuthHeader(options.authHeader);
+    const validated = validateWebhookAlertNotifierOptions(options);
+    this.#url = validated.url;
+    this.#timeoutMs = validated.timeoutMs;
+    this.#authHeader = validated.authHeader;
   }
 
   async send(notification: AlertNotificationV1): Promise<void> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), this.#timeoutMs);
     const headers = new Headers({
       "content-type": "application/json; charset=utf-8",
       "x-aquarium-event-revision": String(notification.eventRevision),
       "x-aquarium-payload-version": String(notification.schemaVersion),
     });
-    if (this.authHeader !== undefined) {
-      headers.set(this.authHeader.name, this.authHeader.value);
+    if (this.#authHeader !== undefined) {
+      headers.set(this.#authHeader.name, this.#authHeader.value);
     }
 
     try {
-      const response = await fetch(this.url, {
+      const response = await fetch(this.#url, {
         method: "POST",
         headers,
         body: JSON.stringify(notification),
@@ -177,17 +199,10 @@ export class WebhookAlertNotifier implements AlertNotifier {
       if (controller.signal.aborted) {
         throw new WebhookDeliveryError(
           "timeout",
-          `Webhook delivery exceeded ${this.timeoutMs} milliseconds`,
-          null,
-          error instanceof Error ? error : undefined,
+          `Webhook delivery exceeded ${this.#timeoutMs} milliseconds`,
         );
       }
-      throw new WebhookDeliveryError(
-        "transport",
-        `Webhook transport failed: ${error instanceof Error ? error.message : "non-Error failure"}`,
-        null,
-        error instanceof Error ? error : undefined,
-      );
+      throw new WebhookDeliveryError("transport", "Webhook transport failed");
     } finally {
       clearTimeout(timer);
     }

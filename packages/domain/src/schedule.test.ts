@@ -221,6 +221,19 @@ describe("UTC piecewise-linear schedule evaluation", () => {
     // At an overlapping endpoint, array order still decides the value.
     expect(evaluateLegacySchedulePercentOrZero(firmwareLinks, 240)).toBe(100);
   });
+
+  it("rounds legacy interpolation through the firmware's 32-bit float", () => {
+    const firmwareLinks = [
+      {
+        source: { minute: 0, percent: 25 },
+        target: { minute: 5, percent: 0 },
+      },
+    ] as const;
+
+    // The deployed float calculation produces 9.999999046 at minute 3,
+    // which the C++ int return truncates to 9. JavaScript double math is 10.
+    expect(evaluateLegacySchedulePercentOrZero(firmwareLinks, 3)).toBe(9);
+  });
 });
 
 describe("Python-compatible rounding and host PWM", () => {

@@ -24,6 +24,10 @@ const NON_RETAINED_QOS_ZERO = {
 const QOS_ZERO_SUBSCRIPTION = { qos: QOS_ZERO } as const;
 const DEFAULT_RESPONSE_TIMEOUT_MS = 5_000;
 const MAX_RAW_PAYLOAD_PREVIEW = 2_048;
+const MIN_LEGACY_PIN = 0;
+const MAX_LEGACY_PIN = 63;
+const MIN_ANALOG_VALUE = 0;
+const MAX_ANALOG_VALUE = 4_095;
 
 export interface LegacyDeviceTarget {
   /** Stable ESP chip identifier used on the wire. */
@@ -32,10 +36,20 @@ export interface LegacyDeviceTarget {
   readonly aliases?: readonly string[];
 }
 
+export type LegacyExpectedResponse =
+  | {
+      readonly kind: "exact";
+      readonly value: string;
+    }
+  | {
+      readonly kind: "analog_read";
+      readonly pin: number;
+    };
+
 export interface LegacyWireCommand {
   readonly command: string;
   readonly target: LegacyDeviceTarget;
-  readonly expectedResponse: string;
+  readonly expectedResponse: LegacyExpectedResponse;
 }
 
 interface OutcomeBase {
@@ -48,11 +62,12 @@ export type LegacyCommandOutcome =
   | (OutcomeBase & {
       readonly status: "succeeded";
       readonly response: string;
+      readonly analogValue: number | null;
     })
   | (OutcomeBase & {
       readonly status: "failed";
       readonly response: string;
-      readonly expectedResponse: string;
+      readonly expectedResponse: LegacyExpectedResponse;
     })
   | (OutcomeBase & {
       readonly status: "outcome_unknown";
@@ -75,6 +90,7 @@ export interface LegacyWireOperationResult {
 export interface LegacyAnnouncementEvent {
   readonly announcement: EspAnnouncement;
   readonly receivedAtMs: number;
+  readonly payloadBytes: number;
 }
 
 export type IgnoredResponseReason =
@@ -98,6 +114,8 @@ export type LegacyMqttInteraction =
       readonly kind: "malformed_message";
       readonly topic: string;
       readonly payloadPreview: string;
+      readonly payloadBytes: number;
+      readonly previewTruncated: boolean;
       readonly detail: string;
       readonly atMs: number;
     }
@@ -105,6 +123,8 @@ export type LegacyMqttInteraction =
       readonly kind: "ignored_message";
       readonly topic: string;
       readonly payloadPreview: string;
+      readonly payloadBytes: number;
+      readonly previewTruncated: boolean;
       readonly atMs: number;
     }
   | {
@@ -112,6 +132,7 @@ export type LegacyMqttInteraction =
       readonly reason: IgnoredResponseReason;
       readonly responderId: string;
       readonly responseIndex: number;
+      readonly payloadBytes: number;
       readonly atMs: number;
     }
   | {
@@ -157,8 +178,10 @@ export interface LegacyMqttTransportOptions {
 interface NormalizedCommand {
   readonly command: string;
   readonly targetId: string;
-  readonly expectedResponse: string;
+  readonly expectedResponse: LegacyExpectedResponse;
 }
+
+export type LegacyDiscoveryRequestResult = "published" | "skipped_busy";
 
 interface QueuedOperation {
   readonly operationId: string;
@@ -351,6 +374,53 @@ export class LegacyMqttTransport {
     });
   }
 
+  /**
+   * Publishes an explicit discovery request only at an idle wire boundary.
+   * Periodic scheduling and catch-up policy belong to the runtime owner.
+   */
+  public async requestDiscovery(): Promise<LegacyDiscoveryRequestResult> {
+    const client = this.client;
+    if (!this.started || !this.ready || client === undefined) {
+      throw new LegacyMqttUnavailableError("MQTT transport is not ready");
+    }
+    if (
+      this.pumping ||
+      this.activeBatch !== undefined ||
+      this.operationQueue.length > 0
+    ) {
+      return "skipped_busy";
+    }
+
+    this.pumping = true;
+    const generation = this.connectionGeneration;
+    try {
+      await client.publish(
+        this.topics.command,
+        "discover",
+        NON_RETAINED_QOS_ZERO,
+      );
+      if (!this.isCurrentConnection(client, generation) || !this.ready) {
+        throw new LegacyMqttUnavailableError(
+          "MQTT disconnected while publishing discovery",
+        );
+      }
+      this.emitInteraction({ kind: "discovery_published", atMs: this.now() });
+      return "published";
+    } catch (error) {
+      const normalizedError = toError(error);
+      this.emitInteraction({
+        kind: "transport_error",
+        phase: "publish",
+        detail: normalizedError.message,
+        atMs: this.now(),
+      });
+      throw normalizedError;
+    } finally {
+      this.pumping = false;
+      void this.pumpQueue();
+    }
+  }
+
   private async handleConnected(
     client: LegacyMqttClientPort,
     generation: number,
@@ -408,16 +478,22 @@ export class LegacyMqttTransport {
   private handleMessage(topic: string, payload: Uint8Array): void {
     const decoded = decodePayload(payload);
     if (!decoded.ok) {
-      this.emitMalformed(topic, decoded.preview, decoded.detail);
+      this.emitMalformed(
+        topic,
+        decoded.preview,
+        payload.byteLength,
+        decoded.previewTruncated,
+        decoded.detail,
+      );
       return;
     }
 
     if (topic === this.topics.announce) {
-      this.handleAnnouncement(decoded.value);
+      this.handleAnnouncement(decoded.value, payload.byteLength);
       return;
     }
     if (topic === this.topics.response) {
-      this.handleResponse(decoded.value);
+      this.handleResponse(decoded.value, payload.byteLength);
       return;
     }
 
@@ -425,16 +501,20 @@ export class LegacyMqttTransport {
       kind: "ignored_message",
       topic,
       payloadPreview: preview(decoded.value),
+      payloadBytes: payload.byteLength,
+      previewTruncated: isPreviewTruncated(decoded.value),
       atMs: this.now(),
     });
   }
 
-  private handleAnnouncement(rawPayload: string): void {
+  private handleAnnouncement(rawPayload: string, payloadBytes: number): void {
     const parsedJson = parseJson(rawPayload);
     if (!parsedJson.ok) {
       this.emitMalformed(
         this.topics.announce,
         preview(rawPayload),
+        payloadBytes,
+        isPreviewTruncated(rawPayload),
         parsedJson.detail,
       );
       return;
@@ -446,6 +526,8 @@ export class LegacyMqttTransport {
       this.emitMalformed(
         this.topics.announce,
         preview(rawPayload),
+        payloadBytes,
+        isPreviewTruncated(rawPayload),
         parsedAnnouncement.error.message,
       );
       return;
@@ -455,18 +537,21 @@ export class LegacyMqttTransport {
       this.callbacks.onAnnouncement?.({
         announcement: parsedAnnouncement.data,
         receivedAtMs: this.now(),
+        payloadBytes,
       });
     } catch (error) {
       this.emitCallbackError("announcement_callback", error);
     }
   }
 
-  private handleResponse(rawPayload: string): void {
+  private handleResponse(rawPayload: string, payloadBytes: number): void {
     const parsedJson = parseJson(rawPayload);
     if (!parsedJson.ok) {
       this.emitMalformed(
         this.topics.response,
         preview(rawPayload),
+        payloadBytes,
+        isPreviewTruncated(rawPayload),
         parsedJson.detail,
       );
       return;
@@ -476,6 +561,8 @@ export class LegacyMqttTransport {
       this.emitMalformed(
         this.topics.response,
         preview(rawPayload),
+        payloadBytes,
+        isPreviewTruncated(rawPayload),
         parsedResponse.error.message,
       );
       return;
@@ -488,6 +575,7 @@ export class LegacyMqttTransport {
           "no_active_batch",
           parsedResponse.data.id,
           response.index,
+          payloadBytes,
         );
         continue;
       }
@@ -498,6 +586,7 @@ export class LegacyMqttTransport {
           "index_out_of_range",
           parsedResponse.data.id,
           response.index,
+          payloadBytes,
         );
         continue;
       }
@@ -506,6 +595,7 @@ export class LegacyMqttTransport {
           "wrong_device",
           parsedResponse.data.id,
           response.index,
+          payloadBytes,
         );
         continue;
       }
@@ -514,6 +604,7 @@ export class LegacyMqttTransport {
           "premature_response",
           parsedResponse.data.id,
           response.index,
+          payloadBytes,
         );
         continue;
       }
@@ -522,27 +613,32 @@ export class LegacyMqttTransport {
           "duplicate",
           parsedResponse.data.id,
           response.index,
+          payloadBytes,
         );
         continue;
       }
 
-      const outcome: LegacyCommandOutcome =
-        response.response === expectation.command.expectedResponse
-          ? {
-              index: expectation.originalIndex,
-              command: expectation.command.command,
-              targetId: expectation.command.targetId,
-              status: "succeeded",
-              response: response.response,
-            }
-          : {
-              index: expectation.originalIndex,
-              command: expectation.command.command,
-              targetId: expectation.command.targetId,
-              status: "failed",
-              response: response.response,
-              expectedResponse: expectation.command.expectedResponse,
-            };
+      const responseMatch = matchExpectedResponse(
+        expectation.command.expectedResponse,
+        response.response,
+      );
+      const outcome: LegacyCommandOutcome = responseMatch.matched
+        ? {
+            index: expectation.originalIndex,
+            command: expectation.command.command,
+            targetId: expectation.command.targetId,
+            status: "succeeded",
+            response: response.response,
+            analogValue: responseMatch.analogValue,
+          }
+        : {
+            index: expectation.originalIndex,
+            command: expectation.command.command,
+            targetId: expectation.command.targetId,
+            status: "failed",
+            response: response.response,
+            expectedResponse: expectation.command.expectedResponse,
+          };
       activeBatch.outcomes.set(response.index, outcome);
       this.emitCommandOutcome(activeBatch.operationId, outcome);
       activeBatch.settleIfComplete();
@@ -698,7 +794,10 @@ export class LegacyMqttTransport {
         operationId,
         batchIndex,
         frameCount: frames.length,
-        payloadBytes: utf8ByteLength(batch.payload),
+        payloadBytes: frames.reduce(
+          (total, frame) => total + utf8ByteLength(frame),
+          0,
+        ),
         atMs: this.now(),
       });
     }
@@ -810,12 +909,16 @@ export class LegacyMqttTransport {
   private emitMalformed(
     topic: string,
     payloadPreview: string,
+    payloadBytes: number,
+    previewTruncated: boolean,
     detail: string,
   ): void {
     this.emitInteraction({
       kind: "malformed_message",
       topic,
       payloadPreview,
+      payloadBytes,
+      previewTruncated,
       detail,
       atMs: this.now(),
     });
@@ -825,12 +928,14 @@ export class LegacyMqttTransport {
     reason: IgnoredResponseReason,
     responderId: string,
     responseIndex: number,
+    payloadBytes: number,
   ): void {
     this.emitInteraction({
       kind: "ignored_response",
       reason,
       responderId,
       responseIndex,
+      payloadBytes,
       atMs: this.now(),
     });
   }
@@ -909,8 +1014,71 @@ function normalizeCommand(command: LegacyWireCommand): NormalizedCommand {
   return {
     command: `${command.target.id}${trimmed.slice(separatorIndex)}`,
     targetId: command.target.id,
-    expectedResponse: command.expectedResponse,
+    expectedResponse: normalizeExpectedResponse(command.expectedResponse),
   };
+}
+
+function normalizeExpectedResponse(
+  expectedResponse: LegacyExpectedResponse,
+): LegacyExpectedResponse {
+  if (expectedResponse.kind === "exact") {
+    if (typeof expectedResponse.value !== "string") {
+      throw new TypeError("Exact legacy response value must be a string");
+    }
+    return { kind: "exact", value: expectedResponse.value };
+  }
+  if (expectedResponse.kind === "analog_read") {
+    assertIntegerInRange(
+      expectedResponse.pin,
+      MIN_LEGACY_PIN,
+      MAX_LEGACY_PIN,
+      "Analog-read pin",
+    );
+    return { kind: "analog_read", pin: expectedResponse.pin };
+  }
+  throw new TypeError("Unsupported legacy expected-response descriptor");
+}
+
+type ExpectedResponseMatch =
+  | { readonly matched: true; readonly analogValue: number | null }
+  | { readonly matched: false };
+
+function matchExpectedResponse(
+  expectedResponse: LegacyExpectedResponse,
+  response: string,
+): ExpectedResponseMatch {
+  if (expectedResponse.kind === "exact") {
+    return response === expectedResponse.value
+      ? { matched: true, analogValue: null }
+      : { matched: false };
+  }
+
+  const prefix = `r ${expectedResponse.pin} `;
+  if (!response.startsWith(prefix)) {
+    return { matched: false };
+  }
+  const valueText = response.slice(prefix.length);
+  const value = Number(valueText);
+  const valid =
+    valueText.length > 0 &&
+    Number.isInteger(value) &&
+    value >= MIN_ANALOG_VALUE &&
+    value <= MAX_ANALOG_VALUE &&
+    String(value) === valueText;
+  return valid ? { matched: true, analogValue: value } : { matched: false };
+}
+
+function assertIntegerInRange(
+  value: number,
+  minimum: number,
+  maximum: number,
+  description: string,
+): void {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new RangeError(
+      `${description} must be an integer from ${minimum} to ${maximum}`,
+    );
+  }
 }
 
 function assertTargetToken(value: string, description: string): void {
@@ -964,6 +1132,7 @@ type DecodedPayload =
   | {
       readonly ok: false;
       readonly preview: string;
+      readonly previewTruncated: boolean;
       readonly detail: string;
     };
 
@@ -974,9 +1143,11 @@ function decodePayload(payload: Uint8Array): DecodedPayload {
       value: new TextDecoder("utf-8", { fatal: true }).decode(payload),
     };
   } catch (error) {
+    const lossyDecoded = new TextDecoder().decode(payload);
     return {
       ok: false,
-      preview: preview(new TextDecoder().decode(payload)),
+      preview: preview(lossyDecoded),
+      previewTruncated: isPreviewTruncated(lossyDecoded),
       detail: toError(error).message,
     };
   }
@@ -1005,6 +1176,10 @@ function parseJson(payload: string): ParsedJson {
 
 function preview(payload: string): string {
   return payload.slice(0, MAX_RAW_PAYLOAD_PREVIEW);
+}
+
+function isPreviewTruncated(payload: string): boolean {
+  return payload.length > MAX_RAW_PAYLOAD_PREVIEW;
 }
 
 function toError(error: unknown): Error {

@@ -1,37 +1,311 @@
 # Aquarium Controller
 
-This repository is the TypeScript rewrite of the Raspberry Pi aquarium controller. The previous Python, Flask, and firmware implementation remains under `.old/` as migration reference; it is not the target architecture.
+This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
+controller. The previous Python and Flask application remains under `.old/` as
+migration evidence. The ESP32 sketch temporarily remains at
+`.old/slaveCode/ESP32Code/ESP32Code.ino`, but firmware 4.0.0 is now a supported,
+compiled part of this application rather than read-only legacy evidence.
 
-## Foundation stack
+Historical local evidence through 2026-07-15 covers unit, real-Mosquitto,
+production-browser, amd64/ARM64 container, production-shaped import, and
+backup/restore lanes. Firmware, API, alert/SSE, archive, and backup-artifact
+hardening has landed since that evidence; focused checks include a warning-free
+2026-07-19 firmware compile and 21/21 backup-artifact tests across four files.
+The final settled-tree verification and three-repeat browser audit are still
+pending, so this README does not claim final current-tree validation or a
+currently running local stack.
 
-- Node.js 24 LTS and strict TypeScript
-- React with Vite for the LAN dashboard
-- Fastify for HTTP, native server-sent events, and the long-lived controller process
-- Zod schemas shared across process and browser boundaries
-- A dedicated ESP protocol package for legacy MQTT framing and validation
-- SQLite with Kysely for state, configuration, and structured event storage (next milestone)
-- MQTT.js with Mosquitto for device communication (next milestone)
-- Vitest now; real-broker Testcontainers and Playwright as integration slices land
+The hosted repository is currently public and is not a trusted release source.
+A historical Dropbox token must be revoked, the aquarium Wi-Fi password must be
+rotated, and Git history must be sanitized before CI output or a checkout can be
+used for release. Secret scanning and push protection are enabled, but neither
+invalidates credentials already exposed in public history. Follow
+[the credential gate](docs/production-deployment.md#0-clear-the-public-repository-credential-gate)
+before any release action. The rewrite has not been deployed to the aquarium.
 
-The architecture and migration sequence are documented in [docs/architecture.md](docs/architecture.md).
+## Frameworks and technology stack
+
+| Layer         | Technology                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------- |
+| Runtime       | Node.js 24 LTS, npm 11, strict TypeScript 5.9                                                              |
+| Controller    | Fastify 5 modular monolith with native SSE and Pino logs                                                   |
+| Browser       | React 19, Vite 8, React Router 8, TanStack Query 5                                                         |
+| Contracts     | Zod 4 schemas shared by controller and browser                                                             |
+| Persistence   | Two SQLite WAL databases through Kysely and `better-sqlite3`                                               |
+| ESP transport | MQTT.js 5 using the deployed MQTT 3.1.1/QoS 0 protocol                                                     |
+| Tests         | Vitest, Testing Library, Testcontainers with pinned Mosquitto, Playwright/axe, and an independent fake ESP |
+
+One controller process owns HTTP, SSE, scheduling, persistence, alerts, and the
+MQTT adapter. Mosquitto remains a separate process. The controller is deliberately
+not horizontally scalable because the deployed ESP protocol permits only one
+legacy wire operation in flight.
+
+The global state revision is the contiguous snapshot/SSE cursor. User mutations
+also serialize through a separate operator revision floor, so background device
+or scheduler traffic does not create false edit conflicts while an intervening
+operator change still rejects a stale draft. Forms pin that token when editing
+begins and never substitute a newer live cursor for older form data.
+
+Automatic built-in alert-rule seeding and notification delivery transitions
+(`attempting`, `delivered`, `failed`, and `outcome_unknown`) also commit a global
+revision/outbox event with precise owning-alert invalidations. They deliberately
+do not advance the operator floor because they are background state changes.
+
+HTTP identifiers are capped at 128 characters, aligned with Fastify's route-
+parameter limit. `/api/events` and `/api/logs/export` are GET-only; implicit HEAD
+handling is disabled. Firmware sync accepts Unix epoch seconds from 1 through
+2,147,483,647. Device PWM configuration additionally enforces
+`frequencyHz * 2^resolutionBits <= 80,000,000` across the supported 1-16-bit
+resolution range.
+
+See [the architecture](docs/architecture.md), [feature parity ledger](docs/feature-parity.md),
+and [remaining-work plan](docs/remaining-work-plan.md) for the full design and
+readiness boundary.
+
+## Data, logs, and storage
+
+The database is relational first, not a JSON document store:
+
+- `state.db` is authoritative. Devices, mappings, channels, schedule points,
+  throttles, operations, overrides, alerts, scheduler guards, and revisions are
+  normalized `STRICT` tables with foreign keys and checks.
+- `events.db` contains replayed state events, structured interactions,
+  aggregates, retention runs/policies, and archive metadata. Keeping it separate
+  prevents event maintenance from sharing the authoritative control-state file.
+- JSON columns are reserved for variable-shaped payloads such as versioned
+  operation requests/results, event envelopes, alert details, metadata, and
+  compiled firmware documents. Each has a schema-version column and is validated
+  at the application boundary; raw imported JSON also rejects duplicate keys.
+
+Fastify/Pino service logs are structured JSON on stdout. Queryable operational
+history is written separately to structured `events.db` rows. Authorization,
+cookies, secrets, passwords, and tokens are redacted from Pino fields; durable
+interaction payloads support sensitive-key redaction and are hashed after
+redaction. Routine five-second PWM successes and normal wire acknowledgements
+use the short-lived `raw` class; failures and outcome-unknown events use longer
+operational, audit, or critical classes. Healthy scheduler ticks are not copied
+into the durable event log. Every POST/PUT/PATCH/DELETE response and every HTTP
+5xx response is recorded as method/route-template/status metadata only; healthy
+reads are skipped. Runtime callback failures persist only a sanitized error class
+and name, never messages or stacks. Detached writes report failures through Pino
+and drain before `events.db` closes. Alert transitions remain immediate, while
+repeated unchanged still-true observations are limited to one additional state
+event per hour.
+
+Daily retention is scheduled for 03:00 UTC with a persisted non-overlap guard.
+The live logical event budgets total 6.5 GiB: 512 MiB raw, 2 GiB operational,
+1 GiB aggregate, 2 GiB audit, and 1 GiB critical. Raw rows retain seven days and
+are aggregated before deletion. Longer-lived classes are archived before
+deletion as deterministic NDJSON compressed with native Zstandard, with both
+compressed and uncompressed checksums/counts verified first. The same daily job
+processes deterministic cross-table event candidates in internal batches capped
+at 10,000, then prunes only unreferenced successful PWM operations older than
+seven days, terminal notification deliveries older than 180 days when a newer
+terminal result exists for the same alert/destination, and orphan revision
+metadata in bounded batches, with durable success/failure diagnostics. Pending/
+attempting deliveries and each destination's newest terminal result remain;
+sanitized terminal outcome metadata is retained in `events.db`.
+
+Storage health runs immediately at startup and then every five minutes by
+default without overlap or catch-up. It monitors the lowest free space across
+the state DB, events DB, archive, and backup filesystems; the one-year event
+storage projection; retention failures after the latest successfully completed
+run; archive failures after the latest completed archive; whether the latest
+backup attempt failed; and whether a successful backup is missing or older than
+36 hours. Six built-in typed rules open and recover alerts at a 1 GiB minimum-
+free and 10 GiB projected-year default. Backup freshness is based on the actual
+canonical artifact referenced by the latest successful audit row, not the audit
+row alone. The controller fully verifies that schema-v2 backup and rejects a
+missing, corrupt, replaced, escaped, or symlinked artifact; a stable filesystem
+identity cache avoids redundant verification without hiding later changes. A
+missing verified artifact makes startup create a fresh backup and keeps health
+from reporting a false-green success. The controller creates a backup at 02:00
+UTC and keeps the newest three fully verified backups without deleting unknown
+or damaged entries. Compose uses Docker's compressed `local` log driver with
+five 10 MiB files per service.
 
 ## Local development
 
-Requirements: Node.js 24 and npm 11.
+Requirements: Node.js 24 and npm 11. MQTT is disabled by default.
 
 ```sh
-npm install
+npm ci
 npm run dev
 ```
 
-The Vite UI runs at `http://127.0.0.1:5173` and proxies `/api` to the controller at `http://127.0.0.1:3001`.
+The Vite development UI runs at `http://127.0.0.1:5173` and proxies `/api` to
+the controller at `http://127.0.0.1:3001`. The complete variable/default/
+interlock reference is in
+[the architecture](docs/architecture.md#configuration-reference).
 
-Useful commands:
+The production-built single-origin UI/controller, pinned Mosquitto, and two
+persistent fake ESPs can instead be started with:
 
 ```sh
-npm run check
-npm test
-npm run build
+npm run stack:test:up
+npm run stack:test:status
 ```
 
-The current slice deliberately contains no database migration and does not connect to the production MQTT broker. It establishes the typed boundaries, preserves and tests the legacy ESP framing rules, and proves HTTP-to-SSE-to-React connectivity before actuator control is introduced.
+The UI and API are at `http://127.0.0.1:3001`; the test-only broker is at
+`mqtt://127.0.0.1:18883`. The stack uses only `test/aquarium/*`. Controller
+state, events, archives, backups, broker state, and fake EEPROMs live in named
+`aquarium-test_*` volumes and survive `npm run stack:test:down`. The containers
+run non-root with read-only application filesystems; only those storage volumes
+and `/tmp` are writable.
+
+Useful checks:
+
+```sh
+npm run format:check
+npm run lint
+npm run typecheck
+npm run test:unit
+npm run test:critical
+npm run test:integration
+npm run test:e2e
+npm run build
+npm run verify
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.0.0 .
+```
+
+CI defines six validation jobs: static/unit, critical, real-Mosquitto
+integration, production-Chromium, firmware, and amd64/ARM64 container. It also
+renders the fail-closed production Compose template and rejects tracked/generated
+build artifacts. A separate GHCR `publish-image` job is limited to pushes on the
+repository's default branch and remains skipped until the repository variable
+`AQUARIUM_GHCR_IMAGE` names the intended lowercase GHCR repository. It publishes
+through a run-unique tag, reports the resulting manifest digest, and smoke-tests
+that exact digest on amd64 and ARM64.
+Pull-request code never runs on a Pi, and no deploy job exists.
+
+The six validation jobs still need final current-tree and hosted evidence after
+the public-history credential gate is cleared. GitHub Free provides standard
+hosted Actions without a minutes charge for public repositories; private
+repositories instead use an included quota. Protected branches are available
+on GitHub Free for public repositories, while private-repository branch
+protection requires an eligible paid plan. See GitHub's official
+[Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+documentation.
+
+## Safe storage commands
+
+Every storage command requires explicit paths. The CLI never infers a production
+database and restore refuses existing destination files.
+
+```sh
+npm run storage -- initialize-events --events-db <new-events.db>
+npm run storage -- backup --state-db <existing-state.db> --events-db <existing-events.db> --destination <backup-parent-directory>
+npm run storage -- verify-backup --manifest <backup-directory/manifest.json>
+npm run storage -- integrity --state-db <existing-state.db> --events-db <existing-events.db>
+npm run storage -- retention --events-db <existing-events.db> --archive-dir <archive-directory>
+npm run storage -- verify-archive --events-db <existing-events.db> --archive-dir <archive-directory> --archive-id <archive-id>
+npm run storage -- verify-archive-set --events-db <existing-events.db> --archive-dir <archive-directory> --output <new-archive-set-manifest.json>
+npm run storage -- decode-archive --archive-file <archive.ndjson.zst> --output <new-output.ndjson>
+npm run storage -- restore --manifest <backup-directory/manifest.json> --state-db <new-state.db> --events-db <new-events.db>
+```
+
+`initialize-events` creates and migrates only an absent target. It refuses an
+existing database or SQLite sidecar and atomically publishes the verified new
+file without starting the controller or MQTT.
+
+Backup uses SQLite's online backup API, copies events before state, and records
+SHA-256, byte counts, integrity results, and both copied revision boundaries in
+a schema-v2 manifest. Each database is checkpointed into one standalone file,
+without an untracked WAL sidecar dependency. Verification proves that state
+committed during the copy gap has contiguous outbox coverage. Retained outbox
+rows absent from the copied events database are reset to replay immediately
+after restore; this bounded, recovery-first behavior can temporarily reintroduce
+recently age-pruned events. Legacy schema-v1 manifests are rejected because they
+cannot prove cross-database coherence. Restore first performs the same full
+verification and atomically publishes with no replacement if a destination
+appears during the operation. Perform a restore during a controlled outage,
+restore to new paths, validate them, and only then change the operator-managed
+configuration or roll back to the prior paths. Each backup attempt also appends
+one metadata-only `maintenance.backup` audit interaction to
+the source events database. It records only success/failure and severity—never
+paths, secrets, raw errors, or database payloads—so a later successful backup
+recovers the built-in latest-backup-failed alert. If both backup and diagnostic
+persistence fail, the command surfaces both errors.
+
+Concurrent archive creators use monotonic state transitions: a completed archive
+never returns to pending or failed because another creator lost the race. The
+winner is verified before source deletion, and a losing creator returns the
+same completed artifact without deleting source rows prematurely.
+
+Database backups do not duplicate long-term `.ndjson.zst` files. Back up the
+archive directory separately together with the matching events database. Run
+`verify-archive-set` before and after the copy and preserve/compare its
+deterministic versioned manifest. Archive metadata uses portable filenames, so
+restored archives resolve beneath the explicit replacement directory even when
+legacy rows originally contained absolute paths. The controller does not delete
+verified archives automatically because they may be the only remaining payload
+copy; configure an offsite/archive lifecycle and monitor the projection/free-
+space alerts before production.
+
+## Safe legacy import
+
+The importer has no implicit legacy or production path. Analysis is the default
+and does not open a database; commit requires both explicit flags and stops if
+the complete analysis is invalid.
+
+```sh
+npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-legacy-directory>
+npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-legacy-directory> --commit --state-db <explicit-state.db>
+```
+
+Run and review the dry-run first, back up any intended target, and never repair
+invalid production input silently. The production-shaped `.old/data` snapshot
+was analyzed and committed into a disposable database on 2026-07-15 with source
+fingerprint
+`15580a1ec55c1181db2a5d78f494ba18bc195f47a135b4b700028d5854033275`:
+0 errors, 85 explicit warnings, 11 throttles, 66 channels/schedules, 318 points,
+7 mapping profiles, and 34 pin mappings. The warnings preserve orphan schedules,
+materialize only provably equivalent zero tails/duplicate endpoints, and record
+the intentionally skipped Sketch5/runtime files.
+
+## Remaining release actions
+
+- Revoke the historically exposed Dropbox token, rotate the aquarium Wi-Fi
+  password, and publish only sanitized history. The repository is currently
+  public and untrusted even though secret scanning and push protection are on.
+- Flash firmware 4.0.0 to every deployed ESP32 before enabling actuator work.
+  Older or unexpected versions remain visible but are marked
+  `firmware_outdated`, excluded from schedule/override commands, and identified
+  on the frontend. Firmware 4.0.0 fixes rollover-safe override expiry and forces
+  physical schedule restoration after expiry, PWM reattachment, or schedule
+  replacement. Wire duty remains normalized 0-255; firmware scales it to the
+  configured 1-16-bit range and rescales scheduled/current-overwrite caches and
+  the physical output when resolution is reattached. Its configured NTP
+  synchronization is asynchronous, so an NTP
+  or DNS outage does not delay MQTT or manual-control startup. After any boot,
+  persisted schedule pins remain safely off until NTP or the controller `sync`
+  command confirms fresh time; restored EEPROM time cannot authorize output.
+- Configure the ESP32's ignored local firmware header with both an MQTT username
+  and password plus the intended NTP host, and restrict that plaintext broker
+  listener to the trusted aquarium LAN. The current ESP firmware does not
+  support `mqtts://`; enabling
+  TLS would require another firmware change and physical validation.
+- Configure the protected GitHub/GHCR settings, then set the production
+  Compose `AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
+  `AQUARIUM_CONTROLLER_IMAGE_SHA256` (the 64 hex characters after `sha256:`)
+  values. Configure the Pi bind/storage/broker paths, production MQTT
+  confirmation, and backup/rollback locations. No Pi deploy workflow is
+  enabled. Follow the supervised
+  [Raspberry Pi deployment and rollback runbook](docs/production-deployment.md),
+  including its storage preflight and exact-digest checks.
+- Configure and test a separate backup/offsite lifecycle for the archive
+  directory using `verify-archive-set`; database backups alone do not contain
+  archived event payloads.
+- Select and configure a real `AQUARIUM_ALERT_WEBHOOK_URL` if notifications are
+  wanted; there is deliberately no default destination. Production Compose
+  passes through the URL, destination key, timeout, and paired authentication
+  header variables without storing their values in the repository.
+- Run the documented dry-run again on the final Pi-side source snapshot, review
+  every warning, back up the target, commit the import during a controlled
+  outage, verify health, and retain the prior controller/data for rollback.
+- Perform a supervised hardware soak/cutover. Local tests cannot prove wiring,
+  power-loss behavior, Wi-Fi quality, or the Raspberry Pi's real disk/load.
+
+The conservative current evidence is recorded in
+[docs/readiness-report.md](docs/readiness-report.md).

@@ -11,8 +11,10 @@ import {
   LegacyMqttOutcomeUnknownError,
   LegacyMqttTransport,
   LegacyMqttUnavailableError,
+  type LegacyAnnouncementEvent,
   type LegacyMqttInteraction,
   type LegacyMqttTransportCallbacks,
+  type LegacyExpectedResponse,
   type LegacyWireCommand,
 } from "./legacy-mqtt-transport.js";
 import { createMqttJsConnectionOptions } from "./mqtt-js-client.js";
@@ -212,6 +214,51 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     await transport.stop();
   });
 
+  it("reports original wire byte counts while bounding raw previews", async () => {
+    const client = new InMemoryMqttClient();
+    const interactions: LegacyMqttInteraction[] = [];
+    const announcementEvents: LegacyAnnouncementEvent[] = [];
+    const transport = await readyTransport(client, {
+      onInteraction: (interaction) => interactions.push(interaction),
+      onAnnouncement: (event) => announcementEvents.push(event),
+    });
+    const malformed = "x".repeat(3_000);
+    const ignored = "é".repeat(1_500);
+    const validAnnouncement = JSON.stringify(announcement("A1", "One"));
+
+    client.emitText(topics.announce, malformed);
+    client.emitText("test/aquarium/unsubscribed", ignored);
+    client.emitText(topics.announce, validAnnouncement);
+
+    expect(
+      interactions.find(
+        (interaction) => interaction.kind === "malformed_message",
+      ),
+    ).toMatchObject({
+      kind: "malformed_message",
+      payloadBytes: 3_000,
+      previewTruncated: true,
+      payloadPreview: "x".repeat(2_048),
+    });
+    expect(
+      interactions.find(
+        (interaction) => interaction.kind === "ignored_message",
+      ),
+    ).toMatchObject({
+      kind: "ignored_message",
+      payloadBytes: 3_000,
+      previewTruncated: false,
+      payloadPreview: ignored,
+    });
+    expect(announcementEvents).toMatchObject([
+      {
+        announcement: { id: "A1" },
+        payloadBytes: encoder.encode(validAnnouncement).byteLength,
+      },
+    ]);
+    await transport.stop();
+  });
+
   it("serializes concurrent callers into one global wire operation", async () => {
     const client = new InMemoryMqttClient();
     const transport = await readyTransport(client);
@@ -225,7 +272,11 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       topics.response,
       response("A1", [{ index: 0, response: "o" }]),
     );
-    expect((await first).outcomes[0]?.status).toBe("succeeded");
+    expect((await first).outcomes[0]).toMatchObject({
+      status: "succeeded",
+      response: "o",
+      analogValue: null,
+    });
     await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(2));
     expect(commandPublishes(client)[1]?.payload).toBe("A2 p");
 
@@ -234,6 +285,76 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       response("A2", [{ index: 0, response: "o" }]),
     );
     expect((await second).outcomes[0]?.status).toBe("succeeded");
+    await transport.stop();
+  });
+
+  it("publishes requested discovery only at an idle wire boundary", async () => {
+    const client = new InMemoryMqttClient();
+    const transport = await readyTransport(client);
+    let releaseDiscovery: () => void = () => undefined;
+    const discoveryCanComplete = new Promise<void>((resolve) => {
+      releaseDiscovery = resolve;
+    });
+    client.onPublish = async ({ payload }) => {
+      if (payload === "discover") {
+        await discoveryCanComplete;
+      }
+    };
+
+    const discovery = transport.requestDiscovery();
+    await vi.waitFor(() => expect(client.publishes).toHaveLength(2));
+    const queuedCommand = transport.executeCommands([ping("A1")]);
+    await flushMicrotasks();
+    expect(commandPublishes(client)).toHaveLength(0);
+
+    releaseDiscovery();
+    await expect(discovery).resolves.toBe("published");
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+    client.emitJson(
+      topics.response,
+      response("A1", [{ index: 0, response: "o" }]),
+    );
+    expect((await queuedCommand).outcomes[0]?.status).toBe("succeeded");
+    await transport.stop();
+  });
+
+  it("skips requested discovery while a command batch is active", async () => {
+    const client = new InMemoryMqttClient();
+    const transport = await readyTransport(client);
+    const operation = transport.executeCommands([ping("A1")]);
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+
+    await expect(transport.requestDiscovery()).resolves.toBe("skipped_busy");
+    expect(
+      client.publishes.filter(({ payload }) => payload === "discover"),
+    ).toHaveLength(1);
+
+    client.emitJson(
+      topics.response,
+      response("A1", [{ index: 0, response: "o" }]),
+    );
+    await operation;
+    await transport.stop();
+  });
+
+  it("keeps exact response matching byte-for-byte", async () => {
+    const client = new InMemoryMqttClient();
+    const transport = await readyTransport(client);
+    const operation = transport.executeCommands([ping("A1")]);
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+
+    client.emitJson(
+      topics.response,
+      response("A1", [{ index: 0, response: "o " }]),
+    );
+    expect((await operation).outcomes[0]).toEqual({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "failed",
+      response: "o ",
+      expectedResponse: { kind: "exact", value: "o" },
+    });
     await transport.stop();
   });
 
@@ -442,6 +563,59 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     );
     await transport.stop();
   });
+
+  it.each([
+    ["r 7 0", "succeeded"],
+    ["r 7 4095", "succeeded"],
+    ["r 7 -1", "failed"],
+    ["r 7 4096", "failed"],
+    ["r 7 01", "failed"],
+    ["r 8 1", "failed"],
+    ["r 7 1 extra", "failed"],
+  ] as const)(
+    "validates analog response %s with exact firmware grammar",
+    async (rawResponse, expectedStatus) => {
+      const client = new InMemoryMqttClient();
+      const transport = await readyTransport(client);
+      const operation = transport.executeCommands([analogRead("A1", 7)]);
+      await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+
+      client.emitJson(
+        topics.response,
+        response("A1", [{ index: 0, response: rawResponse }]),
+      );
+      const outcome = (await operation).outcomes[0];
+      expect(outcome).toMatchObject({
+        status: expectedStatus,
+        response: rawResponse,
+      });
+      if (outcome?.status === "failed") {
+        expect(outcome.expectedResponse).toEqual({
+          kind: "analog_read",
+          pin: 7,
+        });
+      } else if (outcome?.status === "succeeded") {
+        expect(outcome.analogValue).toBe(Number(rawResponse.split(" ")[2]));
+      }
+      await transport.stop();
+    },
+  );
+
+  it("rejects analog descriptors outside the firmware pin range", async () => {
+    const client = new InMemoryMqttClient();
+    const transport = await readyTransport(client);
+
+    expect(() =>
+      transport.executeCommands([
+        {
+          command: "A1 r 64",
+          target: { id: "A1" },
+          expectedResponse: { kind: "analog_read", pin: 64 },
+        },
+      ]),
+    ).toThrow(/0 to 63/);
+    await transport.stop();
+  });
 });
 
 async function readyTransport(
@@ -470,12 +644,24 @@ function command(
   return {
     command: rawCommand,
     target: { id: targetId, aliases },
-    expectedResponse,
+    expectedResponse: exactResponse(expectedResponse),
   };
 }
 
 function ping(targetId: string): LegacyWireCommand {
   return command(`${targetId} p`, targetId, "o");
+}
+
+function analogRead(targetId: string, pin: number): LegacyWireCommand {
+  return {
+    command: `${targetId} r ${pin}`,
+    target: { id: targetId },
+    expectedResponse: { kind: "analog_read", pin },
+  };
+}
+
+function exactResponse(value: string): LegacyExpectedResponse {
+  return { kind: "exact", value };
 }
 
 function announcement(id: string, name: string): object {

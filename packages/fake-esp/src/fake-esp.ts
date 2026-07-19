@@ -6,10 +6,15 @@ import type {
   FakeEspTimeSnapshot,
 } from "./persistence.js";
 import { MemoryFakeEspPersistence } from "./persistence.js";
-import type { FakeEspTransport } from "./transport.js";
+import {
+  createFakeEspTopics,
+  FAKE_ESP_TEST_NAMESPACE,
+  type FakeEspTopics,
+  type FakeEspTransport,
+} from "./transport.js";
 
-export const FAKE_ESP_DEFAULT_NAMESPACE = "test/aquarium";
-export const FAKE_ESP_FIRMWARE_VERSION = "3.2w";
+export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
+export const FAKE_ESP_FIRMWARE_VERSION = "4.0.0";
 export const FAKE_ESP_CHUNK_DATA_BYTES = 200;
 export const FAKE_ESP_MAX_CHUNKS = 50;
 export const FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS = 10_000;
@@ -19,16 +24,16 @@ const DEFAULT_DEVICE_NAME = "ESP32_Device";
 const DEFAULT_FREQUENCY = 5_000;
 const DEFAULT_RESOLUTION = 8;
 const MINIMUM_RESTORED_TIME = 1_735_689_600;
+const MINIMUM_INT32 = -2_147_483_648;
+const MAXIMUM_SYNC_TIME = 2_147_483_647;
+const LEDC_SOURCE_CLOCK_HERTZ = 80_000_000;
 const SCHEDULE_INTERVAL_MILLISECONDS = 1_000;
 const OVERRIDE_CHECK_INTERVAL_MILLISECONDS = 200;
 const TIME_SAVE_INTERVAL_MILLISECONDS = 3_600_000;
 const CURRENT_SCHEDULE_BUFFER_BYTES = 4_095;
-
-export interface FakeEspTopics {
-  readonly command: string;
-  readonly announce: string;
-  readonly response: string;
-}
+const MINIMUM_PIN = 0;
+const MAXIMUM_PIN = 63;
+const UINT32_MODULUS = 0x1_0000_0000;
 
 export interface FakeEspResponseFaults {
   readonly delayMilliseconds?: number;
@@ -78,7 +83,7 @@ interface ActiveChannel {
 interface PinState {
   lastValue: number;
   isOverwritten: boolean;
-  overwriteExpiryMilliseconds: number;
+  overwriteStartedAtMilliseconds: number;
 }
 
 interface ChunkAssembly {
@@ -132,27 +137,29 @@ export class FakeEspActor {
   private timeBaseMilliseconds = 0;
   private currentSchedule = "";
   private activeChannels: ActiveChannel[] = [];
-  private lastScheduleUpdateMilliseconds = 0;
-  private lastOverwriteCheckMilliseconds = 0;
-  private lastTimeSaveMilliseconds = 0;
+  private readonly bootClockMilliseconds: number;
+  private lastScheduleUpdateMilliseconds: number;
+  private lastOverwriteCheckMilliseconds: number;
+  private lastTimeSaveMilliseconds: number;
   private responseFaults: Required<FakeEspResponseFaults>;
 
   public constructor(options: FakeEspActorOptions) {
     this.transport = options.transport;
     this.clock = options.clock ?? new SystemFakeEspClock();
+    this.bootClockMilliseconds = this.clock.nowMilliseconds();
+    const bootMilliseconds = this.firmwareMillis(this.bootClockMilliseconds);
+    this.lastScheduleUpdateMilliseconds = bootMilliseconds;
+    this.lastOverwriteCheckMilliseconds = bootMilliseconds;
+    this.lastTimeSaveMilliseconds = bootMilliseconds;
     this.persistence = options.persistence ?? new MemoryFakeEspPersistence();
     this.defaultDeviceName = options.defaultDeviceName ?? DEFAULT_DEVICE_NAME;
     this.firmwareVersion = options.firmwareVersion ?? FAKE_ESP_FIRMWARE_VERSION;
     this.idGenerator = options.idGenerator ?? generateDeviceId;
     this.responseFaults = normalizeResponseFaults(options.responseFaults);
 
-    const namespace = options.namespace ?? FAKE_ESP_DEFAULT_NAMESPACE;
-    assertTestNamespace(namespace);
-    this.topics = {
-      command: `${namespace}/command`,
-      announce: `${namespace}/announce`,
-      response: `${namespace}/response`,
-    };
+    this.topics = createFakeEspTopics(
+      options.namespace ?? FAKE_ESP_DEFAULT_NAMESPACE,
+    );
 
     this.bootFromPersistence();
   }
@@ -162,9 +169,12 @@ export class FakeEspActor {
       return;
     }
     this.connected = true;
-    this.unsubscribe = this.transport.subscribe(this.topics.command, (topic, payload) => {
-      this.receive(topic, payload);
-    });
+    this.unsubscribe = this.transport.subscribe(
+      this.topics.command,
+      (topic, payload) => {
+        this.receive(topic, payload);
+      },
+    );
     this.announcePresence();
   }
 
@@ -216,7 +226,12 @@ export class FakeEspActor {
       lastManualValue: this.lastPinValues.get(pin) ?? 0,
       overwritten: state?.isOverwritten ?? false,
       ...(state?.isOverwritten === true
-        ? { overwriteExpiryMilliseconds: state.overwriteExpiryMilliseconds }
+        ? {
+            overwriteExpiryMilliseconds: toUint32(
+              state.overwriteStartedAtMilliseconds +
+                FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS,
+            ),
+          }
         : {}),
     };
   }
@@ -231,7 +246,9 @@ export class FakeEspActor {
     }
     return (
       this.timeBaseEpochSeconds +
-      Math.floor((this.clock.nowMilliseconds() - this.timeBaseMilliseconds) / 1_000)
+      Math.floor(
+        (this.clock.nowMilliseconds() - this.timeBaseMilliseconds) / 1_000,
+      )
     );
   }
 
@@ -245,46 +262,61 @@ export class FakeEspActor {
   }
 
   public runLoop(): void {
-    const now = this.clock.nowMilliseconds();
+    const clockNow = this.clock.nowMilliseconds();
+    const now = this.firmwareMillis(clockNow);
     this.checkChunkTimeout(now);
 
     if (
       this.timeInitialized &&
-      now - this.lastTimeSaveMilliseconds > TIME_SAVE_INTERVAL_MILLISECONDS
+      uint32Elapsed(now, this.lastTimeSaveMilliseconds) >
+        TIME_SAVE_INTERVAL_MILLISECONDS
     ) {
-      this.persistedTime = { lastSavedEpochSeconds: this.currentEpochSeconds() };
+      this.persistedTime = {
+        lastSavedEpochSeconds: this.currentEpochSeconds(),
+      };
       this.timeBaseEpochSeconds = this.persistedTime.lastSavedEpochSeconds;
-      this.timeBaseMilliseconds = now;
+      this.timeBaseMilliseconds = clockNow;
       this.persistEeprom();
       this.lastTimeSaveMilliseconds = now;
     }
 
-    if (now - this.lastOverwriteCheckMilliseconds >= OVERRIDE_CHECK_INTERVAL_MILLISECONDS) {
+    if (
+      uint32Elapsed(now, this.lastOverwriteCheckMilliseconds) >=
+      OVERRIDE_CHECK_INTERVAL_MILLISECONDS
+    ) {
       this.checkOverwriteExpiries(now);
       this.lastOverwriteCheckMilliseconds = now;
     }
 
     if (
       this.currentSchedule.length > 0 &&
-      now - this.lastScheduleUpdateMilliseconds >= SCHEDULE_INTERVAL_MILLISECONDS
+      uint32Elapsed(now, this.lastScheduleUpdateMilliseconds) >=
+        SCHEDULE_INTERVAL_MILLISECONDS
     ) {
       this.lastScheduleUpdateMilliseconds = now;
       this.processScheduledOutputs();
     }
 
-    this.flushPendingResponses(now);
+    this.flushPendingResponses(clockNow);
   }
 
   private bootFromPersistence(): void {
     const snapshot = this.persistence.read();
     const restoredName = sanitizePrintableAscii(snapshot.deviceName ?? "");
-    this.deviceName = restoredName.length > 0 ? restoredName : this.defaultDeviceName;
+    this.deviceName =
+      restoredName.length > 0 ? restoredName : this.defaultDeviceName;
     const restoredId = sanitizePrintableAscii(snapshot.deviceId ?? "");
     this.deviceId = restoredId.length > 0 ? restoredId : this.idGenerator();
-    this.frequency = validFrequency(snapshot.frequency) ? snapshot.frequency : DEFAULT_FREQUENCY;
+    this.frequency = validFrequency(snapshot.frequency)
+      ? snapshot.frequency
+      : DEFAULT_FREQUENCY;
     this.resolution = validResolution(snapshot.resolution)
       ? snapshot.resolution
       : DEFAULT_RESOLUTION;
+    if (!validPwmConfiguration(this.frequency, this.resolution)) {
+      this.frequency = DEFAULT_FREQUENCY;
+      this.resolution = DEFAULT_RESOLUTION;
+    }
     this.persistedTime = snapshot.time;
     this.persistEeprom();
 
@@ -378,7 +410,9 @@ export class FakeEspActor {
     });
 
     if (responses.length > 0) {
-      this.publishResponse(JSON.stringify({ id: responseId, name: responseName, responses }));
+      this.publishResponse(
+        JSON.stringify({ id: responseId, name: responseName, responses }),
+      );
     }
   }
 
@@ -398,14 +432,25 @@ export class FakeEspActor {
     }
 
     const secondSpace = remainder.indexOf(" ");
-    const command = secondSpace === -1 ? remainder : remainder.slice(0, secondSpace);
+    const command =
+      secondSpace === -1 ? remainder : remainder.slice(0, secondSpace);
     const args = secondSpace === -1 ? "" : remainder.slice(secondSpace + 1);
     return this.handleCommand(command, args);
   }
 
   private handleScheduleCommand(scheduleJson: string): string {
-    if (parseJson(scheduleJson) === undefined) {
+    if (
+      new TextEncoder().encode(scheduleJson).length >
+      CURRENT_SCHEDULE_BUFFER_BYTES
+    ) {
+      return "E: Schedule too large";
+    }
+    const parsed = parseJson(scheduleJson);
+    if (parsed === undefined) {
       return "E: Invalid JSON";
+    }
+    if (!validScheduleDocument(parsed)) {
+      return "E: Invalid schedule";
     }
     this.processSchedule(scheduleJson);
     return "schedule_ok";
@@ -422,8 +467,8 @@ export class FakeEspActor {
       return this.handleEditCommand(args);
     }
     if (command === "sync") {
-      const serverTime = arduinoToInteger(args);
-      if (serverTime > 0) {
+      const serverTime = parseSyncTime(args);
+      if (serverTime !== undefined) {
         this.timeInitialized = true;
         this.timeBaseEpochSeconds = serverTime;
         this.timeBaseMilliseconds = this.clock.nowMilliseconds();
@@ -440,88 +485,147 @@ export class FakeEspActor {
   }
 
   private handleSetCommand(args: string): string {
-    const match = /^\s*([+-]?\d+)\s+([+-]?\d+)\s+([+-]?\d+)/.exec(args);
+    const match = /^\s*([+-]?\d+)\s+([+-]?\d+)\s+([+-]?\d+)\s*$/.exec(args);
     if (match === null) {
       return "E: Invalid arguments";
     }
     const pin = Number(match[1]);
     const value = Number(match[2]);
     const overwrite = Number(match[3]);
+    if (
+      !validFirmwareInteger(pin) ||
+      !validFirmwareInteger(value) ||
+      !validFirmwareInteger(overwrite)
+    ) {
+      return "E: Invalid arguments";
+    }
+    if (!validPin(pin)) {
+      return "E: Invalid pin";
+    }
     if (value < 0 || value > 255 || (overwrite !== 0 && overwrite !== 1)) {
       return "E: Invalid value or overwrite parameter";
     }
 
-    this.attachPin(pin, value);
-    this.lastPinValues.set(pin, value);
+    const pwmValue = scaleNormalizedPwmValue(value, this.resolution);
+    this.attachPin(pin, pwmValue);
+    this.lastPinValues.set(pin, pwmValue);
     this.pinStates.set(pin, {
-      lastValue: value,
+      lastValue: pwmValue,
       isOverwritten: overwrite === 1,
-      overwriteExpiryMilliseconds:
-        overwrite === 1
-          ? this.clock.nowMilliseconds() + FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS
-          : 0,
+      overwriteStartedAtMilliseconds:
+        overwrite === 1 ? this.firmwareMillis() : 0,
     });
     return `s ${pin} ${value} ${overwrite}`;
   }
 
   private handleEditCommand(args: string): string {
-    const values = args.split(" ").slice(0, 4);
-    const newName = values[0] ?? "";
-    const newFrequency = arduinoToInteger(values[1] ?? "");
-    const newResolution = arduinoToInteger(values[2] ?? "");
-    let reattach = false;
+    const match = /^\s*([!-~]{1,31})\s+([+-]?\d+)\s+([+-]?\d+)\s*$/.exec(args);
+    if (match === null) {
+      return "E: Invalid configuration";
+    }
+    const newName = match[1] ?? "";
+    const newFrequency = Number(match[2]);
+    const newResolution = Number(match[3]);
+    if (
+      !validFrequency(newFrequency) ||
+      !validResolution(newResolution) ||
+      !validPwmConfiguration(newFrequency, newResolution)
+    ) {
+      return "E: Invalid configuration";
+    }
+    const reattach =
+      newFrequency !== this.frequency || newResolution !== this.resolution;
+    const priorResolution = this.resolution;
 
     if (newName !== this.deviceName) {
-      this.deviceName = sanitizePrintableAscii(newName);
+      this.deviceName = newName;
     }
-    if (newFrequency !== this.frequency && newFrequency !== 0) {
-      this.frequency = newFrequency;
-      reattach = true;
-    }
-    if (
-      newResolution !== this.resolution &&
-      newResolution >= 1 &&
-      newResolution <= 16
-    ) {
-      this.resolution = newResolution;
-      reattach = true;
-    }
+    this.frequency = newFrequency;
+    this.resolution = newResolution;
     this.persistEeprom();
 
     if (reattach) {
       for (const pin of this.attachedPins) {
-        this.outputValues.set(pin, this.lastPinValues.get(pin) ?? 0);
+        const rescaledValue = rescalePwmValue(
+          this.lastPinValues.get(pin) ?? 0,
+          priorResolution,
+          newResolution,
+        );
+        this.outputValues.set(pin, rescaledValue);
+        this.lastPinValues.set(pin, rescaledValue);
+        const state = this.pinStates.get(pin);
+        if (state !== undefined) {
+          state.lastValue = rescaledValue;
+        }
+        const channel = this.activeChannels.find(
+          (candidate) => candidate.pin === pin,
+        );
+        if (channel !== undefined) {
+          channel.currentValue = -1;
+        }
       }
     }
     return `${this.deviceName} ${this.frequency} ${this.resolution}`;
   }
 
   private handleReadCommand(args: string): string {
-    const match = /^\s*([+-]?\d+)(?:\s+(\S+))?\s*$/.exec(args);
+    const match = /^\s*([+-]?\d+)/.exec(args);
     if (match === null) {
       return "E: Invalid arguments";
     }
-    if (match[2] !== undefined) {
+    if (args.slice(match[0].length).trimStart().length > 0) {
       return "E: Metadata not supported";
     }
     const pin = Number(match[1]);
+    if (!validFirmwareInteger(pin)) {
+      return "E: Invalid arguments";
+    }
+    if (!validPin(pin)) {
+      return "E: Invalid pin";
+    }
+    if (this.attachedPins.has(pin)) {
+      return "E: Pin is configured as output";
+    }
     return `r ${pin} ${this.analogValues.get(pin) ?? 0}`;
   }
 
   private processSchedule(schedule: string): void {
+    if (
+      new TextEncoder().encode(schedule).length > CURRENT_SCHEDULE_BUFFER_BYTES
+    ) {
+      return;
+    }
     const parsed = parseJson(schedule);
     if (parsed === undefined) {
       return;
     }
+    if (!validScheduleDocument(parsed)) {
+      return;
+    }
+    const channels = scheduleChannels(parsed);
+    const nextPins = new Set(channels.map((channel) => channel.pin));
+    for (const previousChannel of this.activeChannels) {
+      if (nextPins.has(previousChannel.pin)) {
+        continue;
+      }
+      this.outputValues.set(previousChannel.pin, 0);
+      this.lastPinValues.set(previousChannel.pin, 0);
+      const state = this.pinStates.get(previousChannel.pin);
+      if (state !== undefined) {
+        state.lastValue = 0;
+        state.isOverwritten = false;
+        state.overwriteStartedAtMilliseconds = 0;
+      }
+    }
     this.persistence.writeSchedule(schedule);
-    this.currentSchedule = truncateUtf8(schedule, CURRENT_SCHEDULE_BUFFER_BYTES);
-    this.activeChannels = scheduleChannels(parsed).map((channel) => ({
+    this.currentSchedule = schedule;
+    this.activeChannels = channels.map((channel) => ({
       pin: channel.pin,
-      currentValue: 0,
+      currentValue: -1,
       type: channel.type,
     }));
 
-    for (const channel of scheduleChannels(parsed)) {
+    for (const channel of channels) {
       if (!this.attachedPins.has(channel.pin)) {
         this.attachPin(channel.pin, 0);
       }
@@ -539,7 +643,9 @@ export class FakeEspActor {
     const minute = this.currentMinuteOfDay();
 
     for (const channel of scheduleChannels(parsed)) {
-      const activeChannel = this.activeChannels.find((candidate) => candidate.pin === channel.pin);
+      const activeChannel = this.activeChannels.find(
+        (candidate) => candidate.pin === channel.pin,
+      );
       if (activeChannel === undefined) {
         continue;
       }
@@ -549,9 +655,14 @@ export class FakeEspActor {
       const targetValue = firmwareScheduledValue(channel.links, minute);
       if (activeChannel.currentValue !== targetValue) {
         const pwmValue = Math.trunc(
-          (targetValue * ((1 << this.resolution) - 1)) / 100,
+          (targetValue * pwmMaximumForResolution(this.resolution)) / 100,
         );
         this.outputValues.set(channel.pin, pwmValue);
+        this.lastPinValues.set(channel.pin, pwmValue);
+        const state = this.pinStates.get(channel.pin);
+        if (state !== undefined) {
+          state.lastValue = pwmValue;
+        }
         activeChannel.currentValue = targetValue;
       }
     }
@@ -559,7 +670,11 @@ export class FakeEspActor {
 
   private checkOverwriteExpiries(now: number): void {
     for (const [pin, state] of this.pinStates) {
-      if (!state.isOverwritten || now < state.overwriteExpiryMilliseconds) {
+      if (
+        !state.isOverwritten ||
+        uint32Elapsed(now, state.overwriteStartedAtMilliseconds) <
+          FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS
+      ) {
         continue;
       }
       state.isOverwritten = false;
@@ -570,6 +685,13 @@ export class FakeEspActor {
         this.outputValues.set(pin, 0);
         this.lastPinValues.set(pin, 0);
         state.lastValue = 0;
+      } else {
+        const channel = this.activeChannels.find(
+          (candidate) => candidate.pin === pin,
+        );
+        if (channel !== undefined) {
+          channel.currentValue = -1;
+        }
       }
     }
   }
@@ -591,34 +713,52 @@ export class FakeEspActor {
     }
 
     const chunkIndex = arduinoToInteger(chunkData.slice(0, firstColon));
-    const totalChunks = arduinoToInteger(chunkData.slice(firstColon + 1, secondColon));
+    const totalChunks = arduinoToInteger(
+      chunkData.slice(firstColon + 1, secondColon),
+    );
+    const chunkIndexValue = chunkData.slice(0, firstColon);
+    const totalChunksValue = chunkData.slice(firstColon + 1, secondColon);
+    const isLastValue = chunkData.slice(secondColon + 1, thirdColon);
     const data = chunkData.slice(thirdColon + 1);
     if (
+      !/^\d+$/.test(chunkIndexValue) ||
+      !/^\d+$/.test(totalChunksValue) ||
       chunkIndex < 0 ||
       chunkIndex >= FAKE_ESP_MAX_CHUNKS ||
       totalChunks < 1 ||
       totalChunks > FAKE_ESP_MAX_CHUNKS ||
-      chunkIndex >= totalChunks
+      chunkIndex >= totalChunks ||
+      (isLastValue !== "0" && isLastValue !== "1") ||
+      (isLastValue === "1") !== (chunkIndex === totalChunks - 1) ||
+      new TextEncoder().encode(data).length > FAKE_ESP_CHUNK_DATA_BYTES
     ) {
       return;
     }
 
-    const now = this.clock.nowMilliseconds();
+    const now = this.firmwareMillis();
     if (
       chunkIndex === 0 ||
       this.chunkAssembly.lastChunkTimeMilliseconds === 0 ||
-      now - this.chunkAssembly.lastChunkTimeMilliseconds >
+      uint32Elapsed(now, this.chunkAssembly.lastChunkTimeMilliseconds) >
         FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS
     ) {
       this.resetChunkAssembly(false);
       this.chunkAssembly.totalChunks = totalChunks;
       this.chunkAssembly.lastChunkTimeMilliseconds = now;
     }
+    if (
+      this.chunkAssembly.totalChunks !== 0 &&
+      this.chunkAssembly.totalChunks !== totalChunks
+    ) {
+      this.resetChunkAssembly(false);
+      return;
+    }
 
-    this.chunkAssembly.chunks[chunkIndex] = truncateUtf8(data, FAKE_ESP_CHUNK_DATA_BYTES);
+    this.chunkAssembly.chunks[chunkIndex] = data;
     this.chunkAssembly.lastChunkTimeMilliseconds = now;
-    const allReceived = Array.from({ length: totalChunks }, (_, index) =>
-      this.chunkAssembly.chunks[index] !== undefined,
+    const allReceived = Array.from(
+      { length: totalChunks },
+      (_, index) => this.chunkAssembly.chunks[index] !== undefined,
     ).every(Boolean);
     if (!allReceived) {
       return;
@@ -636,7 +776,7 @@ export class FakeEspActor {
     if (
       !this.chunkAssembly.complete &&
       this.chunkAssembly.lastChunkTimeMilliseconds > 0 &&
-      now - this.chunkAssembly.lastChunkTimeMilliseconds >
+      uint32Elapsed(now, this.chunkAssembly.lastChunkTimeMilliseconds) >
         FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS
     ) {
       this.resetChunkAssembly(false);
@@ -664,7 +804,10 @@ export class FakeEspActor {
           this.transport.publish(this.topics.response, publishedPayload);
         }
       } else {
-        this.pendingResponses.push({ dueAtMilliseconds, payload: publishedPayload });
+        this.pendingResponses.push({
+          dueAtMilliseconds,
+          payload: publishedPayload,
+        });
       }
     }
   }
@@ -694,18 +837,11 @@ export class FakeEspActor {
       ...(this.persistedTime === undefined ? {} : { time: this.persistedTime }),
     });
   }
-}
 
-function assertTestNamespace(namespace: string): void {
-  if (
-    namespace.length === 0 ||
-    namespace.endsWith("/") ||
-    (namespace !== FAKE_ESP_DEFAULT_NAMESPACE &&
-      !namespace.startsWith(`${FAKE_ESP_DEFAULT_NAMESPACE}/`))
-  ) {
-    throw new Error(
-      `Fake ESP actors are restricted to ${FAKE_ESP_DEFAULT_NAMESPACE} test namespaces`,
-    );
+  private firmwareMillis(
+    clockMilliseconds = this.clock.nowMilliseconds(),
+  ): number {
+    return toUint32(clockMilliseconds - this.bootClockMilliseconds + 1);
   }
 }
 
@@ -715,10 +851,14 @@ function normalizeResponseFaults(
   const delayMilliseconds = faults.delayMilliseconds ?? 0;
   const duplicateResponses = faults.duplicateResponses ?? 0;
   if (!Number.isSafeInteger(delayMilliseconds) || delayMilliseconds < 0) {
-    throw new RangeError("Response delay must be a non-negative integer millisecond value");
+    throw new RangeError(
+      "Response delay must be a non-negative integer millisecond value",
+    );
   }
   if (!Number.isSafeInteger(duplicateResponses) || duplicateResponses < 0) {
-    throw new RangeError("Duplicate response count must be a non-negative integer");
+    throw new RangeError(
+      "Duplicate response count must be a non-negative integer",
+    );
   }
   return {
     delayMilliseconds,
@@ -731,7 +871,9 @@ function normalizeResponseFaults(
 function generateDeviceId(): string {
   let id = "";
   for (let index = 0; index < 8; index += 1) {
-    id += Math.floor(Math.random() * 16).toString(16).toUpperCase();
+    id += Math.floor(Math.random() * 16)
+      .toString(16)
+      .toUpperCase();
   }
   return id;
 }
@@ -746,11 +888,124 @@ function sanitizePrintableAscii(value: string): string {
 }
 
 function validFrequency(value: number | undefined): value is number {
-  return value !== undefined && Number.isInteger(value) && value > 0 && value <= 40_000;
+  return (
+    value !== undefined &&
+    Number.isInteger(value) &&
+    value > 0 &&
+    value <= 40_000
+  );
 }
 
 function validResolution(value: number | undefined): value is number {
-  return value !== undefined && Number.isInteger(value) && value >= 1 && value <= 16;
+  return (
+    value !== undefined && Number.isInteger(value) && value >= 1 && value <= 16
+  );
+}
+
+function validPin(value: number): boolean {
+  return (
+    Number.isInteger(value) && value >= MINIMUM_PIN && value <= MAXIMUM_PIN
+  );
+}
+
+function validFirmwareInteger(value: number): boolean {
+  return (
+    Number.isInteger(value) &&
+    value >= MINIMUM_INT32 &&
+    value <= MAXIMUM_SYNC_TIME
+  );
+}
+
+function validPwmConfiguration(frequency: number, resolution: number): boolean {
+  return frequency * 2 ** resolution <= LEDC_SOURCE_CLOCK_HERTZ;
+}
+
+function pwmMaximumForResolution(resolution: number): number {
+  return 2 ** resolution - 1;
+}
+
+function rescalePwmValue(
+  value: number,
+  sourceResolution: number,
+  targetResolution: number,
+): number {
+  return Math.trunc(
+    (value * pwmMaximumForResolution(targetResolution)) /
+      pwmMaximumForResolution(sourceResolution),
+  );
+}
+
+function scaleNormalizedPwmValue(
+  value: number,
+  targetResolution: number,
+): number {
+  return rescalePwmValue(value, 8, targetResolution);
+}
+
+function parseSyncTime(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) &&
+    parsed >= MINIMUM_RESTORED_TIME &&
+    parsed <= MAXIMUM_SYNC_TIME
+    ? parsed
+    : undefined;
+}
+
+function validScheduleDocument(schedule: unknown): boolean {
+  if (
+    !isJsonRecord(schedule) ||
+    !Array.isArray(schedule.c) ||
+    typeof schedule.syncTime !== "number" ||
+    !Number.isSafeInteger(schedule.syncTime) ||
+    schedule.syncTime < 1 ||
+    schedule.syncTime > MAXIMUM_SYNC_TIME
+  ) {
+    return false;
+  }
+  if (schedule.c.length > MAXIMUM_PIN + 1) {
+    return false;
+  }
+  const seenPins = new Set<number>();
+  for (const rawChannel of schedule.c) {
+    if (
+      !isJsonRecord(rawChannel) ||
+      typeof rawChannel.o !== "number" ||
+      !validPin(rawChannel.o) ||
+      (rawChannel.t !== 108 && rawChannel.t !== 112) ||
+      !Array.isArray(rawChannel.l) ||
+      seenPins.has(rawChannel.o)
+    ) {
+      return false;
+    }
+    for (const rawLink of rawChannel.l) {
+      if (
+        !isJsonRecord(rawLink) ||
+        !validSchedulePoint(rawLink.s) ||
+        !validSchedulePoint(rawLink.d)
+      ) {
+        return false;
+      }
+    }
+    seenPins.add(rawChannel.o);
+  }
+  return true;
+}
+
+function validSchedulePoint(value: unknown): boolean {
+  return (
+    isJsonRecord(value) &&
+    typeof value.t === "number" &&
+    Number.isInteger(value.t) &&
+    value.t >= 0 &&
+    value.t <= 1_439 &&
+    typeof value.p === "number" &&
+    Number.isInteger(value.p) &&
+    value.p >= 0 &&
+    value.p <= 100
+  );
 }
 
 function assertInteger(value: number, label: string): void {
@@ -814,17 +1069,24 @@ function scheduleChannels(schedule: unknown): readonly FirmwareChannel[] {
   });
 }
 
-function firmwareScheduledValue(links: readonly FirmwareLink[], minute: number): number {
+function firmwareScheduledValue(
+  links: readonly FirmwareLink[],
+  minute: number,
+): number {
   for (const link of links) {
     if (minute >= link.sourceTime && minute <= link.targetTime) {
       if (link.targetTime === link.sourceTime) {
         return link.sourcePercentage;
       }
-      const progress = (minute - link.sourceTime) / (link.targetTime - link.sourceTime);
-      return Math.trunc(
-        link.sourcePercentage +
-          (link.targetPercentage - link.sourcePercentage) * progress,
+      // The deployed sketch stores progress as a 32-bit C++ float. Preserve
+      // the intermediate rounding before the final truncating int conversion.
+      const progress = Math.fround(
+        (minute - link.sourceTime) / (link.targetTime - link.sourceTime),
       );
+      const delta = Math.fround(
+        (link.targetPercentage - link.sourcePercentage) * progress,
+      );
+      return Math.trunc(Math.fround(link.sourcePercentage + delta));
     }
   }
   return 0;
@@ -838,10 +1100,11 @@ function djb2Hash(value: string): number {
   return hash;
 }
 
-function truncateUtf8(value: string, maximumBytes: number): string {
-  const bytes = new TextEncoder().encode(value);
-  if (bytes.length <= maximumBytes) {
-    return value;
-  }
-  return new TextDecoder().decode(bytes.slice(0, maximumBytes));
+function toUint32(value: number): number {
+  const remainder = value % UINT32_MODULUS;
+  return remainder < 0 ? remainder + UINT32_MODULUS : remainder;
+}
+
+function uint32Elapsed(now: number, previous: number): number {
+  return toUint32(now - previous);
 }

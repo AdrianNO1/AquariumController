@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { dirname, posix, resolve, win32 } from "node:path";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 
 import type { Kysely, Transaction } from "kysely";
@@ -132,6 +140,34 @@ export const eventArchiveMetadataSchema = z.strictObject({
 
 export type EventArchiveMetadata = z.infer<typeof eventArchiveMetadataSchema>;
 
+const eventArchiveSetEntrySchema = z.strictObject({
+  id: z.string().min(1),
+  filename: z.string().min(1),
+  rangeStartMs: z.number().int().nonnegative(),
+  rangeEndMs: z.number().int().positive(),
+  createdAtMs: z.number().int().nonnegative(),
+  codec: z.literal("zstd"),
+  sha256: sha256Schema,
+  contentSha256: sha256Schema,
+  eventCount: z.number().int().nonnegative(),
+  interactionCount: z.number().int().nonnegative(),
+  aggregateCount: z.number().int().nonnegative(),
+  stateEventCount: z.number().int().nonnegative(),
+  uncompressedBytes: z.number().int().nonnegative(),
+  compressedBytes: z.number().int().nonnegative(),
+  retentionClass: retentionClassSchema.nullable(),
+});
+
+export const eventArchiveSetManifestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  content: z.literal("aquarium-event-archive-set"),
+  archives: z.array(eventArchiveSetEntrySchema),
+});
+
+export type EventArchiveSetManifest = z.infer<
+  typeof eventArchiveSetManifestSchema
+>;
+
 const eventArchiveRowSchema = z.strictObject({
   id: z.string().min(1),
   range_start_ms: z.number().int().nonnegative(),
@@ -207,6 +243,7 @@ export interface VerifiedEventArchive {
 export interface DeletedArchiveRecords {
   readonly interactionsDeleted: number;
   readonly aggregatesDeleted: number;
+  readonly stateEventsDeleted: number;
 }
 
 export async function createEventArchive(
@@ -235,9 +272,10 @@ export async function createEventArchive(
     request.rangeEndMs,
     contentSha256,
   ].join("-");
-  const storagePath = resolve(
+  const storagePath = `${archiveId}.ndjson.zst`;
+  const archiveFile = resolveEventArchiveStoragePath(
     request.archiveDirectory,
-    `${archiveId}.ndjson.zst`,
+    storagePath,
   );
   const counts = countArchiveRecordTypes(records);
   const metadata = eventArchiveMetadataSchema.parse({
@@ -271,6 +309,7 @@ export async function createEventArchive(
   if (existing?.status === "complete") {
     const verified = await verifyCompleteEventArchive(
       request.database,
+      request.archiveDirectory,
       archiveId,
     );
     return { ...verified, created: false };
@@ -279,18 +318,52 @@ export async function createEventArchive(
   await request.database
     .insertInto("event_archives")
     .values({ ...values, status: "pending" })
-    .onConflict((conflict) =>
-      conflict.column("id").doUpdateSet({ ...values, status: "pending" }),
-    )
+    .onConflict((conflict) => conflict.column("id").doNothing())
     .executeTakeFirstOrThrow();
+
+  // A stale creator must never demote a verified archive. Only failed attempts
+  // may be claimed for a retry; concurrent pending creators share the same
+  // content-addressed file and race only on the pending -> complete CAS below.
+  await request.database
+    .updateTable("event_archives")
+    .set({ ...values, status: "pending" })
+    .where("id", "=", archiveId)
+    .where("status", "=", "failed")
+    .executeTakeFirstOrThrow();
+
+  const claimedArchive = await readEventArchive(
+    request.database,
+    request.archiveDirectory,
+    archiveId,
+  );
+  if (claimedArchive.status === "complete") {
+    const verified = await verifyCompleteEventArchive(
+      request.database,
+      request.archiveDirectory,
+      archiveId,
+    );
+    return { ...verified, created: false };
+  }
+  if (claimedArchive.status !== "pending") {
+    throw new Error(
+      `Archive ${archiveId} could not be claimed from status ${claimedArchive.status}`,
+    );
+  }
 
   try {
     await (request.fileWriter ?? defaultEventArchiveFileWriter).writeAtomically(
-      storagePath,
+      archiveFile,
       compressed,
     );
-    const pendingArchive = await readEventArchive(request.database, archiveId);
-    const verifiedRecords = await verifyArchiveFile(pendingArchive);
+    const pendingArchive = await readEventArchive(
+      request.database,
+      request.archiveDirectory,
+      archiveId,
+    );
+    const verifiedRecords = await verifyArchiveFile(
+      pendingArchive,
+      request.archiveDirectory,
+    );
     const completion = await request.database
       .updateTable("event_archives")
       .set({ status: "complete" })
@@ -298,7 +371,22 @@ export async function createEventArchive(
       .where("status", "=", "pending")
       .executeTakeFirstOrThrow();
     if (Number(completion.numUpdatedRows) !== 1) {
-      throw new Error(`Archive ${archiveId} was not pending at completion`);
+      const winner = await readEventArchive(
+        request.database,
+        request.archiveDirectory,
+        archiveId,
+      );
+      if (winner.status === "complete") {
+        const verified = await verifyCompleteEventArchive(
+          request.database,
+          request.archiveDirectory,
+          archiveId,
+        );
+        return { ...verified, created: false };
+      }
+      throw new Error(
+        `Archive ${archiveId} was ${winner.status}, not pending, at completion`,
+      );
     }
     return {
       archive: { ...pendingArchive, status: "complete" },
@@ -306,9 +394,10 @@ export async function createEventArchive(
       created: true,
     };
   } catch (error) {
-    await markArchiveFailed(
+    await markArchiveFailedFromStatus(
       request.database,
       archiveId,
+      "pending",
       metadata,
       error instanceof Error ? error.message : "Non-Error archive failure",
     );
@@ -338,20 +427,25 @@ export async function createDailyEventArchive(
 
 export async function verifyCompleteEventArchive(
   database: Kysely<EventsDatabaseSchema>,
+  archiveDirectory: string,
   archiveId: string,
 ): Promise<VerifiedEventArchive> {
-  const archive = await readEventArchive(database, archiveId);
+  const archive = await readEventArchive(database, archiveDirectory, archiveId);
   if (archive.status !== "complete") {
     throw new Error(
       `Archive ${archiveId} cannot be consumed while status is ${archive.status}`,
     );
   }
   try {
-    return { archive, records: await verifyArchiveFile(archive) };
+    return {
+      archive,
+      records: await verifyArchiveFile(archive, archiveDirectory),
+    };
   } catch (error) {
-    await markArchiveFailed(
+    await markArchiveFailedFromStatus(
       database,
       archiveId,
+      "complete",
       archive.metadata,
       error instanceof Error ? error.message : "Non-Error archive failure",
     );
@@ -359,16 +453,90 @@ export async function verifyCompleteEventArchive(
   }
 }
 
+export async function verifyEventArchiveSet(
+  database: Kysely<EventsDatabaseSchema>,
+  archiveDirectory: string,
+): Promise<EventArchiveSetManifest> {
+  const resolvedArchiveDirectory = resolveArchiveDirectory(archiveDirectory);
+  const directoryInformation = await stat(resolvedArchiveDirectory);
+  if (!directoryInformation.isDirectory()) {
+    throw new TypeError(
+      `Expected an archive directory: ${resolvedArchiveDirectory}`,
+    );
+  }
+
+  const rows = await database
+    .selectFrom("event_archives")
+    .select("id")
+    .where("status", "=", "complete")
+    .orderBy("id")
+    .execute();
+  const filenames = new Set<string>();
+  const archives: EventArchiveSetManifest["archives"][number][] = [];
+  for (const row of rows) {
+    const archive = await readEventArchive(
+      database,
+      resolvedArchiveDirectory,
+      row.id,
+    );
+    if (archive.status !== "complete") {
+      throw new Error(
+        `Archive ${archive.id} changed status during archive-set verification`,
+      );
+    }
+    await verifyArchiveFile(archive, resolvedArchiveDirectory);
+    const filename = archiveStorageFilename(archive.storagePath);
+    if (filenames.has(filename)) {
+      throw new Error(
+        `Complete archives reference duplicate filename ${filename}`,
+      );
+    }
+    filenames.add(filename);
+    archives.push(
+      eventArchiveSetEntrySchema.parse({
+        id: archive.id,
+        filename,
+        rangeStartMs: archive.rangeStartMs,
+        rangeEndMs: archive.rangeEndMs,
+        createdAtMs: archive.createdAtMs,
+        codec: archive.codec,
+        sha256: archive.sha256,
+        contentSha256: archive.metadata.contentSha256,
+        eventCount: archive.eventCount,
+        interactionCount: archive.metadata.interactionCount,
+        aggregateCount: archive.metadata.aggregateCount,
+        stateEventCount: archive.metadata.stateEventCount,
+        uncompressedBytes: archive.uncompressedBytes,
+        compressedBytes: archive.compressedBytes,
+        retentionClass: archive.metadata.retentionClass,
+      }),
+    );
+  }
+  return eventArchiveSetManifestSchema.parse({
+    schemaVersion: 1,
+    content: "aquarium-event-archive-set",
+    archives,
+  });
+}
+
 export async function deleteVerifiedEventArchiveRecords(
   database: Kysely<EventsDatabaseSchema>,
+  archiveDirectory: string,
   archiveId: string,
 ): Promise<DeletedArchiveRecords> {
-  const verified = await verifyCompleteEventArchive(database, archiveId);
+  const verified = await verifyCompleteEventArchive(
+    database,
+    archiveDirectory,
+    archiveId,
+  );
   const interactionIds = verified.records.flatMap((record) =>
     record.recordType === "interaction" ? [record.data.id] : [],
   );
   const aggregateIds = verified.records.flatMap((record) =>
     record.recordType === "aggregate" ? [record.data.id] : [],
+  );
+  const stateEventRevisions = verified.records.flatMap((record) =>
+    record.recordType === "state-event" ? [record.data.revision] : [],
   );
   return database.transaction().execute(async (transaction) => {
     await assertArchiveComplete(transaction, archiveId);
@@ -382,7 +550,11 @@ export async function deleteVerifiedEventArchiveRecords(
       "event_aggregates",
       aggregateIds,
     );
-    return { interactionsDeleted, aggregatesDeleted };
+    const stateEventsDeleted = await deleteStateEventRevisions(
+      transaction,
+      stateEventRevisions,
+    );
+    return { interactionsDeleted, aggregatesDeleted, stateEventsDeleted };
   });
 }
 
@@ -402,6 +574,16 @@ export function decodeEventArchiveBytes(
 ): readonly EventArchiveRecord[] {
   return decodeEventArchiveNdjson(
     zstdDecompressSync(compressed).toString("utf8"),
+  );
+}
+
+export function resolveEventArchiveStoragePath(
+  archiveDirectory: string,
+  storagePath: string,
+): string {
+  return resolve(
+    resolveArchiveDirectory(archiveDirectory),
+    archiveStorageFilename(storagePath),
   );
 }
 
@@ -545,6 +727,7 @@ async function readStateEvents(
 
 async function readEventArchive(
   database: Kysely<EventsDatabaseSchema>,
+  archiveDirectory: string,
   archiveId: string,
 ): Promise<StoredEventArchive> {
   if (archiveId.trim().length === 0) {
@@ -560,6 +743,13 @@ async function readEventArchive(
   const metadata = eventArchiveMetadataSchema.parse(
     parseRequiredJson(parsed.metadata_json, `archive ${archiveId} metadata`),
   );
+  const expectedFilename = `${parsed.id}.ndjson.zst`;
+  if (archiveStorageFilename(parsed.storage_path) !== expectedFilename) {
+    throw new Error(
+      `Archive ${archiveId} storage filename does not match its identifier`,
+    );
+  }
+  resolveEventArchiveStoragePath(archiveDirectory, parsed.storage_path);
   return {
     id: parsed.id,
     rangeStartMs: parsed.range_start_ms,
@@ -578,15 +768,29 @@ async function readEventArchive(
 
 async function verifyArchiveFile(
   archive: StoredEventArchive,
+  archiveDirectory: string,
 ): Promise<readonly EventArchiveRecord[]> {
-  const compressed = await readFile(archive.storagePath);
+  const archiveFile = resolveEventArchiveStoragePath(
+    archiveDirectory,
+    archive.storagePath,
+  );
+  const fileInformation = await lstat(archiveFile);
+  if (!fileInformation.isFile() || fileInformation.isSymbolicLink()) {
+    throw new TypeError(`Expected a regular archive file: ${archiveFile}`);
+  }
+  if (fileInformation.size !== archive.compressedBytes) {
+    throw new Error(`Archive ${archive.id} compressed byte count mismatch`);
+  }
+  const compressed = await readFile(archiveFile);
   if (compressed.byteLength !== archive.compressedBytes) {
     throw new Error(`Archive ${archive.id} compressed byte count mismatch`);
   }
   if (sha256(compressed) !== archive.sha256) {
     throw new Error(`Archive ${archive.id} checksum mismatch`);
   }
-  const uncompressed = zstdDecompressSync(compressed);
+  const uncompressed = zstdDecompressSync(compressed, {
+    maxOutputLength: Math.max(archive.uncompressedBytes, 1),
+  });
   if (uncompressed.byteLength !== archive.uncompressedBytes) {
     throw new Error(`Archive ${archive.id} uncompressed byte count mismatch`);
   }
@@ -652,9 +856,10 @@ function decodeEventArchiveNdjson(
     });
 }
 
-async function markArchiveFailed(
+async function markArchiveFailedFromStatus(
   database: Kysely<EventsDatabaseSchema>,
   archiveId: string,
+  expectedStatus: "pending" | "complete",
   metadata: EventArchiveMetadata,
   message: string,
 ): Promise<void> {
@@ -669,6 +874,7 @@ async function markArchiveFailed(
       metadata_json: serializeCanonicalJson(failedMetadata),
     })
     .where("id", "=", archiveId)
+    .where("status", "=", expectedStatus)
     .executeTakeFirst();
 }
 
@@ -700,6 +906,18 @@ async function deleteIds(
   const result = await transaction
     .deleteFrom(table)
     .where("id", "in", [...ids])
+    .executeTakeFirstOrThrow();
+  return Number(result.numDeletedRows);
+}
+
+async function deleteStateEventRevisions(
+  transaction: Transaction<EventsDatabaseSchema>,
+  revisions: readonly number[],
+): Promise<number> {
+  if (revisions.length === 0) return 0;
+  const result = await transaction
+    .deleteFrom("state_events")
+    .where("revision", "in", [...revisions])
     .executeTakeFirstOrThrow();
   return Number(result.numDeletedRows);
 }
@@ -771,6 +989,36 @@ function countArchiveRecordTypes(records: readonly EventArchiveRecord[]): {
     else stateEventCount += 1;
   }
   return { interactionCount, aggregateCount, stateEventCount };
+}
+
+function resolveArchiveDirectory(archiveDirectory: string): string {
+  if (archiveDirectory.trim().length === 0) {
+    throw new TypeError("Archive directory must not be empty");
+  }
+  return resolve(archiveDirectory);
+}
+
+function archiveStorageFilename(storagePath: string): string {
+  if (storagePath.trim().length === 0) {
+    throw new TypeError("Archive storage path must not be empty");
+  }
+  const filename = win32.isAbsolute(storagePath)
+    ? win32.basename(storagePath)
+    : posix.isAbsolute(storagePath)
+      ? posix.basename(storagePath)
+      : storagePath;
+  if (
+    filename.length === 0 ||
+    filename === "." ||
+    filename === ".." ||
+    posix.basename(filename) !== filename ||
+    win32.basename(filename) !== filename
+  ) {
+    throw new TypeError(
+      "Archive storage path must be a direct filename or legacy absolute path",
+    );
+  }
+  return filename;
 }
 
 function assertPositiveSafeInteger(value: number, label: string): void {

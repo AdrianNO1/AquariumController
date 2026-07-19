@@ -1,8 +1,14 @@
 # AquariumController remaining-work plan
 
-Updated: 2026-07-12  
-Planning baseline: commit `7906b64` (`WIP`) on `codex/aquarium-rewrite`  
-Purpose: handoff plan for completing the rewrite with ordinary Codex mode.
+Updated: 2026-07-19
+
+Inspected working basis: commit `8bb865e` plus the uncommitted rewrite on
+`codex/aquarium-rewrite`
+
+Purpose: execution record and handoff plan. R0-R13 are implemented; their cited
+passes are historical evidence. R14 final current-tree audit is still pending
+after the latest firmware, API, alert/SSE, archive, and backup-artifact changes.
+No currently running stack or completed settled-tree validation is claimed.
 
 This document is the execution plan for all work that remains before the
 repository is locally ready to replace the legacy controller. It is deliberately
@@ -10,17 +16,32 @@ more prescriptive than `architecture.md`: future tasks should implement these
 decisions instead of reopening them unless evidence proves a decision unsafe.
 
 The production aquarium, Raspberry Pi, production broker, credentials, GitHub
-settings, and production data remain out of scope during implementation.
+settings, and live production paths remain out of scope during implementation.
+The operator-supplied production-shaped legacy JSON snapshot is in scope only
+for disposable local import analysis and verification.
 
 ## 1. Completion boundary
 
 Repository work is complete only when the only remaining actions are:
 
-1. Run the finished importer against real production data on the Pi.
-2. Configure GitHub settings, secrets, environments, and runners.
-3. Configure the Pi and production MQTT/database paths.
-4. Deploy locally verified artifacts.
-5. Configure the selected real alert destination.
+1. Revoke the historically exposed Dropbox token, rotate the aquarium Wi-Fi
+   password, and host only sanitized Git history. The repository is currently
+   public and untrusted; secret scanning and push protection are enabled but do
+   not invalidate credentials already disclosed in history.
+2. Flash and identify firmware 4.0.0 on every production ESP32, then complete a
+   controlled hardware/failover soak.
+3. Configure GitHub repository settings and the explicit GHCR image variable,
+   then observe the first CI and immutable-image publication runs and record the
+   published `sha256` digest.
+4. Configure the Pi's production MQTT/database/archive/backup paths and
+   credentials outside the repository.
+5. Back up the legacy installation and databases, repeat the importer dry-run on
+   the Pi, confirm the expected fingerprint/report, and commit only after
+   operator review.
+6. Set the separately required production Compose image-repository and
+   `sha256`-digest inputs, deploy the locally verified image by that digest, run
+   health/integrity/rollback checks, and perform the controlled cutover.
+7. Configure and prove the selected real alert destination.
 
 The following stay explicitly deferred:
 
@@ -46,8 +67,11 @@ Every delegated task must follow these rules:
 - MQTT stays disabled by default. Production MQTT requires production mode,
   an explicit broker, the production namespace, and the exact confirmation
   guard already defined in `configuration.ts`.
-- Treat `.old/**` as read-only. Do not modify ESP firmware without a separate,
-  explicit user approval. Do not flash anything.
+- Treat legacy Python/templates and historical files under `.old/**` as
+  read-only. The user explicitly promoted
+  `.old/slaveCode/ESP32Code/ESP32Code.ino` into the refactor and authorized the
+  firmware 4.0.0 reliability changes. Do not flash hardware from repository
+  implementation tasks.
 - Never read or modify `.env` files. Document variables by name and ask the
   operator to set values.
 - Never push. Commit only coherent milestones after their relevant checks pass.
@@ -98,143 +122,187 @@ the event idempotently into `events.db`.
 
 ### Logging, storage, and compression
 
-- Pino process/service logs go to stdout. Production Compose uses capped,
-  rotated, compressed container logs.
-- Queryable MQTT, scheduler, device, mutation, alert, and error interactions go
-  to structured `events.db` rows through `InteractionRepository`.
+- Pino process/service logs go to stdout. Local and production Compose use
+  capped, rotated, compressed container logs.
+- Queryable MQTT, scheduler, retention, metadata-only backup, HTTP mutation/
+  server-error, and sanitized runtime-callback interactions go to structured
+  `events.db` rows through `InteractionRepository`. State events, not transport
+  rows, remain authoritative for domain mutation details.
 - Secrets and sensitive keys are redacted before persistence; payload hashes
   are calculated after redaction.
 - Critical/audit data is durable. High-volume raw traffic has short retention,
   aggregate summaries, byte budgets, and optional archive-before-delete.
 - Event archives are deterministic NDJSON compressed with Node 24 native
   Zstandard. Checksum, byte counts, schema version, and database status must be
-  verified before source rows can be removed.
+  verified before source rows can be removed. Concurrent creation is monotonic:
+  a completed winner cannot be moved back to pending/failed, and source deletion
+  follows verification of that winner.
 - `state.db` and `events.db` use independent SQLite online backups with a
   manifest, SHA-256, and SQLite integrity check. Restore never overwrites an
   existing path and is performed during a controlled outage.
-- Storage projection targets no more than 10 GB/year. Over-budget state,
-  retention failure, archive failure, backup failure, and low disk space feed
-  the alert system.
+- Backup freshness is based on full verification of the exact canonical
+  `backup-<createdAt>/manifest.json` referenced by the latest successful audit
+  row. Missing, corrupt, replaced, escaped, or symlinked artifacts are not
+  successful backups; there is no scan/fallback to an older directory.
+- Storage projection targets no more than 10 GiB/year by default. Startup and
+  five-minute periodic checks feed low-disk, projection, unresolved retention,
+  unresolved archive, and latest-backup-failed observations into non-reentrant
+  typed alert rules. Successful maintenance clears older failure observations.
 
 ### CI and deployment
 
 - Pull-request code never runs on a Pi runner.
-- CI order is static checks/unit tests, real-broker integration, browser E2E,
-  production build, then container/ARM64 smoke checks.
-- Main may publish an immutable multi-architecture image to GHCR after GitHub
-  settings are configured externally.
+- Executable CI has separate static/unit, critical, real-broker integration,
+  production-browser, firmware, and amd64/ARM64 container lanes. It renders the
+  production Compose template and checks that builds leave no generated source
+  changes. GHCR publishing is gated to default-branch pushes and a
+  nonempty explicit image repository variable.
+- Those are six validation jobs. `publish-image` is a separately gated seventh
+  job, not a validation lane or a Pi deployment job.
+- Main may publish a multi-architecture image through a run-unique tag after
+  GitHub settings are configured externally. The returned manifest digest is
+  the sole immutable deployment input and is smoke-tested on both platforms.
 - A future protected deploy job may run only on an explicitly configured Pi
   runner/environment and is not part of this repository-completion phase.
 - Production LAN traffic is plain HTTP. Do not recreate application-managed
   certificates.
 
+GitHub Free provides standard hosted Actions without a minutes charge for
+public repositories; private repositories use the account's included quota.
+Protected branches are available on Free for public repositories, while private
+branch protection requires an eligible paid plan. See GitHub's official
+[Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+documentation. Public visibility is not a credential-remediation mechanism.
+
 ## 4. Current repository inventory
 
-### Substantially implemented and unit-tested
+### Implemented and locally evidenced
 
-- Workspace, strict TypeScript, format/lint/typecheck/build foundation.
-- Configuration parsing and development/test/production MQTT safety guards.
-- Normalized STRICT SQLite schemas, WAL settings, constraints, indexes, and
-  initial migrations for `state.db` and `events.db`.
-- Atomic state revision/outbox commits and idempotent mirror into `events.db`.
-- SSE formatting, replay, Last-Event-ID precedence, watermark/gap detection,
-  transient heartbeats, resync-required, and bounded-client behavior.
-- Strict duplicate-key-aware JSON parsing.
-- Legacy fixture analyzer, deterministic report, read-only dry run, atomic
-  valid import, duplicate protection, and CLI. Current `.old/data` correctly
-  produces 35 fatal findings and no committed rows.
-- Canonical schedule graph validation/evaluation, legacy compatibility
-  evaluation, half-even rounding, throttle compilation, compact serialization,
-  `syncTime` placement, size checks, and unsigned DJB2 hashing.
-- Legacy MQTT transport state machine: MQTT 3.1.1 options, QoS 0/non-retained,
-  subscribe-before-discover, one global queue, batching, chunk publication,
-  response correlation, and fail-closed outcome-unknown behavior.
-- Structured interaction storage, redaction, Zstandard archives, retention,
-  aggregation, byte usage/projection, and safe SQLite backup/restore primitives.
+- R0-R2 foundation, additive migrations/contracts, and an independent fake ESP
+  with command, chunk, persistence, clock, schedule, and fleet behavior.
+- R3 alert rule evaluation, delay state, open/ack/recover lifecycle,
+  notification intents/outcomes, history API, loopback/HTTPS-guarded webhook
+  adapter, optional one-attempt notification runtime composition, and built-in
+  enabled-device not-online evaluation. Automatic rule seeding and delivery
+  transitions use global revision/outbox events with precise invalidations but
+  do not advance the operator floor.
+- R4 transactional snapshot and revision-checked channel/schedule/throttle/
+  mapping/device/alert-rule mutation APIs. Channel lifecycle owns its UTC
+  schedule atomically and schedule capacity validates the full wire document.
+- R5 persistent device registry, health transitions, durable operation states,
+  exact legacy command builders, guarded MQTT runtime composition, and shutdown.
+- R6 deterministic per-device artifacts, hash no-op, affected-device triggers,
+  coalescing/unknown latches, five-second scheduler, and announce/daily time sync.
+- R7 server-authoritative manual override start/extend/cancel/expire/reconcile,
+  persisted exact pin targets, restart initialization, scheduler overlay, and
+  typed React commands/countdown/operation states without optimistic success.
+- R9 snapshot/SSE coordinator and the reusable React control surface for all 11
+  retained slugs, including channel/schedule/throttle/mapping/device workflows,
+  manual overrides, operation states, conflict handling, and accessible point
+  forms.
+- R10 stable cursor log query/export and alert history/acknowledgement APIs plus
+  URL-backed Logs and Alerts pages with component tests.
+- R11 Pino and durable interaction redaction, MQTT/scheduler/retention logging,
+  explicit retention policy seeding, daily 03:00 UTC retention with stale-run
+  recovery, deterministic cross-table event candidates in internal batches
+  capped at 10,000, state-event retention, seven-day routine PWM operation
+  retention, published outbox/orphan revision pruning, durable maintenance
+  diagnostics, Zstd archive verification, periodic filesystem/projection/failure
+  alerts, metadata-only backup/HTTP outcomes, sanitized runtime-callback errors,
+  recoverable latest-backup-failure alerting, and an explicit-path storage CLI
+  for backup/verify/restore/retention/archive/integrity.
+- R8 uses digest-pinned Mosquitto 2.0.22 in isolated Testcontainers networks.
+  Its transport/runtime suite covers the complete command/chunk/fault/restart
+  matrix and asserts that captured broker traffic never leaves
+  `test/aquarium/*`.
+- R12 runs 17 retry-free Chromium scenarios against production-built assets,
+  fresh SQLite files, the real broker, and two persistent fake ESPs. It covers
+  all routes, CRUD, devices, overrides, logs/alerts, accessibility, responsive
+  layouts, faults, SSE recovery, and controller/fake/broker restarts.
+- R13 provides the pinned multi-stage image, fail-closed production Compose,
+  healthy local controller/broker/two-fake stack, compressed capped logs,
+  non-root/read-only hardening, restart persistence, and amd64 plus emulated
+  ARM64 HTTP/SQLite evidence.
+- Firmware 4.0.0 resolves the four failover defects, is enforced by the
+  registry/reconciliation/frontend gate, keeps MQTT/manual control startup
+  independent of NTP availability, gates boot-loaded schedules on freshly
+  confirmed time, and compiles warning-free with a pinned Arduino/ESP32/library
+  toolchain. Wire duty stays normalized at 0-255 and firmware scales it across
+  configured 1-16-bit output; resolution reattachment rescales scheduled/current-
+  overwrite caches and physical duty. Frequency/resolution pairs enforce
+  `frequencyHz * 2^resolutionBits <= 80,000,000`, and sync accepts epoch seconds
+  1-2,147,483,647. The focused 2026-07-19 compile used 1,036,431 bytes flash,
+  63,180 bytes global RAM, and left 264,500 bytes local.
+- The production-shaped `.old/data` snapshot dry-runs and commits into a
+  disposable SQLite database with zero errors, 85 explicit warnings, and an
+  integrity-clean normalized result. Online backup, manifest verification,
+  restore-to-new-paths, application reopen, and integrity checks pass.
+- CI includes the independent static/unit, critical, integration, browser,
+  firmware, container, and gated immutable-publish lanes.
+- The exact backup-artifact verifier passed its focused 2026-07-19 selection:
+  four files and 21/21 tests. Full settled-tree validation remains pending.
 
-### Code exists but is not yet a completed feature
+### Remaining repository audit work
 
-- `packages/fake-esp` contains a sizeable independent actor, clock,
-  persistence, and in-memory bus, but has no tests and no real MQTT.js adapter.
-- Alert service and webhook notifier code exist, but there are no alert tests,
-  no persisted delay state, no delivery orchestration, and no runtime wiring.
-- Server opens/migrates both databases and runs the outbox mirror, but it
-  intentionally throws if MQTT is enabled.
-- Browser SSE code exists, but there is no state snapshot API and no committed
-  event/query invalidation workflow.
-- Retention and backup primitives are not scheduled or exposed as safe
-  operational commands.
+- Finish the no-retry three-repeat browser stability audit and the clean Linux
+  `npm ci` verification target. The broker audit already passes three exact
+  consecutive runs.
+- Consolidate exact evidence in the parity/readiness/operator documentation and
+  run the final source-safety audit.
+- Do not broaden durable logging to every debug event, healthy read, or
+  five-second healthy tick while closing documentation findings.
 
-### Missing end-to-end surfaces
+### Verification caveat
 
-- No authoritative snapshot or mutation HTTP API beyond health/SSE.
-- No device registry, announcement persistence, reconciliation coordinator,
-  five-second output scheduler, time-sync coordinator, or manual override use
-  case.
-- No logs query/export API.
-- The UI shows only three links; all control pages, logs, and admin are
-  placeholders. There are no web unit tests.
-- No Testcontainers Mosquitto test, Playwright test, Dockerfile, Compose stack,
-  fake-device launcher, or ARM64 smoke test.
-- CI is only `npm ci` followed by `npm run check`.
-
-### Baseline caveat
-
-The previous session reported 102 passing tests, successful typechecking,
-linting, and builds. This planning turn did not rerun them. Phase R0 must
-establish the reproducible baseline from a clean checkout before feature work.
+The working tree contains a large uncommitted implementation. A complete
+settled-tree `npm run verify` passed on 2026-07-13: 89 files/520 unit tests,
+75 files/470 critical tests, every workspace typecheck, lint, formatting, and
+controller/web production builds. A clean-source Linux `npm ci` audit is the
+final reproducibility check now that the Docker-dependent source work and gates
+are resolved.
 
 ## 5. Blocker and decision gates
 
-### Gate D1: Docker/Testcontainers
+### Gate D1: Docker/Testcontainers — resolved
 
-Required before real-broker integration, production Compose, E2E, or ARM64
-verification:
+Docker Desktop 4.81.0 exposes engine 29.6.1 on Linux/amd64. Testcontainers,
+Compose, amd64, and emulated ARM64 evidence all run against the real engine.
+Native Mosquitto remains diagnostic-only and was not substituted for required
+container evidence.
 
-```powershell
-& "C:\Program Files\Docker\Docker\resources\bin\docker.exe" version
-```
+### Gate D2: deployed-firmware output-cache and timer defects — resolved in 4.0.0
 
-Both Client and Server sections must succeed. Previously the Desktop Linux pipe
-returned permission denied because `com.docker.service` was stopped and Codex
-could not obtain elevation. The operator may start Docker Desktop elevated or
-resume after elevation approval is available. Do not substitute a mocked
-broker; native Mosquitto may be used only for diagnostics, not as the required
-Testcontainers evidence.
+The user explicitly approved firmware work. Version 4.0.0 uses unsigned
+elapsed-time comparison across `millis()` rollover; forces the first write after
+boot/schedule replacement; invalidates scheduled caches after overwrite expiry
+and PWM reattachment; and keeps pin bookkeeping synchronized with schedule
+writes. Independent fake tests cover the exact boundary and rollover cases, and
+the real sketch passes its pinned compiler lane. Old/unexpected firmware is
+visible as `firmware_outdated` but receives no actuator work. Flashing the new
+firmware is part of the external release checklist.
 
-Stop condition: if Docker still cannot run after ordinary documented setup,
-record the exact error and stop the integration/container lane. Other lanes may
-continue only if the user asks to proceed around that natural blocker.
+### Gate D3: production-shaped legacy snapshot — resolved for local analysis
 
-### Gate D2: deployed-firmware failover defect
+The user replaced the relevant `.old/data` files with production-shaped data.
+Importer `legacy-json-v2` reports fingerprint
+`15580a1ec55c1181db2a5d78f494ba18bc195f47a135b4b700028d5854033275`,
+zero errors, and 85 explicit warnings; a disposable commit and integrity check
+pass. The Pi-side dry-run/backup/commit remains an external release action and
+must still stop on any changed fingerprint or fatal finding.
 
-The current ESP firmware may not restore a flat scheduled output after a
-120-second override expires because the physical pin changes while
-`activeChannels.currentValue` remains equal to the scheduled target. A server
-cannot fix sudden-controller-death behavior.
+### Gate D4: public history contains exposed credentials — open
 
-Before declaring replacement readiness, the independent fake must reproduce
-this behavior in a focused test. Then request one explicit decision:
-
-1. Approve a minimal firmware reliability change, compile/test it, retain wire
-   compatibility, and leave flashing/rollout as an external task; or
-2. Explicitly accept the failover limitation and keep readiness blocked/noted.
-
-Do not edit the sketch while implementing the rest. If approval is later given,
-the smallest candidate fix is to invalidate the matching cached scheduled
-value when an override expires so the next schedule loop necessarily writes;
-the exact change still requires firmware-focused review and tests.
-
-### Gate D3: legacy fixture validity
-
-The development fixtures are intentionally invalid. This does not block tool
-development. Do not alter `.old/data` to make import green. Unit tests use a
-separate valid fixture for commit behavior and assert the real fixture report.
-
-Production import remains an external execution step. Any production dry-run
-errors must stop deployment; no silent repair is permitted.
+The hosted repository is currently public. Revoke the historical Dropbox token,
+rotate the aquarium Wi-Fi password, then publish a clean-root repository or
+perform and independently verify a complete sensitive-history rewrite. Secret
+scanning and push protection are enabled, but changing visibility or closing an
+alert does not revoke an exposed credential.
 
 ## 6. Dependency and delegation map
+
+Solid implementation work now exists through R7 and R9-R11. The graph remains
+useful as an evidence dependency map: R8/R12/R13 are not bypassed by unit tests.
 
 ```mermaid
 flowchart TD
@@ -259,16 +327,14 @@ flowchart TD
   R13 --> R14["R14: final audit/readiness"]
 ```
 
-Safe parallel lanes after R0:
+Safe final-audit parallel lanes:
 
-- R1 schemas/contracts, R2 fake ESP, and R3 alerts may run in parallel because
-  they should touch separate files. Coordinate `package.json` and
-  `package-lock.json` changes serially.
-- R4 API and R5 MQTT runtime may run in parallel only after contracts and
-  migrations stabilize. Assign ownership of `server.ts`, `app.ts`, and shared
-  contracts to one task at a time.
-- Frontend work starts only after snapshot/mutation contracts stop moving.
-- R8, R12, and R13 require Docker gate D1.
+- Settled-tree verification and documentation can be isolated from the
+  Docker-dependent lanes, with one owner for any shared composition fix.
+- Documentation/readiness audit can proceed without Docker but may not invent
+  integration, browser, or container results.
+- R8 and R13 are complete. R12's implementation is complete and its final
+  no-retry repetition is the remaining browser evidence.
 
 ## 7. Standard task protocol
 
@@ -278,11 +344,12 @@ for R6-R8 and final safety review.
 
 Every task prompt should begin with:
 
-> Read `AGENTS.md`, `docs/remaining-work-plan.md`, `docs/architecture.md`, and
+> Follow the repository instructions supplied by the operator. Read
+> `docs/remaining-work-plan.md`, `docs/architecture.md`, and
 > `docs/feature-parity.md`. Work only on package Rn. Never access the Pi/LAN,
 > production broker/data, `.env`, or modify `.old`. Use test MQTT topics only.
-> Preserve unrelated changes, update parity evidence, run focused checks, and
-> commit only if the package is coherent and green. Never push.
+> Preserve unrelated changes, update parity evidence, and run focused checks.
+> Never stage, commit, or push unless the operator explicitly instructs it.
 
 Every package must end with:
 
@@ -291,12 +358,20 @@ Every package must end with:
 - Relevant parity-matrix rows updated; do not claim `Implemented` without all
   listed unit, real integration, and browser evidence.
 - No skipped/only tests, weakened assertions, generated DBs/logs, or secrets.
-- A coherent commit when all relevant checks pass; otherwise leave a clear
-  handoff and do not make a misleading commit.
+- A clear handoff. Do not stage or commit merely because checks pass; those
+  actions require separate operator instruction.
 
 ## 8. Work packages
 
+The task lists below preserve the original acceptance scope for traceability.
+Read each package's **Current status** before delegating it: completed bullets
+are audit criteria, not instructions to reimplement working code. The remaining
+items are summarized in sections 4 and 10.
+
 ### R0 — Re-establish a clean, reproducible baseline
+
+Current status: **implemented** for repository scripts and test-lane separation.
+Final clean-source Linux evidence is owned by R14.
 
 Effort: small. Dependencies: none. Suggested mode: ordinary.
 
@@ -324,10 +399,13 @@ Acceptance:
 
 - Clean checkout: `npm ci` leaves Git clean.
 - `npm run check` passes.
-- All five workspaces typecheck/build, including fake ESP.
+- All six workspaces typecheck/build, including fake ESP.
 - Test scripts do not inadvertently run Docker or browsers in the unit lane.
 
 ### R1 — Additive runtime migrations and stable HTTP/event contracts
+
+Current status: **implemented at unit level**. Runtime migrations, versioned
+contracts, outbox envelopes, and migration/preflight tests are present.
 
 Effort: medium. Dependencies: R0. Suggested mode: ordinary with careful schema
 review.
@@ -375,6 +453,9 @@ Acceptance:
 
 ### R2 — Complete the independent fake ESP package
 
+Current status: **implemented at unit level**. The independent actor/fleet,
+clock, persistence, chunking, command, schedule, and defect fixtures are present.
+
 Effort: medium/large. Dependencies: R0. Suggested mode: ordinary; use higher
 reasoning only for firmware-semantic review.
 
@@ -397,7 +478,9 @@ Tasks:
   - First-inclusive-link schedule evaluation, integer truncation, UTC minute
     boundaries, and resolution scaling.
   - Override extension and exact 119999/120000-ms expiry boundaries.
-  - The known flat-segment cached-value failover defect (gate D2).
+  - The known cached-value and 32-bit timer failover defects (gate D2):
+    flat-segment override expiry, PWM reattachment, zero-target schedule
+    replacement, and near-rollover override timing.
   - Chunk parsing/reassembly: partial, duplicate, out-of-order, invalid indexes,
     total mismatch, 50/51, data truncation, and ten-second inactivity reset.
   - Delay, drop, malformed, duplicate response faults and reconnect behavior.
@@ -419,6 +502,13 @@ Acceptance:
 
 ### R3 — Complete alerts and webhook notification
 
+Current status: **implemented at application/runtime-composition level**. Alert
+lifecycle, persisted delay/delivery intent, history/acknowledgement,
+one-attempt/interrupted-attempt handling, optional webhook configuration, and
+ordered startup/shutdown exist. Selecting the real destination remains an
+external deployment step; R11 now supplies the operational storage-source
+composition.
+
 Effort: medium. Dependencies: R0 and R1 migration for persisted delay/delivery
 state. Suggested mode: ordinary.
 
@@ -439,8 +529,9 @@ Tasks:
   payload schema, optional auth header, timeout, non-2xx, redaction, and
   deduplication.
 - Enforce HTTPS in production. Development/test HTTP must be loopback only.
-- Add storage/retention/backup/disk failure observations that open/recover
-  operational alerts.
+- Leave storage/retention/backup/disk failure observations to R11, where the
+  system-source schema and notifier-failure recursion policy are defined with
+  the operational jobs that emit them.
 
 Acceptance:
 
@@ -450,6 +541,9 @@ Acceptance:
 - Notification failure never rolls back or loses authoritative alert state.
 
 ### R4 — Snapshot, revision conflict, and configuration mutation API
+
+Current status: **implemented at repository/HTTP/component level**. Snapshot and
+all listed mutation routes exist with transactional revision/outbox tests.
 
 Effort: large. Dependencies: R1. Suggested mode: ordinary, split into R4a/R4b
 if context grows.
@@ -472,10 +566,15 @@ R4b — configuration mutations:
 - Device desired name/frequency/resolution update.
 - Alert rule CRUD/enablement and alert acknowledgement.
 
-Use `expectedRevision` optimistic concurrency on every authoritative mutation.
-Validate it inside the same SQLite transaction as the change. Each real change
-creates exactly one state revision and one outbox event; a no-op must not consume
-a revision.
+Use `expectedRevision` optimistic concurrency on every operator-owned
+authoritative mutation. Validate it inside the same SQLite transaction as the
+change against a serialized operator-commit floor, not by requiring equality
+with the global SSE revision: background runtime commits must not invalidate an
+otherwise current operator draft. Each real operator change creates exactly one
+global state revision/outbox event and advances the operator floor; a no-op must
+consume neither. The browser pins the snapshot token on first draft interaction
+and requires an explicit rebase after a conflict instead of silently submitting
+the latest live revision with old form data.
 
 Suggested endpoints (names may be adjusted once, then frozen):
 
@@ -506,6 +605,10 @@ Acceptance:
   controller layer.
 
 ### R5 — Persistent device registry and MQTT runtime composition
+
+Current status: **implemented at unit/runtime-composition level**. Registry,
+operations, MQTT composition, safety guards, interaction logging, and shutdown
+exist; real-broker evidence belongs to R8.
 
 Effort: large. Dependencies: R1 and stable MQTT transport. Suggested mode:
 higher reasoning.
@@ -545,6 +648,10 @@ Acceptance:
 
 ### R6 — Schedule artifacts, reconciliation, refresh scheduler, and time sync
 
+Current status: **implemented at unit/runtime-composition level**. Artifact,
+trigger, reconciliation, five-second refresh, daily/announce time sync, and
+diagnostic paths exist; real-broker evidence belongs to R8.
+
 Effort: large. Dependencies: R4 and R5. Suggested mode: higher reasoning.
 
 Tasks:
@@ -569,7 +676,11 @@ Tasks:
   - evaluate every active mapped output at UTC minute;
   - apply throttle and explicit mapping/output gain using half-even rounding;
   - resend unchanged values every five seconds as legacy safety refresh;
-  - use 8-bit host PWM and surface resolution mismatch diagnostics.
+  - send normalized 0-255 wire duty; firmware scales it into the configured
+    1-16-bit range, and resolution reattachment rescales scheduled/current-
+    overwrite caches plus physical output;
+  - reject frequency/resolution pairs when
+    `frequencyHz * 2^resolutionBits > 80,000,000`.
 - Implement time sync after announcement and once daily at 05:00 UTC using the
   persisted daily guard. Schedule `syncTime` must never be mistaken for `sync`.
 - Make schedule/config delivery and refresh operations use the global wire queue
@@ -586,6 +697,12 @@ Acceptance:
   partial/mismatch, dropped response, and outcome unknown.
 
 ### R7 — Manual overrides and failover decision
+
+Current status: **implemented; cited passes are historical evidence**. Service, repository,
+routes, scheduler overlay, restart, expiry, unknown outcome, typed
+start/extend/cancel/reconcile UI, authoritative countdown/states, conflict
+refresh, no-optimistic-retry, real-broker, production-browser, and firmware
+4.0.0 failover evidence exist.
 
 Effort: medium plus decision gate. Dependencies: R2, R5, R6. Suggested mode:
 higher reasoning.
@@ -604,16 +721,20 @@ Tasks:
   protocol permits.
 - Run the independent fake tests that expose exact expiry behavior and gate D2.
 
-Acceptance before gate D2 resolution:
+Acceptance (completed):
 
 - 119999/120000-ms, extension, cancel, scheduled/unscheduled pins, controller
   stop/restart, and unknown outcome tests pass.
-- Current firmware defect is documented by an explicit passing compatibility
-  test, not hidden by a fake implementation “fix.”
-- Readiness remains blocked until the user chooses the firmware path or accepts
-  the limitation.
+- Old-firmware behavior is pinned by compatibility fixtures; corrected 4.0.0
+  behavior is pinned separately and compiled from the real sketch.
+- Old/unexpected firmware is visible but excluded from actuator work until the
+  operator flashes 4.0.0.
 
 ### R8 — Real pinned-Mosquitto integration suite
+
+Current status: **implemented; cited passes are historical evidence**. The isolated,
+digest-pinned Mosquitto harness and five transport/runtime integration tests
+cover the required matrix and capture both allowed and forbidden namespaces.
 
 Effort: large. Dependencies: D1, R2, R5-R7. Suggested mode: higher reasoning.
 
@@ -654,6 +775,11 @@ Acceptance:
 
 ### R9 — Functional control frontend for every retained route
 
+Current status: **substantially implemented at component level**. All 11 routes,
+snapshot/SSE state, schedule/channel/throttle/mapping/device editing, conflicts,
+manual-override mutations/countdown/terminal states, and operation states exist.
+Production-built Playwright evidence remains.
+
 Effort: large. Dependencies: stable R4-R7 contracts. Suggested mode: ordinary,
 split by component rather than route duplication.
 
@@ -691,6 +817,10 @@ Acceptance:
 
 ### R10 — Logs and alerts frontend/API completion
 
+Current status: **implemented at API/component level**. Query/export/history/
+acknowledgement routes and Logs/Alerts pages have focused tests; production
+browser evidence remains in R12.
+
 Effort: medium. Dependencies: R3, R4, storage primitives. Suggested mode:
 ordinary.
 
@@ -726,6 +856,21 @@ Acceptance:
 
 ### R11 — Runtime operations: retention, backup, restore, and disk alerts
 
+Current status: **implemented; final settled-tree evidence is pending**.
+Retention policies/scheduler/recovery, interaction
+redaction/logging, state-event and routine PWM retention, outbox/orphan-revision
+pruning, durable maintenance diagnostics, archives, usage projection, and the
+storage CLI exist. Retention iterates deterministic interaction/aggregate/state-
+event candidates in configurable internal batches capped at 10,000. Periodic
+minimum-free-space, projected-year, unresolved retention-failure, unresolved
+archive-failure, and latest-backup-failed observations open/recover typed alerts.
+Backup attempts and HTTP mutation/server-error outcomes record metadata only;
+runtime callback errors store only sanitized class/name. Detached writes drain
+before the events database closes.
+Concurrent archive creators preserve a single monotonic completed winner. Backup
+freshness now verifies the exact canonical schema-v2 artifact instead of trusting
+a historical success row; the focused four-file selection passes 21/21.
+
 Effort: medium. Dependencies: R3 and existing storage primitives. Suggested
 mode: ordinary.
 
@@ -737,6 +882,10 @@ Tasks:
 - Seed explicit retention policies and document their time/byte budgets.
 - Schedule retention/aggregation/archive jobs with injected clock and persisted
   non-overlap guard. A failed job remains visible and never deletes source data.
+- Define an explicit event-volume policy for repeated still-true alert
+  observations, and bound published `state_outbox` history together with the
+  SSE replay floor/gap contract. Never delete an unpublished row or let pruning
+  make a missing revision look contiguous.
 - Add disk-space and annual-ingest projection checks; send observations to the
   alert service.
 - Add safe CLIs/scripts:
@@ -757,8 +906,15 @@ Acceptance:
   corruption rejection, budget deletion, backup, restore, and alert open/recover.
 - Restored DBs migrate/open and contain expected state/events.
 - Retention/archive/backup failure leaves authoritative data intact.
+- Missing backup source files fail before a database can be created as a side
+  effect; simultaneous backup/diagnostic failure surfaces both errors.
 
 ### R12 — Production-built full-stack Playwright E2E
+
+Current status: **implemented; one historical 17/17 pass exists and the final
+current-tree repeat audit is pending**. Seventeen retry-free Chromium scenarios
+run against production builds, real Mosquitto, fresh SQLite files, and two
+persistent fake actors.
 
 Effort: large. Dependencies: D1 and R3-R11. Suggested mode: higher reasoning for
 harness, ordinary for cases.
@@ -795,6 +951,15 @@ Acceptance:
 
 ### R13 — Docker, Compose, local stack, and CI
 
+Current status: **implemented; historical local evidence exists and final
+current-tree validation is pending**. The
+multi-stage image, production single-origin serving, fail-closed production
+template, historically healthy local stack, amd64/read-only/restart checks,
+test-topic capture, and emulated ARM64 migration/HTTP smoke have local evidence.
+Executable integration,
+browser, firmware, container, and guarded immutable-publish CI lanes exist;
+their first hosted GitHub runs and repository settings remain external.
+
 Effort: medium/large. Dependencies: D1 and R8/R12. Suggested mode: ordinary
 with careful operations review.
 
@@ -816,18 +981,24 @@ Container artifacts:
 Document one command that starts the complete local stack and stable local
 service URLs/data paths.
 
-CI jobs:
+Six CI validation jobs:
 
 1. `static-unit`: checkout, Node 24, `npm ci`, format, lint, typecheck, unit,
    production build.
-2. `integration`: Docker health precheck, real Mosquitto/Testcontainers suite,
+2. `critical`: the high-value contract/domain/protocol/fake/controller suite.
+3. `integration`: Docker health precheck, real Mosquitto/Testcontainers suite,
    namespace-safety assertion.
-3. `browser`: install pinned Chromium, build/start full stack, Playwright + axe,
+4. `browser`: install pinned Chromium, build/start full stack, Playwright + axe,
    upload failure artifacts.
-4. `container`: BuildKit build, local amd64 smoke, ARM64 build/emulation smoke,
+5. `firmware`: compile firmware 4.0.0 with the pinned Arduino toolchain.
+6. `container`: BuildKit build, local amd64 smoke, ARM64 build/emulation smoke,
    Compose health, non-root/read-only/volume checks.
-5. `publish` on protected main only: immutable multi-arch GHCR image and digest,
-   after external GitHub permissions are configured.
+
+Separately gated publication job:
+
+1. `publish-image` on the protected default branch only: run-unique multi-arch GHCR publication,
+   exact digest capture, and amd64/ARM64 smoke from that digest after external
+   GitHub permissions are configured.
 
 Do not add a Pi deploy job that can run on pull requests. A protected deployment
 workflow may be documented but remains disabled until the external runner,
@@ -843,6 +1014,10 @@ Acceptance:
 - CI uses `npm ci`; no generated artifacts or secrets enter Git.
 
 ### R14 — Migration/operations documentation and final readiness audit
+
+Current status: **in progress**. D1/D2 and the implementation/evidence lanes are
+resolved; clean-source verification, repeat stability, final safety audit, and
+evidence consolidation remain.
 
 Effort: medium. Dependencies: every previous package and D2 resolution.
 Suggested mode: higher reasoning review.
@@ -876,8 +1051,9 @@ Final audit:
   retries.
 - Demonstrate restart persistence, SSE resync, logs, retention, compression,
   backup/restore, alerts, storage budget, and ARM64 artifact locally.
-- Leave the complete healthy local test stack running unless the user requests
-  otherwise.
+- At final handoff, start the complete local test stack, verify its observed
+  health, and leave it running unless the user requests otherwise. This is a
+  future audit action, not a statement that the stack is running now.
 
 Create `docs/readiness-report.md` containing:
 
@@ -912,20 +1088,16 @@ Create `docs/readiness-report.md` containing:
 
 ## 10. Quota-conscious execution order
 
-Recommended sequence for ordinary-mode delegation:
+Execution status from the current working tree:
 
-1. R0 baseline.
-2. R1, R2, and R3 as separate bounded tasks; parallel only if package-lock and
-   composition files are assigned to one owner.
-3. R4a snapshot/read model, then R4b mutations.
-4. R5 device registry/runtime.
-5. R6 scheduler/reconciliation, then R7 override gate.
-6. R8 real-broker integration.
-7. R9 frontend core, then R10 logs/alerts.
-8. R11 operational wiring.
-9. R12 E2E.
-10. R13 containers/CI.
-11. R14 final audit/readiness.
+1. R8 real-Mosquitto integration is implemented and has passed three
+   consecutive exact historical runs after lifecycle-reset hardening.
+2. R12 production-built Playwright has one historical 17/17 retry-free Chromium
+   pass; its final three-repeat current-tree audit has not started.
+3. R13 Docker/Compose, amd64/ARM64 checks, and CI lanes are implemented.
+4. D2 is resolved by firmware 4.0.0 and exact-version exclusion.
+5. R14 clean-source verification, browser repetition, final readiness
+   consolidation, and the public-history credential gate remain open.
 
 To minimize wasted turns:
 
@@ -935,38 +1107,49 @@ To minimize wasted turns:
   redo the legacy audit or architecture choice.
 - Prefer focused tests during implementation and run `npm run check` once per
   coherent package.
-- Batch dependency/lockfile changes in R0/R1 rather than triggering repeated
-  installs.
+- Avoid new dependencies unless the remaining package truly needs one; the
+  current lockfile already contains Testcontainers, Playwright, and axe.
 - Do not spend browser/container quota before API contracts and runtime behavior
   are stable.
 - Stop on a repeated external prerequisite, safety ambiguity, or production
   behavior decision; report it instead of inventing a fallback.
 
-Conservative ordinary-mode effort is roughly 12–20 active hours if packages
-remain focused. R4, R6-R9, and R12 are the largest slices. Parallel independent
-lanes can reduce elapsed time, but too many concurrent edits to contracts,
-composition, or the lockfile will increase review cost and risk.
+The original quota guidance remains useful for future changes: keep tasks
+bounded by one harness or surface, prefer focused checks during implementation,
+and stop on genuine external or safety blockers rather than inventing fallbacks.
 
-## 11. Final commands to exist
+## 11. Operator commands: present versus planned
 
-Exact script names may be refined in R0/R13, but completion documentation must
-provide equivalents of:
+These commands exist now:
 
 ```sh
 npm ci
 npm run check
+npm run test:unit
+npm run test:critical
 npm run test:integration
 npm run test:e2e
-npm run test:critical
 npm run verify
-npm run stack:test:up
-npm run stack:test:status
-npm run migration:dry-run -- --source <explicit-directory>
-npm run backup -- --state-db <path> --events-db <path> --out <directory>
-npm run backup:verify -- --manifest <path>
-npm run restore -- --manifest <path> --state-db <new-path> --events-db <new-path>
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.0.0 .
+npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory>
+npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory> --commit --state-db <explicit-state.db>
+npm run storage -- backup --state-db <existing-state.db> --events-db <existing-events.db> --destination <backup-parent-directory>
+npm run storage -- verify-backup --manifest <backup-directory/manifest.json>
+npm run storage -- integrity --state-db <existing-state.db> --events-db <existing-events.db>
+npm run storage -- retention --events-db <existing-events.db> --archive-dir <archive-directory>
+npm run storage -- verify-archive --events-db <existing-events.db> --archive-dir <archive-directory> --archive-id <archive-id>
+npm run storage -- verify-archive-set --events-db <existing-events.db> --archive-dir <archive-directory> --output <new-archive-set-manifest.json>
+npm run storage -- decode-archive --archive-file <archive.ndjson.zst> --output <new-output.ndjson>
+npm run storage -- restore --manifest <backup-directory/manifest.json> --state-db <new-state.db> --events-db <new-events.db>
 ```
 
-The final stack command must start the production-built frontend/controller,
-both SQLite databases, pinned Mosquitto, and multiple fake ESP actors; it must
-remain isolated to test topics and survive a controller restart.
+`stack:test:up`, `stack:test:status`, and `stack:test:down` now operate the
+production-built frontend/controller, both SQLite databases, pinned Mosquitto,
+and two persistent fake ESP actors. The local profile is isolated to
+`test/aquarium/*` and preserves its named volumes across ordinary down/up and
+controller/fake recreation.
+
+The import CLI requires an explicit `--source` and defaults to dry-run. Commit
+mode additionally requires an explicit `--state-db`; it must never infer a
+production path. Restore must run during a controlled outage and target new
+files.

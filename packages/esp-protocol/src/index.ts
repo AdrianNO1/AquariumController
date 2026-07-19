@@ -5,21 +5,41 @@ import {
   LEGACY_CHUNK_THRESHOLD_BYTES,
   LEGACY_COMMANDS_PER_DEVICE_PER_BATCH,
   LEGACY_MAX_CHUNKS,
+  isSupportedEsp32PwmConfiguration,
   utf8ByteLength,
 } from "./limits.js";
 
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const espAnnouncementSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  freq: z.number().int().positive(),
-  res: z.number().int().min(1).max(16),
-  status: z.string().min(1),
-  version: z.string().min(1),
-  scheduleHash: z.string().regex(/^\d+$/),
-});
+export const CURRENT_ESP_FIRMWARE_VERSION = "4.0.0";
+
+export function isCurrentEspFirmwareVersion(version: string): boolean {
+  return version === CURRENT_ESP_FIRMWARE_VERSION;
+}
+
+export const espAnnouncementSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    freq: z.number().int().min(1).max(40_000),
+    res: z.number().int().min(1).max(16),
+    status: z.string().min(1),
+    version: z.string().min(1),
+    scheduleHash: z.string().regex(/^\d+$/),
+  })
+  .superRefine((announcement, context) => {
+    if (
+      !isSupportedEsp32PwmConfiguration(announcement.freq, announcement.res)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["res"],
+        message:
+          "PWM frequency and resolution exceed the ESP32 LEDC source-clock limit",
+      });
+    }
+  });
 
 export type EspAnnouncement = z.infer<typeof espAnnouncementSchema>;
 

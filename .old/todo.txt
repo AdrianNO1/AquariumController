@@ -27,3 +27,9 @@ Remember to think about the DSL stuff and pump logic with the architecture.
 Read old_todo.txt just for a little extra context but I don't really understand everything i wrote down in it so don't take everything there seriously. some of those points are probably already done anyway.
 Also read sketch5.html, that's a prototype for a new frontend with switches, DSL code, pumps, etc. It's to give more control but it's WIP and should not be integrated yet, but just keep it in mind when planning stuff because eventually we will add it.
 
+
+
+
+If you are Codex and you are reading this, just ignore the following. Just my personal TODO.
+Figure out wireless upload to ESPs.
+Take a vacation

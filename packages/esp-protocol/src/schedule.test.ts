@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateLegacyScheduleHash,
   legacyScheduleCoreSchema,
+  legacyScheduleDocumentSchema,
   serializeLegacyScheduleCore,
   serializeLegacyScheduleDocument,
   unsignedDjb2,
@@ -40,6 +41,21 @@ describe("legacy compact schedule wire format", () => {
     );
   });
 
+  it("uses the firmware signed-long-safe schedule time range", () => {
+    expect(
+      legacyScheduleDocumentSchema.safeParse({
+        ...goldenSchedule,
+        syncTime: 2_147_483_647,
+      }).success,
+    ).toBe(true);
+    expect(
+      legacyScheduleDocumentSchema.safeParse({
+        ...goldenSchedule,
+        syncTime: 2_147_483_648,
+      }).success,
+    ).toBe(false);
+  });
+
   it("matches firmware/Python unsigned 32-bit DJB2 golden values", () => {
     expect(unsignedDjb2("")).toBe(5_381);
     expect(unsignedDjb2("hello")).toBe(261_238_937);
@@ -66,6 +82,6 @@ describe("legacy compact schedule wire format", () => {
       })),
     };
 
-    expect(() => serializeLegacyScheduleDocument(schedule, 1)).toThrow(/4096/);
+    expect(() => serializeLegacyScheduleDocument(schedule, 1)).toThrow(/4095/);
   });
 });

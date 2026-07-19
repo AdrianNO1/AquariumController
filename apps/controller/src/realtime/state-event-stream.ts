@@ -1,13 +1,12 @@
 import {
-  committedStateEventSchema,
   resyncRequiredEventSchema,
   streamHeartbeatEventSchema,
   streamReadyEventSchema,
   type CommittedStateEvent,
 } from "@aquarium/contracts";
-import { z } from "zod";
 
 import {
+  toCommittedStateEvent,
   type StateDatabaseTransaction,
   type StoredStateOutboxEvent,
 } from "../infrastructure/database/index.js";
@@ -16,6 +15,8 @@ import type { StateDatabaseSchema } from "../infrastructure/database/index.js";
 import { formatCommittedSseEvent, formatTransientSseEvent } from "../sse.js";
 
 const DEFAULT_MAX_QUEUED_FRAMES = 256;
+export const DEFAULT_MAX_REPLAY_EVENTS = 1_000;
+const MAX_REPLAY_EVENTS = 10_000;
 
 export interface StateEventStreamSink {
   write(frame: string): boolean;
@@ -32,18 +33,41 @@ interface ReplayWindow {
   readonly currentRevision: number;
   readonly earliestAvailableRevision: number;
   readonly events: readonly StoredStateOutboxEvent[];
+  readonly replayLimitExceeded: boolean;
 }
 
 interface QueuedFrame {
   readonly value: string;
 }
 
+export interface StateEventStreamHubOptions {
+  readonly maxReplayEvents?: number;
+  readonly onConnectionError?: (error: Error) => void;
+}
+
 export class StateEventStreamHub {
   readonly #database: Kysely<StateDatabaseSchema>;
+  readonly #maxReplayEvents: number;
+  readonly #onConnectionError: (error: Error) => void;
   readonly #connections = new Set<StateEventStreamConnection>();
 
-  constructor(database: Kysely<StateDatabaseSchema>) {
+  constructor(
+    database: Kysely<StateDatabaseSchema>,
+    options: StateEventStreamHubOptions = {},
+  ) {
     this.#database = database;
+    this.#maxReplayEvents =
+      options.maxReplayEvents ?? DEFAULT_MAX_REPLAY_EVENTS;
+    this.#onConnectionError = options.onConnectionError ?? (() => undefined);
+    if (
+      !Number.isSafeInteger(this.#maxReplayEvents) ||
+      this.#maxReplayEvents < 1 ||
+      this.#maxReplayEvents > MAX_REPLAY_EVENTS
+    ) {
+      throw new RangeError(
+        `maxReplayEvents must be an integer between 1 and ${MAX_REPLAY_EVENTS}`,
+      );
+    }
   }
 
   async open(
@@ -63,6 +87,7 @@ export class StateEventStreamHub {
       maxQueuedFrames,
       options.now,
       () => this.#connections.delete(connection),
+      this.#onConnectionError,
     );
     this.#connections.add(connection);
 
@@ -70,7 +95,11 @@ export class StateEventStreamHub {
       const replay = await this.#database
         .transaction()
         .execute((transaction) =>
-          readReplayWindow(transaction, options.afterRevision),
+          readReplayWindow(
+            transaction,
+            options.afterRevision,
+            this.#maxReplayEvents,
+          ),
         );
       connection.finishReplay(replay);
       return connection;
@@ -90,6 +119,12 @@ export class StateEventStreamHub {
   get connectionCount(): number {
     return this.#connections.size;
   }
+
+  closeAllConnections(): void {
+    for (const connection of [...this.#connections]) {
+      connection.close();
+    }
+  }
 }
 
 export class StateEventStreamConnection {
@@ -98,6 +133,7 @@ export class StateEventStreamConnection {
   readonly #maxQueuedFrames: number;
   readonly #now: () => Date;
   readonly #onClose: () => void;
+  readonly #onError: (error: Error) => void;
   readonly #liveBuffer = new Map<number, CommittedStateEvent>();
   readonly #queue: QueuedFrame[] = [];
   #currentRevision: number;
@@ -112,6 +148,7 @@ export class StateEventStreamConnection {
     maxQueuedFrames: number,
     now: () => Date,
     onClose: () => void,
+    onError: (error: Error) => void,
   ) {
     this.#sink = sink;
     this.#requestedRevision = requestedRevision;
@@ -120,6 +157,7 @@ export class StateEventStreamConnection {
     this.#maxQueuedFrames = maxQueuedFrames;
     this.#now = now;
     this.#onClose = onClose;
+    this.#onError = onError;
   }
 
   get closed(): boolean {
@@ -172,6 +210,14 @@ export class StateEventStreamConnection {
         replay.earliestAvailableRevision,
         replay.currentRevision,
         "requested revision predates the replay watermark",
+      );
+      return;
+    }
+    if (replay.replayLimitExceeded) {
+      this.#forceResync(
+        replay.earliestAvailableRevision,
+        replay.currentRevision,
+        "requested replay exceeds the bounded event limit",
       );
       return;
     }
@@ -254,7 +300,11 @@ export class StateEventStreamConnection {
     this.#queue.length = 0;
     this.#liveBuffer.clear();
     this.#onClose();
-    this.#sink.close();
+    try {
+      this.#sink.close();
+    } catch (error) {
+      this.#reportError(toError(error));
+    }
   }
 
   #acceptSequentialEvent(event: CommittedStateEvent): boolean {
@@ -294,7 +344,20 @@ export class StateEventStreamConnection {
   }
 
   #write(frame: QueuedFrame): void {
-    this.#blocked = !this.#sink.write(frame.value);
+    try {
+      this.#blocked = !this.#sink.write(frame.value);
+    } catch (error) {
+      this.close();
+      this.#reportError(toError(error));
+    }
+  }
+
+  #reportError(error: Error): void {
+    try {
+      this.#onError(error);
+    } catch {
+      // Error observers must not break event delivery or connection cleanup.
+    }
   }
 
   #forceResync(
@@ -318,7 +381,7 @@ export class StateEventStreamConnection {
       },
     });
     this.#queue.length = 0;
-    this.#sink.write(formatTransientSseEvent(event));
+    this.#write({ value: formatTransientSseEvent(event) });
     this.close();
   }
 }
@@ -326,6 +389,7 @@ export class StateEventStreamConnection {
 async function readReplayWindow(
   transaction: StateDatabaseTransaction,
   afterRevision: number,
+  maxReplayEvents: number,
 ): Promise<ReplayWindow> {
   const [currentRow, earliestRow] = await Promise.all([
     transaction
@@ -346,27 +410,24 @@ async function readReplayWindow(
     .where("revision", ">", afterRevision)
     .where("revision", "<=", currentRevision)
     .orderBy("revision", "asc")
+    .limit(maxReplayEvents + 1)
     .execute();
-  return { currentRevision, earliestAvailableRevision, events };
-}
-
-function toCommittedStateEvent(
-  event: StoredStateOutboxEvent,
-): CommittedStateEvent {
-  return committedStateEventSchema.parse({
-    revision: event.revision,
-    type: event.event_type,
-    occurredAt: new Date(event.occurred_at_ms).toISOString(),
-    entity: { type: event.entity_type, id: event.entity_id },
-    schemaVersion: event.payload_schema_version,
-    data: z.json().parse(JSON.parse(event.payload_json)),
-  });
+  return {
+    currentRevision,
+    earliestAvailableRevision,
+    events,
+    replayLimitExceeded: events.length > maxReplayEvents,
+  };
 }
 
 function assertRevision(value: number, field: string): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new RangeError(`${field} must be a non-negative safe integer`);
   }
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function assertValidDate(value: Date, field: string): void {

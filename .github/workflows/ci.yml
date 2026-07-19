@@ -3,21 +3,576 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [master, main]
+    branches:
+      - main
+      - master
+  workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: true
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  static-unit:
+    name: Static checks, unit tests, and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Reject tracked generated artifacts
+        run: |
+          generated_files="$(git ls-files -- '*.tsbuildinfo' ':(glob)**/dist/**' ':(glob)coverage/**' ':(glob)playwright-report/**' ':(glob)test-results/**')"
+          if [[ -n "${generated_files}" ]]; then
+            echo "Generated artifacts must not be tracked:" >&2
+            printf '%s\n' "${generated_files}" >&2
+            exit 1
+          fi
+
+      - name: Validate production Compose rendering and Pi preflight syntax
+        env:
+          COMPOSE_DISABLE_ENV_FILE: "1"
+          AQUARIUM_CONTROLLER_IMAGE_REPOSITORY: ghcr.io/example/aquarium-controller
+          AQUARIUM_CONTROLLER_IMAGE_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+          AQUARIUM_HTTP_BIND_ADDRESS: 127.0.0.1
+          AQUARIUM_HTTP_PORT: "3001"
+          AQUARIUM_MQTT_BROKER_URL: mqtt://broker.invalid:1883
+          AQUARIUM_PRODUCTION_MQTT_CONFIRMATION: ENABLE_PRODUCTION_AQUARIUM_MQTT
+          AQUARIUM_STATE_HOST_DIRECTORY: /srv/aquarium/state
+          AQUARIUM_EVENTS_HOST_DIRECTORY: /srv/aquarium/events
+          AQUARIUM_ARCHIVE_HOST_DIRECTORY: /srv/aquarium/archives
+          AQUARIUM_BACKUP_HOST_DIRECTORY: /srv/aquarium/backups
+          AQUARIUM_ALERT_WEBHOOK_URL: https://alerts.invalid/aquarium
+          AQUARIUM_ALERT_WEBHOOK_KEY: ci-primary
+          AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS: "10000"
+          AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME: Authorization
+          AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE: ci-placeholder-secret
+        run: |
+          bash -n deployment/pi-preflight.sh
+          docker compose --file compose.production.yaml config --quiet
+          rendered="$(docker compose --file compose.production.yaml config --format json)"
+          jq --exit-status '
+            .services.controller.image == "ghcr.io/example/aquarium-controller@sha256:0000000000000000000000000000000000000000000000000000000000000000" and
+            .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_URL == "https://alerts.invalid/aquarium" and
+            .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_KEY == "ci-primary" and
+            .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS == "10000" and
+            .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME == "Authorization" and
+            .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE == "ci-placeholder-secret"
+          ' <<<"${rendered}" >/dev/null
+
+          unset AQUARIUM_ALERT_WEBHOOK_URL AQUARIUM_ALERT_WEBHOOK_KEY
+          unset AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS
+          unset AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME
+          unset AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE
+          rendered_without_webhook="$(docker compose --file compose.production.yaml config --format json)"
+          # List-form pass-through renders unresolved entries as null; Compose
+          # omits those entries from the created container environment.
+          jq --exit-status '
+            [
+              .services.controller.environment
+              | to_entries[]
+              | select(.key | startswith("AQUARIUM_ALERT_WEBHOOK_"))
+              | select(.value != null)
+            ]
+            | length == 0
+          ' <<<"${rendered_without_webhook}" >/dev/null
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
-      - run: npm run check
+          cache-dependency-path: package-lock.json
+
+      - name: Pin npm
+        run: npm install --global npm@11.13.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Build production artifacts
+        run: npm run build
+
+      - name: Verify checks and builds leave the repository clean
+        run: |
+          repository_status="$(git status --porcelain --untracked-files=all)"
+          if [[ -n "${repository_status}" ]]; then
+            echo "Checks or builds modified the source tree:" >&2
+            printf '%s\n' "${repository_status}" >&2
+            exit 1
+          fi
+
+  critical:
+    name: Critical regression suite
+    needs: static-unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Pin npm
+        run: npm install --global npm@11.13.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run critical tests
+        run: npm run test:critical
+
+  integration:
+    name: Real-broker integration tests
+    needs: static-unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Verify Docker daemon
+        run: |
+          docker version
+          docker info
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Pin npm
+        run: npm install --global npm@11.13.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run real-broker integration tests
+        run: npm run test:integration
+
+  browser:
+    name: Production browser tests
+    needs: static-unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Verify Docker daemon
+        run: |
+          docker version
+          docker info
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Pin npm
+        run: npm install --global npm@11.13.0
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: npm run test:e2e
+
+      - name: Upload Playwright failure evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            playwright-report/
+            test-results/playwright/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  firmware:
+    name: ESP32 firmware compile
+    needs: static-unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.35.0
+          driver-opts: image=docker.io/moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec # v0.31.2
+
+      - name: Compile pinned ESP32 firmware
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: firmware/esp32/Dockerfile.compile
+          push: false
+          cache-from: type=gha,scope=esp32-firmware
+          cache-to: type=gha,mode=max,scope=esp32-firmware
+
+  container:
+    name: Production container and ARM64 smoke tests
+    needs: static-unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Verify Docker daemon and Compose
+        run: |
+          docker version
+          docker info
+          docker compose version
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 # qemu-v10.2.3-68
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.35.0
+          driver-opts: image=docker.io/moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec # v0.31.2
+
+      - name: Build native production image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: aquarium-controller:local
+          cache-from: type=gha,scope=controller-amd64
+          cache-to: type=gha,mode=max,scope=controller-amd64
+
+      - name: Start native Compose stack
+        run: >-
+          docker compose --file compose.local.yaml --profile test up
+          --detach --wait --wait-timeout 180 --no-build
+
+      - name: Verify native health and container hardening
+        run: |
+          curl --fail --show-error --silent http://127.0.0.1:3001/api/health/ready
+          test "$(docker compose --file compose.local.yaml --profile test exec -T controller id -u)" = "1000"
+          controller_id="$(docker compose --file compose.local.yaml --profile test ps --quiet controller)"
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "${controller_id}")" = "true"
+          docker compose --file compose.local.yaml --profile test exec -T controller touch /tmp/ci-writable-check
+
+      - name: Verify native restart recovery
+        run: |
+          controller_id="$(docker compose --file compose.local.yaml --profile test ps --quiet controller)"
+          started_before="$(docker inspect --format '{{.State.StartedAt}}' "${controller_id}")"
+          docker compose --file compose.local.yaml --profile test restart controller
+          docker compose --file compose.local.yaml --profile test up --detach --wait --wait-timeout 120 --no-build --no-recreate controller
+          started_after="$(docker inspect --format '{{.State.StartedAt}}' "${controller_id}")"
+          test "${started_before}" != "${started_after}"
+          curl --fail --show-error --silent http://127.0.0.1:3001/api/health/ready
+
+      - name: Stop native Compose stack
+        if: always()
+        run: >-
+          docker compose --file compose.local.yaml --profile test down
+          --volumes --remove-orphans --timeout 60
+
+      - name: Build ARM64 production image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/arm64
+          load: true
+          tags: aquarium-controller:ci-arm64
+          cache-from: type=gha,scope=controller-arm64
+          cache-to: type=gha,mode=max,scope=controller-arm64
+
+      - name: Start emulated ARM64 controller
+        run: |
+          docker volume create aquarium-ci-arm64-data
+          docker run --detach \
+            --name aquarium-ci-arm64 \
+            --platform linux/arm64 \
+            --read-only \
+            --user 1000:1000 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --publish 127.0.0.1:3002:3001 \
+            --env NODE_ENV=production \
+            --env AQUARIUM_RUNTIME_MODE=test \
+            --env AQUARIUM_MQTT_ENABLED=false \
+            --env AQUARIUM_STATE_DB_PATH=/var/lib/aquarium/state/state.db \
+            --env AQUARIUM_EVENTS_DB_PATH=/var/lib/aquarium/events/events.db \
+            --env AQUARIUM_ARCHIVE_DIRECTORY=/var/lib/aquarium/archives \
+            --env AQUARIUM_BACKUP_DIRECTORY=/var/lib/aquarium/backups \
+            --volume aquarium-ci-arm64-data:/var/lib/aquarium \
+            aquarium-controller:ci-arm64
+
+      - name: Verify ARM64 HTTP and database storage
+        run: |
+          deadline=$((SECONDS + 180))
+          until [ "$(docker inspect --format '{{.State.Health.Status}}' aquarium-ci-arm64)" = "healthy" ]; do
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              docker logs aquarium-ci-arm64
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --show-error --silent http://127.0.0.1:3002/api/health/ready
+          curl --fail --show-error --silent --output /tmp/arm64-snapshot.json http://127.0.0.1:3002/api/snapshot
+          docker stop --time 60 aquarium-ci-arm64
+          docker run --rm --platform linux/arm64 --user 1000:1000 --volume aquarium-ci-arm64-data:/var/lib/aquarium aquarium-controller:ci-arm64 node apps/controller/dist/storage-cli.js integrity --state-db /var/lib/aquarium/state/state.db --events-db /var/lib/aquarium/events/events.db
+
+      - name: Tear down all container smoke resources
+        if: always()
+        run: |
+          docker compose --file compose.local.yaml --profile test down --volumes --remove-orphans --timeout 60 || true
+          docker rm --force aquarium-ci-arm64 2>/dev/null || true
+          docker volume rm --force aquarium-ci-arm64-data 2>/dev/null || true
+
+  publish-image:
+    name: Publish and verify multi-architecture image
+    if: >-
+      success() &&
+      github.event_name == 'push' &&
+      github.ref_name == github.event.repository.default_branch &&
+      vars.AQUARIUM_GHCR_IMAGE != ''
+    needs:
+      - static-unit
+      - critical
+      - integration
+      - browser
+      - firmware
+      - container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-digest: ${{ steps.publish.outputs.digest }}
+      image-reference: ${{ steps.report-image.outputs.image-reference }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Validate GHCR image variable
+        env:
+          AQUARIUM_GHCR_IMAGE: ${{ vars.AQUARIUM_GHCR_IMAGE }}
+        run: |
+          if [[ ! "${AQUARIUM_GHCR_IMAGE}" =~ ^ghcr\.io/[a-z0-9]+([._-][a-z0-9]+)*/[a-z0-9]+([._/-][a-z0-9]+)*$ ]]; then
+            echo "AQUARIUM_GHCR_IMAGE must be a lowercase ghcr.io image name without a tag or digest." >&2
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0 # qemu-v10.2.3-68
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.35.0
+          driver-opts: image=docker.io/moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec # v0.31.2
+
+      - name: Sign in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse to replace the run-unique publication tag
+        env:
+          AQUARIUM_GHCR_IMAGE: ${{ vars.AQUARIUM_GHCR_IMAGE }}
+        run: |
+          publish_tag="${AQUARIUM_GHCR_IMAGE}:sha-${GITHUB_SHA}-run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          set +e
+          inspect_output="$(docker manifest inspect "${publish_tag}" 2>&1)"
+          inspect_status=$?
+          set -e
+          if [[ "${inspect_status}" -eq 0 ]]; then
+            echo "The run-unique publication tag already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+          if grep --extended-regexp --ignore-case --quiet '(manifest unknown|no such manifest)' <<<"${inspect_output}"; then
+            echo "The run-unique publication tag is unused; publication may proceed."
+            exit 0
+          fi
+          echo "Could not prove that the run-unique publication tag is absent; refusing to publish." >&2
+          printf '%s\n' "${inspect_output}" >&2
+          exit 1
+
+      - name: Build and publish run-unique image
+        id: publish
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ vars.AQUARIUM_GHCR_IMAGE }}:sha-${{ github.sha }}-run-${{ github.run_id }}-${{ github.run_attempt }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=controller-multiarch
+          cache-to: type=gha,mode=max,scope=controller-multiarch
+
+      - name: Capture immutable published digest
+        id: report-image
+        env:
+          AQUARIUM_GHCR_IMAGE: ${{ vars.AQUARIUM_GHCR_IMAGE }}
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          if [[ ! "${IMAGE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "The publish action did not return a valid manifest digest." >&2
+            exit 1
+          fi
+          image_reference="${AQUARIUM_GHCR_IMAGE}@${IMAGE_DIGEST}"
+          echo "image-reference=${image_reference}" >>"${GITHUB_OUTPUT}"
+          echo "### Published controller image" >>"${GITHUB_STEP_SUMMARY}"
+          echo "\`${image_reference}\`" >>"${GITHUB_STEP_SUMMARY}"
+          printf 'Published immutable image: %s\n' "${image_reference}"
+
+      - name: Smoke exact published digest on amd64 and arm64
+        env:
+          AQUARIUM_GHCR_IMAGE: ${{ vars.AQUARIUM_GHCR_IMAGE }}
+          IMAGE_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          image_reference="${AQUARIUM_GHCR_IMAGE}@${IMAGE_DIGEST}"
+          resource_prefix="aquarium-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          cleanup() {
+            for suffix in amd64 arm64; do
+              docker rm --force "${resource_prefix}-${suffix}" >/dev/null 2>&1 || true
+              docker volume rm --force "${resource_prefix}-${suffix}-data" >/dev/null 2>&1 || true
+            done
+          }
+          trap cleanup EXIT
+          cleanup
+
+          smoke_platform() {
+            local platform="$1"
+            local suffix="$2"
+            local container_name="${resource_prefix}-${suffix}"
+            local volume_name="${resource_prefix}-${suffix}-data"
+            local deadline
+            local health_status
+
+            docker pull --platform "${platform}" "${image_reference}"
+            docker volume create "${volume_name}" >/dev/null
+            docker run --detach \
+              --name "${container_name}" \
+              --platform "${platform}" \
+              --read-only \
+              --user 1000:1000 \
+              --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+              --env NODE_ENV=production \
+              --env AQUARIUM_RUNTIME_MODE=test \
+              --env AQUARIUM_MQTT_ENABLED=false \
+              --env AQUARIUM_STATE_DB_PATH=/var/lib/aquarium/state/state.db \
+              --env AQUARIUM_EVENTS_DB_PATH=/var/lib/aquarium/events/events.db \
+              --env AQUARIUM_ARCHIVE_DIRECTORY=/var/lib/aquarium/archives \
+              --env AQUARIUM_BACKUP_DIRECTORY=/var/lib/aquarium/backups \
+              --volume "${volume_name}:/var/lib/aquarium" \
+              "${image_reference}" >/dev/null
+
+            deadline=$((SECONDS + 180))
+            while true; do
+              health_status="$(docker inspect --format '{{.State.Health.Status}}' "${container_name}")"
+              if [[ "${health_status}" == "healthy" ]]; then
+                break
+              fi
+              if [[ "${health_status}" == "unhealthy" || "${SECONDS}" -ge "${deadline}" ]]; then
+                docker logs "${container_name}"
+                return 1
+              fi
+              sleep 2
+            done
+
+            docker exec "${container_name}" node -e "fetch('http://127.0.0.1:3001/api/health/ready').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))"
+            docker stop --time 60 "${container_name}" >/dev/null
+            docker run --rm \
+              --platform "${platform}" \
+              --user 1000:1000 \
+              --volume "${volume_name}:/var/lib/aquarium" \
+              "${image_reference}" \
+              node apps/controller/dist/storage-cli.js integrity \
+              --state-db /var/lib/aquarium/state/state.db \
+              --events-db /var/lib/aquarium/events/events.db
+            docker rm "${container_name}" >/dev/null
+            docker volume rm "${volume_name}" >/dev/null
+          }
+
+          smoke_platform linux/amd64 amd64
+          smoke_platform linux/arm64 arm64

@@ -4,12 +4,41 @@ import {
   assertLegacyScheduleFits,
   batchLegacyCommands,
   createEspTopicSet,
+  CURRENT_ESP_FIRMWARE_VERSION,
   encodeLegacyMessage,
+  espAnnouncementSchema,
+  isSupportedEsp32PwmConfiguration,
+  isCurrentEspFirmwareVersion,
   LEGACY_CHUNK_DATA_BYTES,
   utf8ByteLength,
 } from "./index.js";
 
 describe("legacy ESP protocol", () => {
+  it("requires the refactored reliability firmware exactly", () => {
+    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("4.0.0");
+    expect(isCurrentEspFirmwareVersion("4.0.0")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("3.2w")).toBe(false);
+    expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);
+  });
+
+  it("rejects PWM pairs the ESP32 LEDC source clock cannot represent", () => {
+    const announcement = {
+      id: "A1",
+      name: "Main",
+      freq: 40_000,
+      res: 10,
+      status: "online",
+      version: "4.0.0",
+      scheduleHash: "0",
+    };
+
+    expect(isSupportedEsp32PwmConfiguration(announcement.freq, 10)).toBe(true);
+    expect(espAnnouncementSchema.safeParse(announcement).success).toBe(true);
+    expect(
+      espAnnouncementSchema.safeParse({ ...announcement, res: 11 }).success,
+    ).toBe(false);
+  });
+
   it("keeps payloads at the 256-byte boundary unchunked", () => {
     const payload = "x".repeat(256);
 
@@ -70,8 +99,9 @@ describe("legacy ESP protocol", () => {
     ]);
   });
 
-  it("rejects schedules larger than the firmware JSON buffer", () => {
-    expect(() => assertLegacyScheduleFits("x".repeat(4097))).toThrow(/4096/);
+  it("reserves the terminating NUL byte in the firmware schedule buffer", () => {
+    expect(() => assertLegacyScheduleFits("x".repeat(4095))).not.toThrow();
+    expect(() => assertLegacyScheduleFits("x".repeat(4096))).toThrow(/4095/);
   });
 
   it("keeps test topics isolated", () => {

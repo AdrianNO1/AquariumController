@@ -1,28 +1,147 @@
 import { z } from "zod";
 import { join, resolve } from "node:path";
 
+import { identifierSchema } from "@aquarium/contracts";
+
+import { validateWebhookAlertNotifierOptions } from "./infrastructure/notifications/webhook-alert-notifier.js";
+
 const PRODUCTION_MQTT_CONFIRMATION = "ENABLE_PRODUCTION_AQUARIUM_MQTT";
 
 const environmentSchema = z
   .object({
     AQUARIUM_HOST: z.string().min(1).default("127.0.0.1"),
     AQUARIUM_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
+    AQUARIUM_SSE_REPLAY_LIMIT: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(10_000)
+      .default(1_000),
+    AQUARIUM_WEB_ROOT: z.string().min(1).optional(),
     AQUARIUM_DATA_DIRECTORY: z.string().min(1).optional(),
     AQUARIUM_STATE_DB_PATH: z.string().min(1).optional(),
     AQUARIUM_EVENTS_DB_PATH: z.string().min(1).optional(),
     AQUARIUM_ARCHIVE_DIRECTORY: z.string().min(1).optional(),
     AQUARIUM_BACKUP_DIRECTORY: z.string().min(1).optional(),
+    AQUARIUM_BACKUP_FRESHNESS_THRESHOLD_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(2_592_000_000)
+      .default(129_600_000),
+    AQUARIUM_RETENTION_STALE_RUN_AFTER_MS: z.coerce
+      .number()
+      .int()
+      .min(60_000)
+      .max(604_800_000)
+      .default(21_600_000),
+    AQUARIUM_STORAGE_HEALTH_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(10_000)
+      .max(86_400_000)
+      .default(300_000),
+    AQUARIUM_STORAGE_MINIMUM_FREE_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(1_073_741_824),
+    AQUARIUM_STORAGE_MAXIMUM_PROJECTED_YEAR_BYTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(10_737_418_240),
+    AQUARIUM_ALERT_WEBHOOK_URL: z.string().min(1).optional(),
+    AQUARIUM_ALERT_WEBHOOK_KEY: z.string().min(1).optional(),
+    AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(60_000)
+      .optional(),
+    AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME: z.string().min(1).optional(),
+    AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE: z.string().min(1).optional(),
     AQUARIUM_RUNTIME_MODE: z
       .enum(["development", "test", "production"])
       .default("development"),
     AQUARIUM_MQTT_ENABLED: z.enum(["true", "false"]).default("false"),
     AQUARIUM_MQTT_BROKER_URL: z.string().url().optional(),
     AQUARIUM_MQTT_TOPIC_NAMESPACE: z.enum(["test", "production"]).optional(),
+    AQUARIUM_MQTT_RESPONSE_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .min(100)
+      .max(60_000)
+      .default(5_000),
+    AQUARIUM_MQTT_DISCOVERY_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(3_600_000)
+      .default(60_000),
+    AQUARIUM_DEVICE_ANNOUNCEMENT_PERSIST_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(1_000)
+      .max(3_600_000)
+      .default(30_000),
+    AQUARIUM_DEVICE_STALE_AFTER_MS: z.coerce
+      .number()
+      .int()
+      .min(2_000)
+      .max(86_400_000)
+      .default(90_000),
+    AQUARIUM_DEVICE_OFFLINE_AFTER_MS: z.coerce
+      .number()
+      .int()
+      .min(3_000)
+      .max(604_800_000)
+      .default(300_000),
+    AQUARIUM_DEVICE_HEALTH_SWEEP_INTERVAL_MS: z.coerce
+      .number()
+      .int()
+      .min(500)
+      .max(60_000)
+      .default(5_000),
     AQUARIUM_PRODUCTION_MQTT_CONFIRMATION: z.string().optional(),
-    AQUARIUM_TEST_DOCKER_BROKER_HOST: z.string().min(1).optional(),
     NODE_ENV: z.string().optional(),
   })
   .superRefine((environment, context) => {
+    if (
+      environment.AQUARIUM_DEVICE_ANNOUNCEMENT_PERSIST_INTERVAL_MS >=
+      environment.AQUARIUM_DEVICE_STALE_AFTER_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Announcement persistence interval must be shorter than the stale threshold",
+        path: ["AQUARIUM_DEVICE_ANNOUNCEMENT_PERSIST_INTERVAL_MS"],
+      });
+    }
+    if (
+      environment.AQUARIUM_DEVICE_STALE_AFTER_MS >=
+      environment.AQUARIUM_DEVICE_OFFLINE_AFTER_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Device stale threshold must be shorter than offline threshold",
+        path: ["AQUARIUM_DEVICE_STALE_AFTER_MS"],
+      });
+    }
+    if (
+      environment.AQUARIUM_DEVICE_HEALTH_SWEEP_INTERVAL_MS >=
+      environment.AQUARIUM_DEVICE_STALE_AFTER_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "Device health sweep interval must be shorter than stale threshold",
+        path: ["AQUARIUM_DEVICE_HEALTH_SWEEP_INTERVAL_MS"],
+      });
+    }
     if (environment.AQUARIUM_RUNTIME_MODE === "production") {
       for (const key of [
         "AQUARIUM_STATE_DB_PATH",
@@ -42,6 +161,17 @@ const environmentSchema = z
 
     if (environment.AQUARIUM_MQTT_ENABLED === "false") {
       return;
+    }
+
+    if (
+      environment.AQUARIUM_MQTT_DISCOVERY_INTERVAL_MS >=
+      environment.AQUARIUM_DEVICE_STALE_AFTER_MS
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "MQTT discovery interval must be shorter than stale threshold",
+        path: ["AQUARIUM_MQTT_DISCOVERY_INTERVAL_MS"],
+      });
     }
 
     if (environment.AQUARIUM_MQTT_BROKER_URL === undefined) {
@@ -120,12 +250,11 @@ const environmentSchema = z
       if (environment.AQUARIUM_MQTT_BROKER_URL !== undefined) {
         const brokerHost = new URL(environment.AQUARIUM_MQTT_BROKER_URL)
           .hostname;
-        const allowedDockerHost = environment.AQUARIUM_TEST_DOCKER_BROKER_HOST;
-        if (!isLoopbackHost(brokerHost) && brokerHost !== allowedDockerHost) {
+        if (!isLoopbackHost(brokerHost)) {
           context.addIssue({
             code: "custom",
             message:
-              "Development and test MQTT brokers must be loopback or the explicitly named test Docker host",
+              "Development and test MQTT brokers must use a loopback host",
             path: ["AQUARIUM_MQTT_BROKER_URL"],
           });
         }
@@ -144,6 +273,8 @@ export interface EnabledMqttConfiguration {
   readonly protocolVersion: 4;
   readonly qos: 0;
   readonly retain: false;
+  readonly responseTimeoutMs: number;
+  readonly discoveryIntervalMs: number;
 }
 
 export interface ControllerConfiguration {
@@ -151,13 +282,41 @@ export interface ControllerConfiguration {
   readonly server: {
     readonly host: string;
     readonly port: number;
+    readonly webRoot: string | null;
+  };
+  readonly realtime: {
+    readonly maxReplayEvents: number;
   };
   readonly mqtt: DisabledMqttConfiguration | EnabledMqttConfiguration;
+  readonly deviceRegistry: {
+    readonly announcementPersistIntervalMs: number;
+    readonly staleAfterMs: number;
+    readonly offlineAfterMs: number;
+    readonly healthSweepIntervalMs: number;
+  };
   readonly storage: {
     readonly stateDatabaseFile: string;
     readonly eventsDatabaseFile: string;
     readonly archiveDirectory: string;
     readonly backupDirectory: string;
+    readonly backupFreshnessThresholdMs: number;
+    readonly retentionStaleRunAfterMs: number;
+    readonly healthCheckIntervalMs: number;
+    readonly minimumFilesystemFreeBytes: number;
+    readonly maximumProjectedStorageBytesAfterOneYear: number;
+  };
+  readonly alerting: {
+    readonly webhook: AlertWebhookConfiguration | null;
+  };
+}
+
+export interface AlertWebhookConfiguration {
+  readonly url: string;
+  readonly destinationKey: string;
+  readonly timeoutMs: number;
+  readonly authHeader?: {
+    readonly name: string;
+    readonly value: string;
   };
 }
 
@@ -168,8 +327,15 @@ export function parseControllerConfiguration(
   const server = {
     host: parsed.AQUARIUM_HOST,
     port: parsed.AQUARIUM_PORT,
+    webRoot:
+      parsed.AQUARIUM_WEB_ROOT === undefined
+        ? null
+        : resolve(parsed.AQUARIUM_WEB_ROOT),
   };
   const dataDirectory = resolve(parsed.AQUARIUM_DATA_DIRECTORY ?? ".data");
+  const realtime = {
+    maxReplayEvents: parsed.AQUARIUM_SSE_REPLAY_LIMIT,
+  };
   const storage = {
     stateDatabaseFile: resolve(
       parsed.AQUARIUM_STATE_DB_PATH ?? join(dataDirectory, "state.db"),
@@ -183,13 +349,78 @@ export function parseControllerConfiguration(
     backupDirectory: resolve(
       parsed.AQUARIUM_BACKUP_DIRECTORY ?? join(dataDirectory, "backups"),
     ),
+    backupFreshnessThresholdMs: parsed.AQUARIUM_BACKUP_FRESHNESS_THRESHOLD_MS,
+    retentionStaleRunAfterMs: parsed.AQUARIUM_RETENTION_STALE_RUN_AFTER_MS,
+    healthCheckIntervalMs: parsed.AQUARIUM_STORAGE_HEALTH_INTERVAL_MS,
+    minimumFilesystemFreeBytes: parsed.AQUARIUM_STORAGE_MINIMUM_FREE_BYTES,
+    maximumProjectedStorageBytesAfterOneYear:
+      parsed.AQUARIUM_STORAGE_MAXIMUM_PROJECTED_YEAR_BYTES,
   };
+  const deviceRegistry = {
+    announcementPersistIntervalMs:
+      parsed.AQUARIUM_DEVICE_ANNOUNCEMENT_PERSIST_INTERVAL_MS,
+    staleAfterMs: parsed.AQUARIUM_DEVICE_STALE_AFTER_MS,
+    offlineAfterMs: parsed.AQUARIUM_DEVICE_OFFLINE_AFTER_MS,
+    healthSweepIntervalMs: parsed.AQUARIUM_DEVICE_HEALTH_SWEEP_INTERVAL_MS,
+  };
+  const webhookSupplementaryValues = [
+    parsed.AQUARIUM_ALERT_WEBHOOK_KEY,
+    parsed.AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS,
+    parsed.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME,
+    parsed.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE,
+  ];
+  if (
+    parsed.AQUARIUM_ALERT_WEBHOOK_URL === undefined &&
+    webhookSupplementaryValues.some((value) => value !== undefined)
+  ) {
+    throw new TypeError(
+      "Alert webhook settings require AQUARIUM_ALERT_WEBHOOK_URL",
+    );
+  }
+
+  const authHeaderName = parsed.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME;
+  const authHeaderValue = parsed.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE;
+  if ((authHeaderName === undefined) !== (authHeaderValue === undefined)) {
+    throw new TypeError(
+      "Alert webhook authentication header name and value must be configured together",
+    );
+  }
+  const authHeader =
+    authHeaderName === undefined || authHeaderValue === undefined
+      ? undefined
+      : { name: authHeaderName, value: authHeaderValue };
+
+  let webhook: AlertWebhookConfiguration | null = null;
+  if (parsed.AQUARIUM_ALERT_WEBHOOK_URL !== undefined) {
+    const validated = validateWebhookAlertNotifierOptions({
+      url: parsed.AQUARIUM_ALERT_WEBHOOK_URL,
+      runtime: parsed.AQUARIUM_RUNTIME_MODE,
+      ...(parsed.AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS === undefined
+        ? {}
+        : { timeoutMs: parsed.AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS }),
+      ...(authHeader === undefined ? {} : { authHeader }),
+    });
+    webhook = {
+      url: validated.url.toString(),
+      destinationKey: identifierSchema.parse(
+        parsed.AQUARIUM_ALERT_WEBHOOK_KEY ?? "primary",
+      ),
+      timeoutMs: validated.timeoutMs,
+      ...(validated.authHeader === undefined
+        ? {}
+        : { authHeader: validated.authHeader }),
+    };
+  }
+  const alerting = { webhook };
 
   if (parsed.AQUARIUM_MQTT_ENABLED === "false") {
     return {
       runtimeMode: parsed.AQUARIUM_RUNTIME_MODE,
       server,
+      realtime,
       storage,
+      deviceRegistry,
+      alerting,
       mqtt: { enabled: false },
     };
   }
@@ -204,7 +435,10 @@ export function parseControllerConfiguration(
   return {
     runtimeMode: parsed.AQUARIUM_RUNTIME_MODE,
     server,
+    realtime,
     storage,
+    deviceRegistry,
+    alerting,
     mqtt: {
       enabled: true,
       brokerUrl: parsed.AQUARIUM_MQTT_BROKER_URL,
@@ -212,6 +446,8 @@ export function parseControllerConfiguration(
       protocolVersion: 4,
       qos: 0,
       retain: false,
+      responseTimeoutMs: parsed.AQUARIUM_MQTT_RESPONSE_TIMEOUT_MS,
+      discoveryIntervalMs: parsed.AQUARIUM_MQTT_DISCOVERY_INTERVAL_MS,
     },
   };
 }
