@@ -157,6 +157,8 @@ export function ControlAreaPage({
       <OperationStatusPanel
         operations={model.operations}
         truncated={controller.snapshot.operations.truncated}
+        expectedRevision={model.revision}
+        refresh={controller.refresh}
       />
     </main>
   );

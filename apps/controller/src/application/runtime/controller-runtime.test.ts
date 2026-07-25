@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parseControllerConfiguration } from "../../configuration.js";
 import {
+  ControlOperationRepository,
   openControllerDatabases,
   type ControllerDatabases,
 } from "../../infrastructure/database/index.js";
@@ -225,6 +226,136 @@ describe("controller MQTT runtime composition", () => {
     await composition.runtime.stop();
   });
 
+  it("stays unready behind a persisted unknown outcome and reruns readiness after operator reconciliation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const databases = await openDatabasesForTest();
+    await databases.state
+      .insertInto("devices")
+      .values({
+        id: "device-main",
+        hardware_id: "hardware-main",
+        name: "Main",
+        desired_pwm_frequency_hz: 5_000,
+        desired_pwm_resolution_bits: 8,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    const repository = new ControlOperationRepository(databases.state);
+    await repository.createPending({
+      id: "persisted-unknown",
+      deviceId: "device-main",
+      requestedAtMs: 100,
+      deadlineAtMs: 1_000,
+      request: { kind: "ping" },
+    });
+    await repository.markInFlight("persisted-unknown", 110);
+    await repository.completeInFlight("persisted-unknown", 120, {
+      status: "outcome_unknown",
+      wireOperationId: "wire-persisted",
+      reason: "controller_restart",
+      reconciledAtMs: null,
+    });
+    const client = new InMemoryMqttClient();
+    const errors: Error[] = [];
+    const composition = composeControllerRuntime({
+      configuration: enabledConfiguration(),
+      stateDatabase: databases.state,
+      eventsDatabase: databases.events,
+      clientFactory: () => client,
+      now: Date.now,
+      onError: (error) => errors.push(error),
+    });
+    if (!composition.mqttEnabled) {
+      throw new Error("Expected enabled MQTT runtime composition");
+    }
+    await composition.runtime.start();
+    client.emitConnected();
+    await vi.waitFor(() => expect(client.subscriptions).toHaveLength(1));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(composition.runtime.isReady()).toBe(false);
+
+    const expectedRevision = await latestRevision(databases);
+    await expect(
+      composition.deviceOperations.reconcileDeviceOperation(
+        "persisted-unknown",
+        expectedRevision,
+      ),
+    ).resolves.toMatchObject({ changed: true });
+    await vi.waitFor(() => expect(composition.runtime.isReady()).toBe(true));
+    expect(errors).toEqual([]);
+
+    await composition.runtime.stop();
+  });
+
+  it("propagates a live direct-operation unknown into scheduler readiness without a command-error dead end", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const databases = await openDatabasesForTest();
+    await databases.state
+      .insertInto("devices")
+      .values({
+        id: "device-main",
+        hardware_id: "hardware-main",
+        name: "Main",
+        desired_pwm_frequency_hz: 5_000,
+        desired_pwm_resolution_bits: 8,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    const client = new InMemoryMqttClient();
+    const errors: Error[] = [];
+    const composition = composeControllerRuntime({
+      configuration: enabledConfiguration(),
+      stateDatabase: databases.state,
+      eventsDatabase: databases.events,
+      clientFactory: () => client,
+      now: Date.now,
+      onError: (error) => errors.push(error),
+    });
+    if (!composition.mqttEnabled) {
+      throw new Error("Expected enabled MQTT runtime composition");
+    }
+    await composition.runtime.start();
+    client.emitConnected();
+    await vi.waitFor(() => expect(composition.runtime.isReady()).toBe(true));
+
+    const operation = composition.deviceOperations.executeDeviceOperation(
+      "device-main",
+      { kind: "ping" },
+    );
+    await vi.waitFor(() =>
+      expect(
+        client.publishes.some(({ payload }) => payload === "hardware-main p"),
+      ).toBe(true),
+    );
+    client.emitDisconnected();
+    await expect(operation).resolves.toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(composition.runtime.isReady()).toBe(false);
+
+    client.emitConnected();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(composition.runtime.isReady()).toBe(false);
+    const unknown = await databases.state
+      .selectFrom("control_operations")
+      .select("id")
+      .where("device_id", "=", "device-main")
+      .where("status", "=", "outcome_unknown")
+      .executeTakeFirstOrThrow();
+    await composition.deviceOperations.reconcileDeviceOperation(
+      unknown.id,
+      await latestRevision(databases),
+    );
+    await vi.waitFor(() => expect(composition.runtime.isReady()).toBe(true));
+    expect(errors).toEqual([]);
+
+    await composition.runtime.stop();
+  });
+
   it("stays unready when persisted-state reconciliation fails", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -276,6 +407,14 @@ async function openDatabasesForTest(): Promise<ControllerDatabases> {
   });
   openDatabases.push(databases);
   return databases;
+}
+
+async function latestRevision(databases: ControllerDatabases): Promise<number> {
+  const row = await databases.state
+    .selectFrom("state_revisions")
+    .select(({ fn }) => fn.max<number>("revision").as("revision"))
+    .executeTakeFirstOrThrow();
+  return Number(row.revision ?? 0);
 }
 
 interface PublishRecord {

@@ -15,7 +15,10 @@ import type {
   LegacyWireCommand,
   LegacyWireOperationResult,
 } from "../../infrastructure/mqtt/index.js";
-import { createEspTopicSet } from "@aquarium/esp-protocol";
+import {
+  createEspTopicSet,
+  ESP32_PWM_OVERWRITE_DURATION_MS,
+} from "@aquarium/esp-protocol";
 import { InteractionRepository } from "../../infrastructure/storage/interaction-repository.js";
 import { DeviceOperationService } from "./device-operation-service.js";
 
@@ -127,6 +130,20 @@ describe("persistent device operation service", () => {
     await expect(
       context.service.executeDeviceOperation("A1", { kind: "ping" }),
     ).rejects.toThrow(/unknown outcome/i);
+    await expect(
+      context.service.patchDeviceConfiguration("A1", {
+        expectedRevision: await revisionCount(context.databases.state),
+        name: "Blocked",
+      }),
+    ).rejects.toMatchObject({
+      name: "ConfigurationRelationalConflictError",
+      conflicts: [
+        expect.objectContaining({
+          resource: "operation",
+          relation: "unreconciled_device_operation",
+        }),
+      ],
+    });
     expect(context.executor.calls).toHaveLength(1);
 
     await context.service.acknowledgeReconciledOutcome(unknown.id);
@@ -145,6 +162,249 @@ describe("persistent device operation service", () => {
       context.service.executeDeviceOperation("A1", { kind: "ping" }),
     ).resolves.toMatchObject({ status: "succeeded" });
     expect(context.executor.calls).toHaveLength(2);
+  });
+
+  it("durably reconciles arbitrary unknown operations with revision and global-latch guards", async () => {
+    const context = await setup({ startService: false });
+    for (const [id, requestedAtMs] of [
+      ["unknown-one", 1_010],
+      ["unknown-two", 1_020],
+    ] as const) {
+      await context.repository.createPending({
+        id,
+        deviceId: "A1",
+        requestedAtMs,
+        deadlineAtMs: 10_000,
+        request: { kind: "ping" },
+      });
+      await context.repository.markInFlight(id, requestedAtMs + 1);
+      await context.repository.completeInFlight(id, requestedAtMs + 2, {
+        status: "outcome_unknown",
+        wireOperationId: `wire-${id}`,
+        reason: "timeout",
+        reconciledAtMs: null,
+      });
+    }
+    context.setNowMs(2_000);
+    await context.service.start();
+    expect(context.unknownOutcomeLatchRestorations.count).toBe(1);
+
+    const initialRevision = await revisionCount(context.databases.state);
+    await expect(
+      context.service.reconcileDeviceOperation("unknown-one", initialRevision),
+    ).resolves.toMatchObject({
+      changed: true,
+      revision: initialRevision + 1,
+      event: {
+        type: "operation.outcome-reconciled",
+        entity: { type: "operation", id: "unknown-one" },
+      },
+    });
+    expect(context.executor.acknowledgements).toBe(0);
+    expect(context.unknownOutcomeLatchReleases.count).toBe(0);
+
+    await expect(
+      context.service.reconcileDeviceOperation("unknown-two", initialRevision),
+    ).rejects.toMatchObject({
+      name: "ConfigurationRevisionConflictError",
+      expectedRevision: initialRevision,
+      currentRevision: initialRevision + 1,
+    });
+    await expect(
+      context.service.reconcileDeviceOperation(
+        "unknown-two",
+        initialRevision + 1,
+      ),
+    ).resolves.toMatchObject({
+      changed: true,
+      revision: initialRevision + 2,
+    });
+    expect(context.executor.acknowledgements).toBe(1);
+    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
+    expect(context.executor.calls).toHaveLength(0);
+
+    await expect(
+      context.service.reconcileDeviceOperation("unknown-one", initialRevision),
+    ).resolves.toEqual({
+      changed: false,
+      revision: initialRevision + 2,
+      event: null,
+    });
+    expect(context.executor.acknowledgements).toBe(1);
+    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
+    expect(await context.repository.listUnresolvedOutcomeUnknownIds()).toEqual(
+      [],
+    );
+  });
+
+  it("holds unknown firmware overwrites through the complete 120-second safety window", async () => {
+    const context = await setup({ startService: false });
+    await context.repository.createPending({
+      id: "unknown-overwrite",
+      deviceId: "A1",
+      requestedAtMs: 1_010,
+      deadlineAtMs: 10_000,
+      request: {
+        kind: "set_pwm",
+        pin: 4,
+        value: 200,
+        overwrite: true,
+      },
+    });
+    await context.repository.markInFlight("unknown-overwrite", 1_020);
+    const completedAtMs = 1_030;
+    await context.repository.completeInFlight(
+      "unknown-overwrite",
+      completedAtMs,
+      {
+        status: "outcome_unknown",
+        wireOperationId: "wire-overwrite",
+        reason: "timeout",
+        reconciledAtMs: null,
+      },
+    );
+    await context.service.start();
+    expect(context.unknownOutcomeLatchRestorations.count).toBe(1);
+    const expectedRevision = await revisionCount(context.databases.state);
+
+    context.setNowMs(completedAtMs + ESP32_PWM_OVERWRITE_DURATION_MS - 1 - 10);
+    await expect(
+      context.service.reconcileDeviceOperation(
+        "unknown-overwrite",
+        expectedRevision,
+      ),
+    ).rejects.toMatchObject({
+      name: "ConfigurationRelationalConflictError",
+      conflicts: [
+        {
+          resource: "operation",
+          id: "unknown-overwrite",
+          relation: "firmware_safety_window",
+          message:
+            "Operation unknown-overwrite cannot be reconciled before the firmware safety window ends",
+        },
+      ],
+    });
+    expect(await revisionCount(context.databases.state)).toBe(expectedRevision);
+    expect(context.executor.acknowledgements).toBe(0);
+
+    context.setNowMs(completedAtMs + ESP32_PWM_OVERWRITE_DURATION_MS - 10);
+    await expect(
+      context.service.reconcileDeviceOperation(
+        "unknown-overwrite",
+        expectedRevision,
+      ),
+    ).resolves.toMatchObject({
+      changed: true,
+      revision: expectedRevision + 1,
+    });
+    expect(context.executor.acknowledgements).toBe(1);
+    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
+  });
+
+  it("reserves unresolved manual-override children for the safe internal reconciliation path", async () => {
+    const context = await setup({ startService: false });
+    await context.repository.createPending({
+      id: "owned-unknown-child",
+      deviceId: "A1",
+      requestedAtMs: 1_010,
+      deadlineAtMs: 10_000,
+      request: {
+        kind: "set_pwm",
+        pin: 4,
+        value: 200,
+        overwrite: true,
+      },
+    });
+    await context.repository.markInFlight("owned-unknown-child", 1_020);
+    await context.repository.completeInFlight("owned-unknown-child", 1_030, {
+      status: "outcome_unknown",
+      wireOperationId: "wire-owned-child",
+      reason: "timeout",
+      reconciledAtMs: null,
+    });
+    await context.databases.state
+      .insertInto("control_operations")
+      .values({
+        id: "manual-operation-owner",
+        device_id: null,
+        kind: "manual_override_start",
+        status: "outcome_unknown",
+        requested_at_ms: 1_000,
+        deadline_at_ms: 2_000,
+        completed_at_ms: 1_040,
+        request_json: JSON.stringify({
+          kind: "manual_override_start",
+          overrideId: "override-main",
+          target: { targetType: "channel", targetId: "channel-main" },
+          commands: [
+            {
+              deviceId: "A1",
+              mappingId: "mapping-main",
+              pin: 4,
+              value: 200,
+              overwrite: true,
+            },
+          ],
+          valuePercentage: 78,
+          expiresAtMs: 121_000,
+        }),
+        request_schema_version: 1,
+        result_json: JSON.stringify({
+          status: "outcome_unknown",
+          childOperationIds: ["owned-unknown-child"],
+          reason: "child_outcome_not_succeeded",
+          unknownChildOperationId: "owned-unknown-child",
+          safetyReconcileAtMs: 121_040,
+          reconciledAtMs: null,
+        }),
+        result_schema_version: 1,
+      })
+      .executeTakeFirstOrThrow();
+    context.setNowMs(121_040);
+    await context.service.start();
+    const expectedRevision = await revisionCount(context.databases.state);
+
+    await expect(
+      context.service.reconcileDeviceOperation(
+        "owned-unknown-child",
+        expectedRevision,
+      ),
+    ).rejects.toMatchObject({
+      name: "ConfigurationRelationalConflictError",
+      conflicts: [
+        {
+          resource: "operation",
+          id: "owned-unknown-child",
+          relation: "manual_override_owns_operation",
+          message:
+            "Operation owned-unknown-child must be reconciled through manual override operation manual-operation-owner",
+        },
+      ],
+    });
+    expect(context.executor.acknowledgements).toBe(0);
+    expect(context.unknownOutcomeLatchReleases.count).toBe(0);
+
+    await expect(
+      context.service.reconcileDeviceOperation(
+        "manual-operation-owner",
+        expectedRevision,
+      ),
+    ).rejects.toMatchObject({
+      name: "ConfigurationRelationalConflictError",
+      conflicts: [
+        expect.objectContaining({
+          resource: "operation",
+          id: "manual-operation-owner",
+          relation: "not_device_operation",
+        }),
+      ],
+    });
+
+    await context.service.acknowledgeReconciledOutcome("owned-unknown-child");
+    expect(context.executor.acknowledgements).toBe(1);
+    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
+    expect(context.executor.calls).toHaveLength(0);
   });
 
   it("persists an analog read value without reparsing it in the service", async () => {
@@ -500,6 +760,8 @@ describe("persistent device operation service", () => {
           onBackgroundError: (error) => {
             throw error;
           },
+          onUnknownOutcomeLatched: () => undefined,
+          onAllUnknownOutcomesReconciled: async () => undefined,
         },
       );
       await service.start();
@@ -591,6 +853,9 @@ interface TestContext {
   readonly registry: DeviceRegistry;
   readonly repository: ControlOperationRepository;
   readonly service: DeviceOperationService;
+  readonly unknownOutcomeLatchRestorations: { count: number };
+  readonly unknownOutcomeLatchReleases: { count: number };
+  readonly setNowMs: (value: number) => void;
 }
 
 async function setup(
@@ -626,6 +891,8 @@ async function setup(
     nowMs += 50;
     return nowMs;
   });
+  const unknownOutcomeLatchReleases = { count: 0 };
+  const unknownOutcomeLatchRestorations = { count: 0 };
   let id = 0;
   const repository = new ControlOperationRepository(databases.state);
   const interactionLogger = new MqttInteractionLogger(
@@ -649,6 +916,12 @@ async function setup(
         ((error) => {
           throw error;
         }),
+      onUnknownOutcomeLatched: () => {
+        unknownOutcomeLatchRestorations.count += 1;
+      },
+      onAllUnknownOutcomesReconciled: async () => {
+        unknownOutcomeLatchReleases.count += 1;
+      },
     },
   );
   if (options.startService !== false) {
@@ -661,6 +934,11 @@ async function setup(
     registry,
     repository,
     service,
+    unknownOutcomeLatchRestorations,
+    unknownOutcomeLatchReleases,
+    setNowMs: (value) => {
+      nowMs = value;
+    },
   };
 }
 

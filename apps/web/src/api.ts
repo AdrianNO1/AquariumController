@@ -269,6 +269,19 @@ export async function fetchOperationDetails(
   return operationDetailsResponseSchema.parse(await response.json());
 }
 
+export function reconcileDeviceOperation(
+  operationId: string,
+  expectedRevision: number,
+): Promise<MutationResult> {
+  const params = operationParamsSchema.parse({ operationId });
+  const body = expectedRevisionSchema.parse({ expectedRevision });
+  return requestConfigurationMutation(
+    `/api/operations/${encodeURIComponent(params.operationId)}/reconcile`,
+    "POST",
+    body,
+  );
+}
+
 export function startManualOverride(
   request: StartManualOverrideRequest,
 ): Promise<ManualOverrideCommandResponse> {

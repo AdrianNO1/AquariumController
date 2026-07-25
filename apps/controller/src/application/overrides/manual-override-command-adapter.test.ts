@@ -16,6 +16,7 @@ describe("manual override command adapter", () => {
     const adapter = new ManualOverrideCommandAdapter(dispatcher, {
       acknowledgeReconciledOutcome: async (operationId) => {
         reconciled.push(operationId);
+        await dispatcher.acknowledgeReconciledOutcome();
       },
     });
 

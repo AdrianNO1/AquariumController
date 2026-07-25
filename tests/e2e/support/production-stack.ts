@@ -12,6 +12,7 @@ import {
 } from "@aquarium/fake-esp";
 
 import {
+  type CapturedMqttPublication,
   MosquittoTestHarness,
   waitUntil,
 } from "../../../apps/controller/src/integration-support/mosquitto-test-harness.js";
@@ -34,6 +35,7 @@ export interface ProductionE2eStack {
   readonly brokerUrl: string;
   readonly controllerLog: string;
   fetchSnapshot(): Promise<ControllerSnapshot>;
+  mqttPublications(): readonly CapturedMqttPublication[];
   pauseFakeDevices(): Promise<void>;
   resumeFakeDevices(): Promise<void>;
   restartBroker(): Promise<void>;
@@ -112,6 +114,10 @@ class RunningProductionE2eStack implements ProductionE2eStack {
     return (await response.json()) as ControllerSnapshot;
   }
 
+  public mqttPublications(): readonly CapturedMqttPublication[] {
+    return this.#broker.publications();
+  }
+
   public async restartController(): Promise<void> {
     this.assertRunning();
     await this.stopController();
@@ -132,6 +138,56 @@ class RunningProductionE2eStack implements ProductionE2eStack {
 
   public async restartBroker(): Promise<void> {
     this.assertRunning();
+    const baseline = await this.fetchSnapshot();
+    const baselineOperationIds = new Set(
+      baseline.operations.items.map((operation) => operation.id),
+    );
+    const mappingProfiles = new Map(
+      baseline.mappingProfiles.map((profile) => [profile.id, profile]),
+    );
+    const scheduledOperationCount = baseline.devices.reduce((count, device) => {
+      if (!device.enabled || device.mappingProfileId === null) {
+        return count;
+      }
+      const profile = mappingProfiles.get(device.mappingProfileId);
+      return (
+        count +
+        (profile?.mappings.filter((mapping) => mapping.enabled).length ?? 0)
+      );
+    }, 0);
+    if (scheduledOperationCount === 0) {
+      throw new Error(
+        "Broker restart requires at least one scheduled output operation",
+      );
+    }
+    await this.waitForSnapshot(
+      (snapshot) =>
+        snapshot.operations.items.filter(
+          (operation) =>
+            operation.kind === "set_pwm" &&
+            !baselineOperationIds.has(operation.id),
+        ).length >= scheduledOperationCount,
+      "a complete fresh scheduled PWM batch before broker restart",
+    );
+    const settled = await this.waitForSettled();
+    const activeOperationIds = settled.operations.items
+      .filter(
+        (operation) =>
+          operation.status === "pending" || operation.status === "in_flight",
+      )
+      .map((operation) => operation.id);
+    const unknownOutcomeIds = settled.operations.items
+      .filter(
+        (operation) =>
+          !baselineOperationIds.has(operation.id) &&
+          operation.status === "outcome_unknown",
+      )
+      .map((operation) => operation.id);
+    if (activeOperationIds.length > 0 || unknownOutcomeIds.length > 0) {
+      throw new Error(
+        `Broker restart requires a clean scheduler boundary; active=${activeOperationIds.join(",") || "none"}, new unknown outcomes=${unknownOutcomeIds.join(",") || "none"}`,
+      );
+    }
     this.#broker.clearPublications();
     await this.#broker.restartBroker();
     await waitUntil(

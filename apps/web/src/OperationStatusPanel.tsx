@@ -1,34 +1,82 @@
-import type { OperationSummary } from "@aquarium/contracts";
-import { useQuery } from "@tanstack/react-query";
+import type {
+  OperationDetailsResponse,
+  OperationSummary,
+} from "@aquarium/contracts";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { z } from "zod";
 
-import { fetchOperationDetails } from "./api.js";
+import { fetchOperationDetails, reconcileDeviceOperation } from "./api.js";
+import { configurationErrorMessage } from "./configuration-ui.js";
 
 interface OperationStatusPanelProps {
   readonly operations: readonly OperationSummary[];
   readonly truncated: boolean;
+  readonly expectedRevision: number;
+  readonly refresh: () => void;
 }
 
-export function OperationStatusPanel({
+interface OperationStatusPanelCopy {
+  readonly headingId: string;
+  readonly eyebrow: string;
+  readonly heading: string;
+  readonly empty: string;
+  readonly truncated: string;
+}
+
+const recentOperationCopy: OperationStatusPanelCopy = {
+  headingId: "operations-heading",
+  eyebrow: "Authoritative outcomes",
+  heading: "Recent operations",
+  empty: "No recent device operations for this area.",
+  truncated:
+    "The snapshot operation window is truncated; older operations remain in controller storage.",
+};
+
+const unresolvedOperationCopy: OperationStatusPanelCopy = {
+  headingId: "unresolved-operations-heading",
+  eyebrow: "Safety recovery",
+  heading: "Unresolved device outcomes",
+  empty: "No device operations currently require operator reconciliation.",
+  truncated:
+    "The unresolved outcome window is full. Reconcile the displayed outcomes to reveal any remaining operations.",
+};
+
+export function OperationStatusPanel(
+  props: OperationStatusPanelProps,
+): React.JSX.Element {
+  return <OperationListPanel {...props} copy={recentOperationCopy} />;
+}
+
+export function UnresolvedOperationStatusPanel(
+  props: OperationStatusPanelProps,
+): React.JSX.Element {
+  return <OperationListPanel {...props} copy={unresolvedOperationCopy} />;
+}
+
+function OperationListPanel({
   operations,
   truncated,
-}: OperationStatusPanelProps): React.JSX.Element {
+  expectedRevision,
+  refresh,
+  copy,
+}: OperationStatusPanelProps & {
+  readonly copy: OperationStatusPanelCopy;
+}): React.JSX.Element {
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(
     null,
   );
   return (
-    <section className="control-panel" aria-labelledby="operations-heading">
+    <section className="control-panel" aria-labelledby={copy.headingId}>
       <div className="section-heading">
         <div>
-          <p className="eyebrow">Authoritative outcomes</p>
-          <h2 id="operations-heading">Recent operations</h2>
+          <p className="eyebrow">{copy.eyebrow}</p>
+          <h2 id={copy.headingId}>{copy.heading}</h2>
         </div>
         <span className="section-count">{operations.length} shown</span>
       </div>
       {operations.length === 0 ? (
-        <p className="empty-panel">
-          No recent device operations for this area.
-        </p>
+        <p className="empty-panel">{copy.empty}</p>
       ) : (
         <ul className="operation-list">
           {operations.map((operation) => (
@@ -60,14 +108,14 @@ export function OperationStatusPanel({
         </ul>
       )}
       {truncated ? (
-        <p className="information-banner">
-          The snapshot operation window is truncated; older operations remain in
-          controller storage.
-        </p>
+        <p className="information-banner">{copy.truncated}</p>
       ) : null}
       {selectedOperationId === null ? null : (
         <OperationDetails
+          key={selectedOperationId}
           operationId={selectedOperationId}
+          expectedRevision={expectedRevision}
+          refresh={refresh}
           onClose={() => setSelectedOperationId(null)}
         />
       )}
@@ -77,15 +125,30 @@ export function OperationStatusPanel({
 
 function OperationDetails({
   operationId,
+  expectedRevision,
+  refresh,
   onClose,
 }: {
   readonly operationId: string;
+  readonly expectedRevision: number;
+  readonly refresh: () => void;
   readonly onClose: () => void;
 }): React.JSX.Element {
+  const [physicalStateVerified, setPhysicalStateVerified] = useState(false);
   const query = useQuery({
     queryKey: ["operation-details", operationId],
     queryFn: ({ signal }) => fetchOperationDetails(operationId, signal),
   });
+  const reconciliation = useMutation({
+    retry: false,
+    mutationFn: () => reconcileDeviceOperation(operationId, expectedRevision),
+    onSuccess: refresh,
+  });
+  const deviceOutcome =
+    query.data === undefined ? null : readDeviceUnknownOutcome(query.data);
+  const canReconcile =
+    deviceOutcome?.reconciledAtMs === null && reconciliation.data === undefined;
+
   return (
     <div className="operation-details" aria-live="polite">
       <div className="section-heading compact-heading">
@@ -135,10 +198,81 @@ function OperationDetails({
                 : JSON.stringify(query.data.result.data, null, 2)}
             </pre>
           </details>
+          {canReconcile ? (
+            <div className="operation-reconcile-warning" role="alert">
+              <strong>Device outcome is unknown.</strong>
+              <p>
+                Verify the aquarium output and the device&apos;s physical state
+                before reconciling. Reconciliation records that verification; it
+                does not prove whether the command ran.
+              </p>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={physicalStateVerified}
+                  onChange={(event) =>
+                    setPhysicalStateVerified(event.currentTarget.checked)
+                  }
+                />
+                I have verified the physical and device state.
+              </label>
+              <button
+                className="danger-button"
+                type="button"
+                disabled={!physicalStateVerified || reconciliation.isPending}
+                onClick={() => reconciliation.mutate()}
+              >
+                Reconcile this unknown device outcome
+              </button>
+            </div>
+          ) : null}
+          {reconciliation.isPending ? (
+            <p className="muted-copy" role="status">
+              Recording operator reconciliation...
+            </p>
+          ) : null}
+          {reconciliation.error === null ? null : (
+            <p className="field-error" role="alert">
+              {configurationErrorMessage(reconciliation.error)}
+            </p>
+          )}
+          {reconciliation.data === undefined ? null : (
+            <p className="information-banner" role="status">
+              Reconciliation recorded at authoritative revision{" "}
+              {reconciliation.data.revision}. The original device outcome
+              remains unknown.
+            </p>
+          )}
+          {deviceOutcome?.reconciledAtMs === undefined ||
+          deviceOutcome.reconciledAtMs === null ? null : (
+            <p className="information-banner">
+              This unknown device outcome was reconciled at{" "}
+              {formatUtc(new Date(deviceOutcome.reconciledAtMs).toISOString())}.
+            </p>
+          )}
         </>
       )}
     </div>
   );
+}
+
+const deviceUnknownOutcomeSchema = z.object({
+  status: z.literal("outcome_unknown"),
+  reconciledAtMs: z.number().int().nonnegative().nullable(),
+});
+
+function readDeviceUnknownOutcome(
+  details: OperationDetailsResponse,
+): z.infer<typeof deviceUnknownOutcomeSchema> | null {
+  if (
+    details.operation.deviceId === null ||
+    details.operation.status !== "outcome_unknown" ||
+    details.result === null
+  ) {
+    return null;
+  }
+  const result = deviceUnknownOutcomeSchema.safeParse(details.result.data);
+  return result.success ? result.data : null;
 }
 
 function operationSymbol(status: OperationSummary["status"]): string {

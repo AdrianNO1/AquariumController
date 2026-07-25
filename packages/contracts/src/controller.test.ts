@@ -23,6 +23,7 @@ import {
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   scheduleGraphSchema,
+  unresolvedDeviceOperationsSchema,
 } from "./index.js";
 
 const now = "2026-07-13T08:00:00.000Z";
@@ -83,6 +84,11 @@ describe("controller contracts", () => {
       mappingProfiles: [],
       devices: [],
       operations: { items: [], limit: 100, truncated: false },
+      unresolvedDeviceOperations: {
+        items: [],
+        limit: 100,
+        truncated: false,
+      },
       importRuns: [],
       overrides: [],
       alertRules: [],
@@ -320,6 +326,44 @@ describe("controller contracts", () => {
     ).toBe(false);
   });
 
+  it("keeps unresolved device operations in a separate bounded window", () => {
+    const operation = {
+      id: "operation_unknown",
+      deviceId: "device_1",
+      kind: "ping",
+      status: "outcome_unknown",
+      requestedAt: now,
+      deadlineAt: later,
+      completedAt: later,
+    } as const;
+    const window = {
+      items: [operation],
+      limit: 100,
+      truncated: false,
+    };
+
+    expect(unresolvedDeviceOperationsSchema.parse(window)).toEqual(window);
+    expect(
+      unresolvedDeviceOperationsSchema.safeParse({
+        ...window,
+        items: [{ ...operation, deviceId: null }],
+      }).success,
+    ).toBe(false);
+    expect(
+      unresolvedDeviceOperationsSchema.safeParse({
+        ...window,
+        items: [{ ...operation, status: "succeeded" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      unresolvedDeviceOperationsSchema.safeParse({
+        items: [operation],
+        limit: 2,
+        truncated: true,
+      }).success,
+    ).toBe(false);
+  });
+
   it("enforces alert and notification lifecycle matrices", () => {
     const pendingDelivery = {
       id: 1,
@@ -550,6 +594,11 @@ describe("controller contracts", () => {
       mappingProfiles: [],
       devices: [device],
       operations: { items: [], limit: 100, truncated: false },
+      unresolvedDeviceOperations: {
+        items: [],
+        limit: 100,
+        truncated: false,
+      },
       importRuns: [],
       overrides: [],
       alertRules: [deviceRule],
@@ -581,6 +630,12 @@ describe("controller contracts", () => {
       expectedRevision: 0,
     });
     expect(expectedRevisionSchema.safeParse({}).success).toBe(false);
+    expect(
+      expectedRevisionSchema.safeParse({
+        expectedRevision: 0,
+        retry: true,
+      }).success,
+    ).toBe(false);
     expect(
       expectedRevisionSchema.safeParse({
         expectedRevision: Number.MAX_SAFE_INTEGER + 1,

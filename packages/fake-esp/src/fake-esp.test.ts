@@ -338,6 +338,22 @@ describe("independent fake ESP actor commands", () => {
     expect(actorPayloads(harness, harness.topics.response)).toEqual([]);
 
     harness.setResponseFaults("alpha", {
+      dropNextResponseForCommand: "e",
+    });
+    harness.publishCommand(`${DEVICE_ID} p`);
+    expect(actorPayloads(harness, harness.topics.response)).toHaveLength(1);
+    harness.publishCommand(`${DEVICE_ID} e Renamed 5000 8`);
+    expect(actorPayloads(harness, harness.topics.response)).toHaveLength(1);
+    harness.publishCommand(`${DEVICE_ID} p`);
+    expect(actorPayloads(harness, harness.topics.response)).toHaveLength(2);
+    expect(() =>
+      harness.setResponseFaults("alpha", {
+        dropNextResponseForCommand: "edit configuration",
+      }),
+    ).toThrow(/one-shot response fault command/iu);
+
+    harness.bus.clearPublications();
+    harness.setResponseFaults("alpha", {
       malformed: true,
       duplicateResponses: 1,
       delayMilliseconds: 10,

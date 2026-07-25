@@ -19,6 +19,7 @@ import {
   ControllerSnapshotRepository,
   InvalidPersistedSnapshotDataError,
   RECENT_OPERATION_LIMIT,
+  UNRESOLVED_DEVICE_OPERATION_LIMIT,
 } from "./controller-snapshot-repository.js";
 
 const BASE_TIME_MS = Date.parse("2026-07-13T08:00:00.000Z");
@@ -70,6 +71,11 @@ describe("controller snapshot repository", () => {
       operations: {
         items: [],
         limit: RECENT_OPERATION_LIMIT,
+        truncated: false,
+      },
+      unresolvedDeviceOperations: {
+        items: [],
+        limit: UNRESOLVED_DEVICE_OPERATION_LIMIT,
         truncated: false,
       },
     });
@@ -275,6 +281,93 @@ describe("controller snapshot repository", () => {
     expect(snapshot.operations.items).toHaveLength(RECENT_OPERATION_LIMIT);
     expect(snapshot.operations.items[0]?.id).toBe("operation-100");
     expect(snapshot.operations.items.at(-1)?.id).toBe("operation-001");
+  });
+
+  it("pins unresolved device outcomes outside recent history and current mappings", async () => {
+    const database = await openDatabase(":memory:");
+    await database
+      .insertInto("devices")
+      .values({
+        id: "device-unmapped",
+        hardware_id: "UNMAPPED",
+        name: "Unmapped device",
+        mapping_profile_id: null,
+        desired_pwm_frequency_hz: 5_000,
+        desired_pwm_resolution_bits: 8,
+        created_at_ms: BASE_TIME_MS,
+        updated_at_ms: BASE_TIME_MS,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("control_operations")
+      .values([
+        {
+          id: "operation-unresolved-old",
+          device_id: "device-unmapped",
+          kind: "ping",
+          status: "outcome_unknown",
+          requested_at_ms: BASE_TIME_MS,
+          deadline_at_ms: BASE_TIME_MS + 5_000,
+          completed_at_ms: BASE_TIME_MS + 5_001,
+          request_json: '{"kind":"ping"}',
+          request_schema_version: 1,
+          result_json:
+            '{"status":"outcome_unknown","wireOperationId":"wire-old","reason":"timeout","reconciledAtMs":null}',
+          result_schema_version: 1,
+        },
+        {
+          id: "operation-reconciled-old",
+          device_id: "device-unmapped",
+          kind: "ping",
+          status: "outcome_unknown",
+          requested_at_ms: BASE_TIME_MS + 1,
+          deadline_at_ms: BASE_TIME_MS + 5_001,
+          completed_at_ms: BASE_TIME_MS + 5_002,
+          request_json: '{"kind":"ping"}',
+          request_schema_version: 1,
+          result_json: `{"status":"outcome_unknown","wireOperationId":"wire-reconciled","reason":"timeout","reconciledAtMs":${BASE_TIME_MS + 10_000}}`,
+          result_schema_version: 1,
+        },
+      ])
+      .execute();
+    await database
+      .insertInto("control_operations")
+      .values(
+        Array.from({ length: RECENT_OPERATION_LIMIT + 1 }, (_, index) => ({
+          id: `operation-newer-${String(index).padStart(3, "0")}`,
+          device_id: null,
+          kind: "test.operation",
+          status: "succeeded" as const,
+          requested_at_ms: BASE_TIME_MS + 20_000 + index,
+          deadline_at_ms: BASE_TIME_MS + 30_000 + index,
+          completed_at_ms: BASE_TIME_MS + 20_001 + index,
+          request_json: '{"schemaVersion":1}',
+          request_schema_version: 1,
+          result_json: '{"ok":true}',
+          result_schema_version: 1,
+        })),
+      )
+      .execute();
+
+    const snapshot = await createRepository(database).read();
+
+    expect(snapshot.operations.truncated).toBe(true);
+    expect(
+      snapshot.operations.items.some(
+        ({ id }) => id === "operation-unresolved-old",
+      ),
+    ).toBe(false);
+    expect(snapshot.unresolvedDeviceOperations).toEqual({
+      items: [
+        expect.objectContaining({
+          id: "operation-unresolved-old",
+          deviceId: "device-unmapped",
+          status: "outcome_unknown",
+        }),
+      ],
+      limit: UNRESOLVED_DEVICE_OPERATION_LIMIT,
+      truncated: false,
+    });
   });
 
   it("rejects duplicate-key persisted JSON without exposing the document", async () => {

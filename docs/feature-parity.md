@@ -68,6 +68,34 @@ actions listed after the matrix, not missing repository implementation.
 |  16 | Logs UI, filtering, pagination, export                | Legacy log helpers/pages; `events.db`, log service/routes, `LogsPage`                          | Stable `(occurred_at_ms,id)` cursor queries, typed filters, payload validation/hash/redaction, bounded GET-only NDJSON/CSV export, CSV formula policy, URL-backed UI filters, pagination/detail/export, and empty/error tests exist. Implicit HEAD is disabled. Archive creation is monotonic under concurrent creators. Backup freshness verifies the exact canonical artifact instead of trusting an audit row; focused 2026-07-19 evidence passed 21/21 tests across four files.                                                                        | **Implemented.** The separate archive-directory offsite lifecycle remains an external deployment action.                                                         |
 |  17 | Failure, timeout, stale and pending UI states         | Legacy control/log pages; snapshot/SSE coordinator and status components                       | Snapshot-before-stream, replay coalescing, duplicate/gap/resync handling, heartbeat staleness, revision conflict, operation states, offline/stale text, log errors, alert delivery failures, acknowledgement conflict, and every override terminal state have unit/component coverage. Retry-free Playwright exercises controller restart/replay, browser network loss/reconnect, fake persistence, broker restart, dropped responses/outcome unknown, offline alert acknowledgement/recovery, axe, and console auditing.                                  | **Implemented.**                                                                                                                                                 |
 
+## Unknown-outcome reconciliation parity
+
+- An ambiguous publication is persisted as `outcome_unknown` and is never
+  retried. Reconciliation preserves that status and adds a durable timestamp; it
+  does not claim that the command succeeded or failed.
+- Startup recovery restores the global safety latch from unresolved persisted
+  operations. A live unknown also makes the MQTT runtime unready and blocks the
+  transport/scheduler lane. Readiness returns only after all unknowns are
+  reconciled and startup schedule reconciliation succeeds again.
+- Generic device reconciliation is revision checked and commits a
+  critical-retention `operation.outcome-reconciled` revision/outbox event. An
+  unknown PWM overwrite cannot be reconciled before the complete 120-second
+  firmware overwrite window ends.
+- Manual-override aggregates own their uncertain child operations. Generic
+  device reconciliation rejects an owned child; the override-specific workflow
+  safely reconciles the child and aggregate through its own durable event after
+  the stored safety deadline, without resending the command.
+- The operation-details UI binds reconciliation to the inspected operation ID,
+  requires an explicit physical/device-state checkbox, sends one non-retrying
+  mutation, reports conflicts without clearing the action, and keeps displaying
+  the original unknown status. Success shows the authoritative revision, while
+  later details show the persisted reconciliation time. Unknown
+  manual-override aggregates remain on their owner-specific card and route.
+- A separate oldest-first unresolved window and global `/operations` page keep
+  blockers available after recent-history truncation or mapping changes. The
+  bounded page reports when more rows remain and reveals them as earlier
+  outcomes are reconciled.
+
 ## ESP/MQTT observable contract
 
 Cross-cutting API contracts cap identifiers and Fastify route parameters at 128

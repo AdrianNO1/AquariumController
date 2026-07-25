@@ -302,6 +302,24 @@ export function registerConfigurationRoutes(
     }),
   );
 
+  app.post(
+    "/api/operations/:operationId/reconcile",
+    safeRoute(app, async (request, reply) => {
+      const { operationId } = parseRequest(
+        operationParamsSchema,
+        request.params,
+      );
+      const { expectedRevision } = parseRequest(
+        expectedRevisionSchema,
+        request.body,
+      );
+      const result = await deviceCommands(
+        dependencies,
+      ).reconcileDeviceOperation(operationId, expectedRevision);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
   app.get(
     "/api/alert-rules",
     safeRoute(app, async (_request, reply) => {

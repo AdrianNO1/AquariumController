@@ -3,6 +3,7 @@ import {
   nonnegativeSafeIntegerSchema,
   type MutationResult,
 } from "@aquarium/contracts";
+import { ESP32_PWM_OVERWRITE_DURATION_MS } from "@aquarium/esp-protocol";
 import { sql, type Kysely, type Selectable } from "kysely";
 
 import {
@@ -14,11 +15,17 @@ import {
   type DeviceOperationRequest,
   type DeviceOperationResult,
 } from "../../application/operations/device-operation-types.js";
+import {
+  MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION,
+  manualOverrideOperationRequestSchema,
+  manualOverrideOperationResultSchema,
+} from "../../application/overrides/manual-override-types.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 import {
   commitConditionalStateChange,
   commitStateChange,
   toCommittedStateEvent,
+  type StateDatabaseTransaction,
 } from "./state-outbox.js";
 import type {
   ControlOperationsTable,
@@ -94,6 +101,32 @@ export class DeviceOperationDeviceNotFoundError extends Error {
 
   constructor(readonly deviceId: string) {
     super(`Device ${deviceId} does not exist`);
+  }
+}
+
+export class DeviceOperationNotFoundError extends Error {
+  override readonly name = "DeviceOperationNotFoundError";
+
+  constructor(readonly operationId: string) {
+    super(`Operation ${operationId} does not exist`);
+  }
+}
+
+export type DeviceOperationReconciliationConflictRelation =
+  | "firmware_safety_window"
+  | "manual_override_owns_operation"
+  | "not_device_operation"
+  | "outcome_not_unknown";
+
+export class DeviceOperationReconciliationConflictError extends Error {
+  override readonly name = "DeviceOperationReconciliationConflictError";
+
+  constructor(
+    readonly operationId: string,
+    readonly relation: DeviceOperationReconciliationConflictRelation,
+    message: string,
+  ) {
+    super(message);
   }
 }
 
@@ -379,76 +412,169 @@ export class ControlOperationRepository {
     });
   }
 
-  markOutcomeReconciled(
-    id: string,
-    reconciledAtMs: number,
-  ): Promise<StoredDeviceOperation> {
-    const parsedId = identifierSchema.parse(id);
-    const parsedReconciledAtMs =
-      nonnegativeSafeIntegerSchema.parse(reconciledAtMs);
-    return this.#serialize(async () => {
-      const operation = await this.#getById(parsedId);
-      if (
-        operation.status !== "outcome_unknown" ||
-        operation.result?.status !== "outcome_unknown"
-      ) {
-        throw new InvalidDeviceOperationTransitionError(
-          `Operation ${parsedId} does not have an unknown outcome`,
-        );
-      }
-      if (operation.result.reconciledAtMs !== null) {
-        throw new InvalidDeviceOperationTransitionError(
-          `Operation ${parsedId} was already reconciled`,
-        );
-      }
-      if (
-        operation.completedAtMs !== null &&
-        parsedReconciledAtMs < operation.completedAtMs
-      ) {
-        throw new RangeError(
-          "Reconciliation time must not precede operation completion",
-        );
-      }
-      const result = deviceOperationResultSchema.parse({
-        ...operation.result,
-        reconciledAtMs: parsedReconciledAtMs,
-      });
-      await commitStateChange(
-        this.#database,
-        {
-          actor: "runtime.device-operations",
-          mutationType: "operation.reconcile-outcome",
-          summary: `Reconciled unknown outcome for operation ${parsedId}`,
-          eventType: "operation.outcome-reconciled",
-          entityType: "operation",
-          entityId: parsedId,
-          occurredAtMs: parsedReconciledAtMs,
-          retentionClass: "critical",
-          payloadJson: JSON.stringify({
-            schemaVersion: 1,
-            status: "outcome_unknown",
-            reconciled: true,
-          }),
-          payloadSchemaVersion: 1,
-        },
-        async (transaction) => {
-          const update = await transaction
-            .updateTable("control_operations")
-            .set({
-              result_json: JSON.stringify(result),
-              result_schema_version: DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
-            })
-            .where("id", "=", parsedId)
-            .where("status", "=", "outcome_unknown")
-            .executeTakeFirst();
-          if (update.numUpdatedRows !== 1n) {
-            throw new InvalidDeviceOperationTransitionError(
-              `Operation ${parsedId} changed during reconciliation`,
-            );
-          }
-        },
+  reconcileOutcome(input: {
+    readonly operationId: string;
+    readonly expectedRevision: number | null;
+    readonly origin: "manual_override" | "operator";
+    readonly reconciledAtMs: number;
+  }): Promise<MutationResult> {
+    const operationId = identifierSchema.parse(input.operationId);
+    const expectedRevision =
+      input.expectedRevision === null
+        ? null
+        : nonnegativeSafeIntegerSchema.parse(input.expectedRevision);
+    const reconciledAtMs = nonnegativeSafeIntegerSchema.parse(
+      input.reconciledAtMs,
+    );
+    if ((input.origin === "operator") !== (expectedRevision !== null)) {
+      throw new TypeError(
+        "Operator reconciliation requires a revision and manual-override reconciliation must not provide one",
       );
-      return this.#getById(parsedId);
+    }
+    return this.#serialize(async () => {
+      const alreadyReconciled = await this.#readIdempotentReconciliation(
+        operationId,
+        input.origin,
+        expectedRevision,
+      );
+      if (alreadyReconciled !== null) {
+        return alreadyReconciled;
+      }
+      try {
+        const committed = await commitConditionalStateChange(
+          this.#database,
+          {
+            actor:
+              input.origin === "operator"
+                ? "controller-api"
+                : "runtime.device-operations",
+            mutationType: "operation.reconcile-outcome",
+            summary: `Reconciled unknown outcome for operation ${operationId}`,
+            eventType: "operation.outcome-reconciled",
+            entityType: "operation",
+            entityId: operationId,
+            occurredAtMs: reconciledAtMs,
+            retentionClass: "critical",
+            payloadJson: JSON.stringify({
+              schemaVersion: 1,
+              origin: input.origin,
+              status: "outcome_unknown",
+              reconciled: true,
+            }),
+            payloadSchemaVersion: 1,
+          },
+          async (transaction) => {
+            const row = await transaction
+              .selectFrom("control_operations")
+              .selectAll()
+              .where("id", "=", operationId)
+              .executeTakeFirst();
+            if (row === undefined) {
+              throw new DeviceOperationNotFoundError(operationId);
+            }
+            const operation = parseReconciliationDeviceOperation(row);
+            if (
+              operation.status !== "outcome_unknown" ||
+              operation.result?.status !== "outcome_unknown"
+            ) {
+              throw new DeviceOperationReconciliationConflictError(
+                operationId,
+                "outcome_not_unknown",
+                `Operation ${operationId} does not have an unknown outcome`,
+              );
+            }
+            if (input.origin === "operator") {
+              await assertNotOwnedByUnresolvedManualOverride(
+                transaction,
+                operationId,
+              );
+            }
+            if (operation.result.reconciledAtMs !== null) {
+              return { changed: false, result: { reconciled: true } };
+            }
+            if (
+              operation.completedAtMs === null ||
+              reconciledAtMs < operation.completedAtMs
+            ) {
+              throw new RangeError(
+                "Reconciliation time must not precede operation completion",
+              );
+            }
+            if (
+              operation.request.kind === "set_pwm" &&
+              operation.request.overwrite &&
+              reconciledAtMs <
+                safeAdd(
+                  operation.completedAtMs,
+                  ESP32_PWM_OVERWRITE_DURATION_MS,
+                  "Firmware overwrite safety window exceeds the safe integer range",
+                )
+            ) {
+              throw new DeviceOperationReconciliationConflictError(
+                operationId,
+                "firmware_safety_window",
+                `Operation ${operationId} cannot be reconciled before the firmware safety window ends`,
+              );
+            }
+            const result = deviceOperationResultSchema.parse({
+              ...operation.result,
+              reconciledAtMs,
+            });
+            const update = await transaction
+              .updateTable("control_operations")
+              .set({
+                result_json: JSON.stringify(result),
+                result_schema_version: DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
+              })
+              .where("id", "=", operationId)
+              .where("status", "=", "outcome_unknown")
+              .executeTakeFirst();
+            if (update.numUpdatedRows !== 1n) {
+              throw new InvalidDeviceOperationTransitionError(
+                `Operation ${operationId} changed during reconciliation`,
+              );
+            }
+            return { changed: true, result: { reconciled: true } };
+          },
+          undefined,
+          expectedRevision === null
+            ? undefined
+            : {
+                expectedRevision,
+                conflictError: (expected, current) =>
+                  new DeviceOperationRevisionConflictError(expected, current),
+              },
+        );
+        if (!committed.changed) {
+          return {
+            changed: false,
+            revision: committed.revision,
+            event: null,
+          };
+        }
+        if (committed.outboxEvent === null) {
+          throw new Error(
+            "Changed operation reconciliation lacks an outbox event",
+          );
+        }
+        return {
+          changed: true,
+          revision: committed.revision,
+          event: toCommittedStateEvent(committed.outboxEvent),
+        };
+      } catch (error) {
+        if (error instanceof DeviceOperationRevisionConflictError) {
+          const racedReconciliation = await this.#readIdempotentReconciliation(
+            operationId,
+            input.origin,
+            expectedRevision,
+          );
+          if (racedReconciliation !== null) {
+            return racedReconciliation;
+          }
+        }
+        throw error;
+      }
     });
   }
 
@@ -538,6 +664,53 @@ export class ControlOperationRepository {
       throw new DeviceOperationDeviceNotFoundError(parsedId);
     }
     return device;
+  }
+
+  async #readIdempotentReconciliation(
+    operationId: string,
+    origin: "manual_override" | "operator",
+    expectedRevision: number | null,
+  ): Promise<Extract<MutationResult, { readonly changed: false }> | null> {
+    return this.#database.transaction().execute(async (transaction) => {
+      const row = await transaction
+        .selectFrom("control_operations")
+        .selectAll()
+        .where("id", "=", operationId)
+        .executeTakeFirst();
+      if (row === undefined) {
+        throw new DeviceOperationNotFoundError(operationId);
+      }
+      const operation = parseReconciliationDeviceOperation(row);
+      if (
+        operation.status !== "outcome_unknown" ||
+        operation.result?.status !== "outcome_unknown" ||
+        operation.result.reconciledAtMs === null
+      ) {
+        return null;
+      }
+      if (origin === "operator") {
+        await assertNotOwnedByUnresolvedManualOverride(
+          transaction,
+          operationId,
+        );
+      }
+      const revisionRow = await transaction
+        .selectFrom("state_revisions")
+        .select(({ fn }) => fn.max<number>("revision").as("revision"))
+        .executeTakeFirstOrThrow();
+      const currentRevision = revisionRow.revision ?? 0;
+      if (expectedRevision !== null && expectedRevision > currentRevision) {
+        throw new DeviceOperationRevisionConflictError(
+          expectedRevision,
+          currentRevision,
+        );
+      }
+      return {
+        changed: false,
+        revision: currentRevision,
+        event: null,
+      };
+    });
   }
 
   async #commitTransition(
@@ -648,6 +821,12 @@ const DEVICE_OPERATION_KINDS = [
   "analog_read",
 ] as const satisfies readonly DeviceOperationRequest["kind"][];
 
+const MANUAL_OVERRIDE_OPERATION_KINDS = [
+  "manual_override_start",
+  "manual_override_cancel",
+  "manual_override_expire",
+] as const;
+
 function parseCreateInput(
   input: CreatePendingDeviceOperationInput,
 ): CreatePendingDeviceOperationInput {
@@ -732,4 +911,127 @@ function parseStoredOperation(
     request,
     result,
   };
+}
+
+function parseReconciliationDeviceOperation(
+  row: Selectable<ControlOperationsTable>,
+): StoredDeviceOperation {
+  if (row.device_id !== null) {
+    return parseStoredOperation(row);
+  }
+  if (!MANUAL_OVERRIDE_OPERATION_KINDS.some((kind) => kind === row.kind)) {
+    throw new Error(`Operation ${row.id} has no device`);
+  }
+  if (row.request_schema_version !== MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported request schema version for manual override operation ${row.id}`,
+    );
+  }
+  const requestDocument = parseJsonDocument(
+    row.request_json,
+    `manual override operation ${row.id} request`,
+  );
+  if (requestDocument.duplicateKeys.length > 0) {
+    throw new Error(
+      `Manual override operation ${row.id} request contains duplicate JSON keys`,
+    );
+  }
+  const request = manualOverrideOperationRequestSchema.parse(
+    requestDocument.value,
+  );
+  if (request.kind !== row.kind) {
+    throw new Error(
+      `Manual override operation ${row.id} kind does not match its request`,
+    );
+  }
+  let result: ReturnType<
+    typeof manualOverrideOperationResultSchema.parse
+  > | null = null;
+  if (row.result_json !== null || row.result_schema_version !== null) {
+    if (
+      row.result_json === null ||
+      row.result_schema_version !== MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION
+    ) {
+      throw new Error(
+        `Manual override operation ${row.id} has an invalid result envelope`,
+      );
+    }
+    const resultDocument = parseJsonDocument(
+      row.result_json,
+      `manual override operation ${row.id} result`,
+    );
+    if (resultDocument.duplicateKeys.length > 0) {
+      throw new Error(
+        `Manual override operation ${row.id} result contains duplicate JSON keys`,
+      );
+    }
+    result = manualOverrideOperationResultSchema.parse(resultDocument.value);
+  }
+  const terminal = !["pending", "in_flight"].includes(row.status);
+  if (terminal !== (row.completed_at_ms !== null && result !== null)) {
+    throw new Error(
+      `Manual override operation ${row.id} completion does not match ${row.status}`,
+    );
+  }
+  if (result !== null && result.status !== row.status) {
+    throw new Error(
+      `Manual override operation ${row.id} result does not match its status`,
+    );
+  }
+  throw new DeviceOperationReconciliationConflictError(
+    row.id,
+    "not_device_operation",
+    `Operation ${row.id} is a manual-override aggregate and cannot be reconciled as a device operation`,
+  );
+}
+
+async function assertNotOwnedByUnresolvedManualOverride(
+  transaction: StateDatabaseTransaction,
+  operationId: string,
+): Promise<void> {
+  const unresolvedManualOperations = await transaction
+    .selectFrom("control_operations")
+    .select(["id", "result_json", "result_schema_version"])
+    .where("kind", "in", [...MANUAL_OVERRIDE_OPERATION_KINDS])
+    .where("status", "=", "outcome_unknown")
+    .execute();
+  for (const owner of unresolvedManualOperations) {
+    if (
+      owner.result_json === null ||
+      owner.result_schema_version !== MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION
+    ) {
+      throw new Error(
+        `Manual override operation ${owner.id} has an invalid result envelope`,
+      );
+    }
+    const document = parseJsonDocument(
+      owner.result_json,
+      `manual override operation ${owner.id} result`,
+    );
+    if (document.duplicateKeys.length > 0) {
+      throw new Error(
+        `Manual override operation ${owner.id} result contains duplicate JSON keys`,
+      );
+    }
+    const result = manualOverrideOperationResultSchema.parse(document.value);
+    if (
+      result.status === "outcome_unknown" &&
+      result.reconciledAtMs === null &&
+      result.unknownChildOperationId === operationId
+    ) {
+      throw new DeviceOperationReconciliationConflictError(
+        operationId,
+        "manual_override_owns_operation",
+        `Operation ${operationId} must be reconciled through manual override operation ${owner.id}`,
+      );
+    }
+  }
+}
+
+function safeAdd(left: number, right: number, message: string): number {
+  const result = left + right;
+  if (!Number.isSafeInteger(result) || result < 0) {
+    throw new RangeError(message);
+  }
+  return result;
 }

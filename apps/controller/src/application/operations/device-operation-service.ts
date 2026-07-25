@@ -10,6 +10,7 @@ import { utf8ByteLength } from "@aquarium/esp-protocol";
 
 import {
   ConfigurationNotFoundError,
+  ConfigurationRelationalConflictError,
   ConfigurationRevisionConflictError,
   ConfigurationValidationError,
   type DeviceConfigurationCommandPort,
@@ -18,6 +19,8 @@ import type { DeviceRegistry } from "../devices/index.js";
 import type { MqttInteractionLogger } from "../runtime/mqtt-interaction-logger.js";
 import {
   DeviceOperationDeviceNotFoundError,
+  DeviceOperationNotFoundError,
+  DeviceOperationReconciliationConflictError,
   DeviceOperationRevisionConflictError,
   type ControlOperationRepository,
   type StoredDeviceOperation,
@@ -50,6 +53,8 @@ export interface DeviceOperationServiceOptions {
   readonly operationTimeoutMs?: number;
   readonly idGenerator?: () => string;
   readonly onBackgroundError: (error: Error) => void;
+  readonly onUnknownOutcomeLatched: () => void;
+  readonly onAllUnknownOutcomesReconciled: () => Promise<void>;
 }
 
 export class DeviceOperationService implements DeviceConfigurationCommandPort {
@@ -61,11 +66,14 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
   readonly #operationTimeoutMs: number;
   readonly #idGenerator: () => string;
   readonly #onBackgroundError: (error: Error) => void;
+  readonly #onUnknownOutcomeLatched: () => void;
+  readonly #onAllUnknownOutcomesReconciled: () => Promise<void>;
   readonly #activeAttempts = new Set<Promise<void>>();
   #fatalBackgroundError: Error | null = null;
   #started = false;
   #accepting = false;
   #outcomeUnknownLatched = false;
+  #postReconciliationRecoveryPending = false;
 
   constructor(
     repository: ControlOperationRepository,
@@ -92,6 +100,9 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     this.#idGenerator =
       options.idGenerator ?? (() => `operation-${randomUUID()}`);
     this.#onBackgroundError = options.onBackgroundError;
+    this.#onUnknownOutcomeLatched = options.onUnknownOutcomeLatched;
+    this.#onAllUnknownOutcomesReconciled =
+      options.onAllUnknownOutcomesReconciled;
   }
 
   async start(): Promise<void> {
@@ -99,8 +110,9 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       return;
     }
     const recovery = await this.#repository.recoverInterrupted(this.#now());
-    this.#outcomeUnknownLatched =
-      recovery.unresolvedOutcomeUnknownIds.length > 0;
+    if (recovery.unresolvedOutcomeUnknownIds.length > 0) {
+      this.#latchUnknownOutcome();
+    }
     this.#started = true;
     this.#accepting = true;
   }
@@ -142,7 +154,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     deviceId: string,
     request: PatchDeviceConfigurationRequest,
   ): Promise<MutationResult> {
-    this.#assertCanCreateOperation();
+    this.#assertCanPatchDeviceConfiguration();
     const parsedRequest = patchDeviceConfigurationRequestSchema.parse(request);
     let device;
     try {
@@ -225,23 +237,70 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     return mutationResultSchema.parse(created.mutation);
   }
 
+  async reconcileDeviceOperation(
+    operationId: string,
+    expectedRevision: number,
+  ): Promise<MutationResult> {
+    this.#assertServiceAccepting();
+    try {
+      return await this.#reconcileOutcome(
+        operationId,
+        expectedRevision,
+        "operator",
+      );
+    } catch (error) {
+      if (error instanceof DeviceOperationRevisionConflictError) {
+        throw new ConfigurationRevisionConflictError(
+          error.expectedRevision,
+          error.currentRevision,
+        );
+      }
+      if (error instanceof DeviceOperationNotFoundError) {
+        throw new ConfigurationNotFoundError("operation", error.operationId);
+      }
+      if (error instanceof DeviceOperationReconciliationConflictError) {
+        throw new ConfigurationRelationalConflictError([
+          {
+            resource: "operation",
+            id: error.operationId,
+            relation: error.relation,
+            message: error.message,
+          },
+        ]);
+      }
+      throw error;
+    }
+  }
+
   async acknowledgeReconciledOutcome(operationId: string): Promise<void> {
-    if (!this.#started) {
-      throw new Error("Device operation service is not started");
-    }
-    const operation = await this.#repository.getById(operationId);
-    const alreadyReconciled =
-      operation.status === "outcome_unknown" &&
-      operation.result?.status === "outcome_unknown" &&
-      operation.result.reconciledAtMs !== null;
-    if (!alreadyReconciled) {
-      await this.#repository.markOutcomeReconciled(operationId, this.#now());
-    }
+    this.#assertServiceAccepting();
+    await this.#reconcileOutcome(operationId, null, "manual_override");
+  }
+
+  async #reconcileOutcome(
+    operationId: string,
+    expectedRevision: number | null,
+    origin: "manual_override" | "operator",
+  ): Promise<MutationResult> {
+    const mutation = await this.#repository.reconcileOutcome({
+      operationId,
+      expectedRevision,
+      origin,
+      reconciledAtMs: this.#now(),
+    });
     const unresolved = await this.#repository.listUnresolvedOutcomeUnknownIds();
-    if (unresolved.length === 0 && this.#outcomeUnknownLatched) {
-      this.#transport.acknowledgeUnknownOutcome();
-      this.#outcomeUnknownLatched = false;
+    if (unresolved.length === 0) {
+      if (this.#outcomeUnknownLatched) {
+        this.#transport.acknowledgeUnknownOutcome();
+        this.#outcomeUnknownLatched = false;
+        this.#postReconciliationRecoveryPending = true;
+      }
+      if (this.#postReconciliationRecoveryPending) {
+        await this.#onAllUnknownOutcomesReconciled();
+        this.#postReconciliationRecoveryPending = false;
+      }
     }
+    return mutationResultSchema.parse(mutation);
   }
 
   async #trackAttempt(
@@ -312,7 +371,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
         normalized instanceof LegacyMqttUnavailableError ||
         normalized instanceof LegacyMqttOutcomeUnknownError;
       if (normalized instanceof LegacyMqttOutcomeUnknownError) {
-        this.#outcomeUnknownLatched = true;
+        this.#latchUnknownOutcome();
       }
       const result: DeviceOperationResult = definitelyNotAttempted
         ? {
@@ -329,11 +388,11 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
             reconciledAtMs: null,
           };
       if (result.status === "outcome_unknown") {
-        this.#outcomeUnknownLatched = true;
+        this.#latchUnknownOutcome();
       }
       const completedAtMs = this.#now();
       if (completedAtMs < attemptAtMs) {
-        this.#outcomeUnknownLatched = true;
+        this.#latchUnknownOutcome();
         throw new RangeError(
           `Completion clock regressed after attempting operation ${operation.id}`,
           { cause: error },
@@ -362,7 +421,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       wireResult.startedAtMs < attemptAtMs ||
       wireResult.completedAtMs < wireResult.startedAtMs
     ) {
-      this.#outcomeUnknownLatched = true;
+      this.#latchUnknownOutcome();
       const anomalyAtMs = this.#now();
       if (anomalyAtMs < attemptAtMs) {
         throw new RangeError(
@@ -394,7 +453,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     }
     const outcome = wireResult.outcomes[0];
     if (outcome === undefined || wireResult.outcomes.length !== 1) {
-      this.#outcomeUnknownLatched = true;
+      this.#latchUnknownOutcome();
       const completed = await this.#repository.completeInFlight(
         operation.id,
         wireResult.completedAtMs,
@@ -420,7 +479,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     }
     const result = operationResultFromOutcome(outcome, wireResult.operationId);
     if (result.status === "outcome_unknown") {
-      this.#outcomeUnknownLatched = true;
+      this.#latchUnknownOutcome();
     }
     let completed: StoredDeviceOperation;
     try {
@@ -430,7 +489,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
         result,
       );
     } catch (error) {
-      this.#outcomeUnknownLatched = true;
+      this.#latchUnknownOutcome();
       throw error;
     }
     const postCompletionTasks: PostCompletionTask[] = [
@@ -524,14 +583,40 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
   }
 
   #assertCanCreateOperation(): void {
+    this.#assertServiceAccepting();
+    if (this.#outcomeUnknownLatched) {
+      throw new LegacyMqttOutcomeUnknownError();
+    }
+  }
+
+  #latchUnknownOutcome(): void {
+    if (!this.#outcomeUnknownLatched) {
+      this.#outcomeUnknownLatched = true;
+      this.#onUnknownOutcomeLatched();
+    }
+  }
+
+  #assertCanPatchDeviceConfiguration(): void {
+    this.#assertServiceAccepting();
+    if (this.#outcomeUnknownLatched) {
+      throw new ConfigurationRelationalConflictError([
+        {
+          resource: "operation",
+          id: null,
+          relation: "unreconciled_device_operation",
+          message:
+            "Device configuration cannot be changed while a device operation outcome remains unknown",
+        },
+      ]);
+    }
+  }
+
+  #assertServiceAccepting(): void {
     if (this.#fatalBackgroundError !== null) {
       throw this.#fatalBackgroundError;
     }
     if (!this.#started || !this.#accepting) {
       throw new Error("Device operation service is not accepting operations");
-    }
-    if (this.#outcomeUnknownLatched) {
-      throw new LegacyMqttOutcomeUnknownError();
     }
   }
 }

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"http://localhost/"}
 
-import { operationDetailsResponseSchema } from "@aquarium/contracts";
+import {
+  expectedRevisionSchema,
+  operationDetailsResponseSchema,
+} from "@aquarium/contracts";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -11,6 +14,7 @@ import {
   deleteChannel,
   fetchOperationDetails,
   patchDeviceConfiguration,
+  reconcileDeviceOperation,
   renameChannel,
   replaceMappingProfile,
   replaceSchedule,
@@ -141,6 +145,33 @@ describe("control configuration API", () => {
       status: 409,
       details: { code: "revision_conflict", currentRevision: 9 },
     });
+  });
+
+  it("posts a strict expected revision to the device-operation reconcile route", async () => {
+    let requestBody: ReturnType<typeof expectedRevisionSchema.parse> | null =
+      null;
+    server.use(
+      http.post(
+        "http://localhost/api/operations/operation-main/reconcile",
+        async ({ request }) => {
+          requestBody = expectedRevisionSchema.parse(await request.json());
+          return HttpResponse.json({
+            changed: false,
+            revision: 8,
+            event: null,
+          });
+        },
+      ),
+    );
+
+    await expect(
+      reconcileDeviceOperation("operation-main", 8),
+    ).resolves.toEqual({
+      changed: false,
+      revision: 8,
+      event: null,
+    });
+    expect(requestBody).toEqual({ expectedRevision: 8 });
   });
 });
 

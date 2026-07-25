@@ -8,6 +8,102 @@ import {
 } from "./scheduled-device-operations.js";
 
 describe("scheduled device operation safety dispatcher", () => {
+  it("restores a persisted unknown-outcome latch before accepting work", async () => {
+    const port = new RecordingOperationPort();
+    port.results.push({
+      id: "operation-after-reconciliation",
+      status: "succeeded",
+    });
+    const dispatcher = new ScheduledDeviceOperationDispatcher(port);
+
+    await dispatcher.restoreUnknownOutcomeLatch();
+    await expect(dispatcher.dispatch("device-a", pwm(1, 10))).resolves.toEqual({
+      kind: "blocked",
+      reason: "outcome_unknown",
+    });
+    expect(port.calls).toHaveLength(0);
+
+    await dispatcher.acknowledgeReconciledOutcome();
+    await expect(
+      dispatcher.dispatch("device-a", pwm(1, 10)),
+    ).resolves.toMatchObject({
+      kind: "completed",
+      operation: { status: "succeeded" },
+    });
+    expect(port.calls).toHaveLength(1);
+  });
+
+  it("accepts a synchronous live latch notification from its own in-flight operation", async () => {
+    const executeDeviceOperation = async () => {
+      dispatcher.latchUnknownOutcome();
+      return { id: "operation-unknown", status: "outcome_unknown" as const };
+    };
+    const dispatcher = new ScheduledDeviceOperationDispatcher({
+      executeDeviceOperation,
+    });
+
+    await expect(
+      dispatcher.dispatch("device-a", pwm(1, 10)),
+    ).resolves.toMatchObject({
+      kind: "completed",
+      operation: { status: "outcome_unknown" },
+    });
+    expect(dispatcher.blockedReason).toBe("outcome_unknown");
+    await expect(dispatcher.dispatch("device-a", pwm(1, 10))).resolves.toEqual({
+      kind: "blocked",
+      reason: "outcome_unknown",
+    });
+  });
+
+  it("does not re-latch the same unknown after reconciliation is queued", async () => {
+    let acknowledgement: Promise<void> | null = null;
+    const executeDeviceOperation = async () => {
+      dispatcher.latchUnknownOutcome();
+      acknowledgement = dispatcher.acknowledgeReconciledOutcome();
+      return { id: "operation-unknown", status: "outcome_unknown" as const };
+    };
+    const dispatcher = new ScheduledDeviceOperationDispatcher({
+      executeDeviceOperation,
+    });
+
+    await expect(
+      dispatcher.dispatch("device-a", pwm(1, 10)),
+    ).resolves.toMatchObject({
+      kind: "completed",
+      operation: { status: "outcome_unknown" },
+    });
+    if (acknowledgement === null) {
+      throw new Error("The in-flight operation did not queue reconciliation");
+    }
+    await acknowledgement;
+
+    expect(dispatcher.blockedReason).toBeNull();
+  });
+
+  it("does not let a queued acknowledgement clear a newer unknown outcome", async () => {
+    let settle: (value: ScheduledDeviceOperationCompletion) => void = () =>
+      undefined;
+    const completion = new Promise<ScheduledDeviceOperationCompletion>(
+      (resolve) => {
+        settle = resolve;
+      },
+    );
+    const port = new RecordingOperationPort();
+    port.results.push(completion);
+    const dispatcher = new ScheduledDeviceOperationDispatcher(port);
+    const inFlight = dispatcher.dispatch("device-a", pwm(1, 10));
+    await Promise.resolve();
+
+    dispatcher.latchUnknownOutcome();
+    const acknowledgement = dispatcher.acknowledgeReconciledOutcome();
+    dispatcher.latchUnknownOutcome();
+    settle({ id: "operation-success", status: "succeeded" });
+    await inFlight;
+    await acknowledgement;
+
+    expect(dispatcher.blockedReason).toBe("outcome_unknown");
+  });
+
   it("serializes callers and blocks queued work after an outcome becomes unknown", async () => {
     let settleFirst: (
       completion: ScheduledDeviceOperationCompletion,

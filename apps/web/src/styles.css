@@ -1534,6 +1534,44 @@ h2 {
   white-space: pre-wrap;
 }
 
+.operation-reconcile-warning {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(241, 138, 128, 0.48);
+  border-radius: 10px;
+  color: #ffd3d0;
+  background: rgba(126, 37, 37, 0.22);
+}
+
+.operation-reconcile-warning p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.operation-reconcile-warning label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #fff0ee;
+  font-weight: 700;
+}
+
+.operation-reconcile-warning input {
+  width: 18px;
+  height: 18px;
+  accent-color: #f18a80;
+}
+
+.operation-reconcile-warning .danger-button {
+  justify-self: start;
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 @media (max-width: 900px) {
   .topbar {
     align-items: flex-start;
@@ -1662,5 +1700,22 @@ h2 {
 
   .schedule-graph svg {
     width: 680px;
+  }
+}
+
+@media (max-width: 600px) {
+  .topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  nav {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  nav a {
+    padding-right: 6px;
+    padding-left: 6px;
   }
 }

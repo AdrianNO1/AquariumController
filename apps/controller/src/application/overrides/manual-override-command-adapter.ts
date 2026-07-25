@@ -29,6 +29,5 @@ export class ManualOverrideCommandAdapter implements ManualOverrideDeviceCommand
 
   async reconcileUnknownOutcome(operationId: string): Promise<void> {
     await this.operationReconciler.acknowledgeReconciledOutcome(operationId);
-    await this.dispatcher.acknowledgeReconciledOutcome();
   }
 }

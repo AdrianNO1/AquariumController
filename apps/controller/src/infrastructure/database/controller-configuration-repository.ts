@@ -65,6 +65,11 @@ import {
   deviceOperationRequestSchema,
   deviceOperationResultSchema,
 } from "../../application/operations/device-operation-types.js";
+import {
+  MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION,
+  manualOverrideOperationRequestSchema,
+  manualOverrideOperationResultSchema,
+} from "../../application/overrides/manual-override-types.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 import {
   commitConditionalStateChange,
@@ -72,6 +77,7 @@ import {
 } from "./state-outbox.js";
 import type {
   AlertRulesTable,
+  ControlOperationsTable,
   PinMappingsTable,
   StateDatabaseSchema,
 } from "./types.js";
@@ -196,6 +202,35 @@ function parseStoredDocument<Output>(
     throw new Error(`Persisted ${subject} contains duplicate keys`);
   }
   return schema.parse(document.value);
+}
+
+function parseOptionalOperationResult<Output>(
+  operation: Selectable<ControlOperationsTable>,
+  expectedVersion: number,
+  schema: ZodType<Output>,
+  subjectPrefix: string,
+): Output | null {
+  if (
+    operation.result_json === null &&
+    operation.result_schema_version === null
+  ) {
+    return null;
+  }
+  if (
+    operation.result_json === null ||
+    operation.result_schema_version === null
+  ) {
+    throw new Error(
+      `Persisted operation ${operation.id} result version is incomplete`,
+    );
+  }
+  return parseStoredDocument(
+    operation.result_json,
+    operation.result_schema_version,
+    expectedVersion,
+    schema,
+    `${subjectPrefix} ${operation.id} result`,
+  );
 }
 
 function alertRuleSourceId(rule: StoredAlertRule): string {
@@ -855,32 +890,76 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
     if (operation === undefined) {
       throw new ConfigurationNotFoundError("operation", operationId);
     }
-    const request = parseStoredDocument(
-      operation.request_json,
-      operation.request_schema_version,
-      DEVICE_OPERATION_REQUEST_SCHEMA_VERSION,
-      deviceOperationRequestSchema,
-      `operation ${operation.id} request`,
-    );
-    const result =
-      operation.result_json === null && operation.result_schema_version === null
-        ? null
-        : operation.result_json === null ||
-            operation.result_schema_version === null
-          ? (() => {
-              throw new Error(
-                `Persisted operation ${operation.id} result version is incomplete`,
-              );
-            })()
-          : parseStoredDocument(
-              operation.result_json,
-              operation.result_schema_version,
-              DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
-              deviceOperationResultSchema,
-              `operation ${operation.id} result`,
-            );
-    if (result !== null)
-      assertDeviceOperationResultMatchesRequest(request, result);
+    const manualOverrideAggregate = [
+      "manual_override_start",
+      "manual_override_cancel",
+      "manual_override_expire",
+    ].includes(operation.kind);
+    let request:
+      | ReturnType<typeof deviceOperationRequestSchema.parse>
+      | ReturnType<typeof manualOverrideOperationRequestSchema.parse>;
+    let result:
+      | ReturnType<typeof deviceOperationResultSchema.parse>
+      | ReturnType<typeof manualOverrideOperationResultSchema.parse>
+      | null;
+    if (manualOverrideAggregate) {
+      if (operation.device_id !== null) {
+        throw new Error(
+          `Manual override operation ${operation.id} unexpectedly references a device`,
+        );
+      }
+      request = parseStoredDocument(
+        operation.request_json,
+        operation.request_schema_version,
+        MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION,
+        manualOverrideOperationRequestSchema,
+        `manual override operation ${operation.id} request`,
+      );
+      result = parseOptionalOperationResult(
+        operation,
+        MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION,
+        manualOverrideOperationResultSchema,
+        "manual override operation",
+      );
+    } else {
+      if (operation.device_id === null) {
+        throw new Error(`Device operation ${operation.id} has no device`);
+      }
+      const deviceRequest = parseStoredDocument(
+        operation.request_json,
+        operation.request_schema_version,
+        DEVICE_OPERATION_REQUEST_SCHEMA_VERSION,
+        deviceOperationRequestSchema,
+        `operation ${operation.id} request`,
+      );
+      const deviceResult = parseOptionalOperationResult(
+        operation,
+        DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
+        deviceOperationResultSchema,
+        "operation",
+      );
+      if (deviceResult !== null) {
+        assertDeviceOperationResultMatchesRequest(deviceRequest, deviceResult);
+      }
+      request = deviceRequest;
+      result = deviceResult;
+    }
+    if (request.kind !== operation.kind) {
+      throw new Error(
+        `Persisted operation ${operation.id} kind does not match its request`,
+      );
+    }
+    if (result !== null && result.status !== operation.status) {
+      throw new Error(
+        `Persisted operation ${operation.id} status does not match its result`,
+      );
+    }
+    const terminal = !["pending", "in_flight"].includes(operation.status);
+    if (terminal !== (operation.completed_at_ms !== null && result !== null)) {
+      throw new Error(
+        `Persisted operation ${operation.id} completion fields do not match its status`,
+      );
+    }
     return operationDetailsResponseSchema.parse({
       operation: {
         id: operation.id,

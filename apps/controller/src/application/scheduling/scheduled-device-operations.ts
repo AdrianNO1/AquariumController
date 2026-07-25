@@ -43,14 +43,19 @@ export type ScheduledOperationDispatchResult =
 export class ScheduledDeviceOperationDispatcher {
   readonly #operations: ScheduledDeviceOperationPort;
   #tail: Promise<void> = Promise.resolve();
-  #blockedReason: ScheduledOperationBlockReason | null = null;
+  #commandErrorLatched = false;
+  #outcomeUnknownLatched = false;
+  #outcomeUnknownGeneration = 0n;
 
   constructor(operations: ScheduledDeviceOperationPort) {
     this.#operations = operations;
   }
 
   get blockedReason(): ScheduledOperationBlockReason | null {
-    return this.#blockedReason;
+    if (this.#outcomeUnknownLatched) {
+      return "outcome_unknown";
+    }
+    return this.#commandErrorLatched ? "command_error" : null;
   }
 
   dispatch(
@@ -68,14 +73,33 @@ export class ScheduledDeviceOperationDispatcher {
   }
 
   async acknowledgeReconciledOutcome(): Promise<void> {
+    const acknowledgedGeneration = this.#outcomeUnknownGeneration;
     const acknowledgement = this.#tail.then(() => {
-      this.#blockedReason = null;
+      if (this.#outcomeUnknownGeneration === acknowledgedGeneration) {
+        this.#outcomeUnknownLatched = false;
+      }
     });
     this.#tail = acknowledgement.then(
       () => undefined,
       () => undefined,
     );
     await acknowledgement;
+  }
+
+  async restoreUnknownOutcomeLatch(): Promise<void> {
+    const restoration = this.#tail.then(() => {
+      this.latchUnknownOutcome();
+    });
+    this.#tail = restoration.then(
+      () => undefined,
+      () => undefined,
+    );
+    await restoration;
+  }
+
+  latchUnknownOutcome(): void {
+    this.#outcomeUnknownGeneration += 1n;
+    this.#outcomeUnknownLatched = true;
   }
 
   async drain(): Promise<void> {
@@ -86,8 +110,9 @@ export class ScheduledDeviceOperationDispatcher {
     deviceId: string,
     request: ScheduledDeviceOperationRequest,
   ): Promise<ScheduledOperationDispatchResult> {
-    if (this.#blockedReason !== null) {
-      return { kind: "blocked", reason: this.#blockedReason };
+    const blockedReason = this.blockedReason;
+    if (blockedReason !== null) {
+      return { kind: "blocked", reason: blockedReason };
     }
 
     let operation: ScheduledDeviceOperationCompletion;
@@ -97,18 +122,24 @@ export class ScheduledDeviceOperationDispatcher {
         request,
       );
     } catch (error) {
-      this.#blockedReason = "command_error";
+      this.#commandErrorLatched = true;
       throw error;
     }
 
     if (operation.status === "pending" || operation.status === "in_flight") {
-      this.#blockedReason = "command_error";
+      this.#commandErrorLatched = true;
       throw new Error(
         `Scheduled operation ${operation.id} returned before reaching a terminal state`,
       );
     }
-    if (operation.status === "outcome_unknown") {
-      this.#blockedReason = "outcome_unknown";
+    if (
+      operation.status === "outcome_unknown" &&
+      !this.#outcomeUnknownLatched
+    ) {
+      // The concrete operation service notifies the runtime before returning.
+      // This fallback covers other ports without double-latching that same
+      // operation after reconciliation has already been queued.
+      this.latchUnknownOutcome();
     }
     return { kind: "completed", operation };
   }

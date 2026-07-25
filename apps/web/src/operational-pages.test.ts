@@ -4,9 +4,11 @@
 import {
   alertHistoryListResponseSchema,
   acknowledgeAlertRequestSchema,
+  controllerSnapshotSchema,
   createLogFilterFingerprint,
   encodeLogCursor,
   logsListResponseSchema,
+  operationDetailsResponseSchema,
   type AcknowledgeAlertRequest,
   type ControllerSnapshot,
   type LogEntry,
@@ -38,6 +40,7 @@ import {
   createTestAlertsSnapshot,
   createTestControllerSnapshot,
 } from "./test-controller-snapshot.js";
+import { createTestControlSnapshot } from "./test-control-snapshot.js";
 
 const server = setupServer();
 const nativeFetch = globalThis.fetch;
@@ -444,6 +447,103 @@ describe("alerts route", () => {
       note: "Reviewing",
     });
     expect(refresh).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("operations route", () => {
+  it("inspects and reconciles an unresolved outcome outside recent history and current mappings", async () => {
+    const base = createTestControlSnapshot(8);
+    const hiddenOperation = base.operations.items.find(
+      ({ id }) => id === "operation-unknown",
+    );
+    if (hiddenOperation === undefined) {
+      throw new Error("Missing unknown operation fixture");
+    }
+    const snapshot = controllerSnapshotSchema.parse({
+      ...base,
+      devices: base.devices.map((device) =>
+        device.id === hiddenOperation.deviceId
+          ? { ...device, mappingProfileId: null }
+          : device,
+      ),
+      operations: {
+        ...base.operations,
+        items: base.operations.items.filter(
+          ({ id }) => id !== hiddenOperation.id,
+        ),
+      },
+      unresolvedDeviceOperations: {
+        items: [hiddenOperation],
+        limit: 100,
+        truncated: false,
+      },
+    });
+    const refresh = vi.fn();
+    const reconciliationBodies: unknown[] = [];
+    server.use(
+      http.get("http://localhost/api/operations/operation-unknown", () =>
+        HttpResponse.json(
+          operationDetailsResponseSchema.parse({
+            operation: hiddenOperation,
+            request: {
+              schemaVersion: 1,
+              data: {
+                kind: "edit_configuration",
+                name: "Backup",
+                pwmFrequencyHz: 5_000,
+                pwmResolutionBits: 8,
+              },
+            },
+            result: {
+              schemaVersion: 1,
+              data: {
+                status: "outcome_unknown",
+                wireOperationId: "wire-hidden",
+                reason: "timeout",
+                reconciledAtMs: null,
+              },
+            },
+          }),
+        ),
+      ),
+      http.post(
+        "http://localhost/api/operations/operation-unknown/reconcile",
+        async ({ request }) => {
+          reconciliationBodies.push(await request.json());
+          return HttpResponse.json({
+            changed: false,
+            revision: 9,
+            event: null,
+          });
+        },
+      ),
+    );
+
+    const user = renderApp("/operations", controllerState(snapshot, refresh));
+    expect(
+      screen.getByRole("heading", { name: "Device operation outcomes" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Operations" })).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", {
+        name: "Inspect operation-unknown",
+      }),
+    );
+    await user.click(
+      await screen.findByLabelText(
+        "I have verified the physical and device state.",
+      ),
+    );
+    await user.click(
+      screen.getByRole("button", {
+        name: "Reconcile this unknown device outcome",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(reconciliationBodies).toEqual([{ expectedRevision: 8 }]),
+    );
+    expect(refresh).toHaveBeenCalledOnce();
   });
 });
 
