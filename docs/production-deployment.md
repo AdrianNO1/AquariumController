@@ -8,23 +8,28 @@ run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
 [Pi production handoff checklist](pi-production-handoff.md). Local evidence on
-2026-07-25 includes real MQTT 5/5, three consecutive retry-free Playwright
-18/18 runs, clean Linux verification, green Compose/preflight syntax, and a
-healthy integrity-clean ARM64 image. This runbook does not claim hosted CI or
-Pi validation.
+2026-07-25 includes real MQTT 5/5, 97 files/638 unit tests, 82 files/571
+critical tests, and retry-free Playwright 18/18. The protected PR and `master`
+runs passed all six validation jobs, and the selected exact image digest passed
+amd64/ARM64 publication smoke. This runbook does not claim Pi or production
+hardware validation.
 
 ## 0. Verify the repository release-source gate
 
 All reachable hosted branches contain only redacted credential sentinels and
 retain the original commit topology. One older, unreachable GitHub object is
 still directly addressable and its secret-scanning alert remains open. Before
-selecting an image:
+deploying the selected image:
 
 1. confirm the affected credential was independently revoked;
 2. ask GitHub Support to purge the unreachable object and cached view;
 3. resolve the alert as `revoked` only after revocation is confirmed, and keep
-   secret scanning and push protection enabled; and
-4. require a fresh trusted run of all six hosted validation jobs.
+   secret scanning and push protection enabled.
+
+The selected source already has fresh trusted runs of all six validation jobs:
+[PR run 30158546118](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
+and
+[`master` run 30158994132](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132).
 
 History rewriting for credential removal must preserve unrelated commits; do
 not replace the repository with a single squashed root. Public clones and caches
@@ -52,20 +57,26 @@ GitHub may retain direct-SHA and cached views; use the first-changed commits
 reported by `git-filter-repo` when contacting GitHub Support for final
 cached-reference removal.
 
-After sanitized history is hosted and CI has produced its real check names,
-protect the actual default branch: require pull requests and all six validation
-jobs, require the branch to be current before merge, block force-pushes and
-deletion, and apply the rule to administrators. Keep immutable Action-SHA
-enforcement, secret scanning, and push protection enabled. Only then configure
-`AQUARIUM_GHCR_IMAGE` and allow the separately gated `publish-image` job on a
-default-branch push to publish a release digest.
+The actual default branch is protected: it requires pull requests, a current
+branch, all six validation jobs, and administrator enforcement; force-pushes
+and deletion are blocked. Immutable Action-SHA enforcement, secret scanning,
+and push protection remain enabled. `AQUARIUM_GHCR_IMAGE` is configured as
+`ghcr.io/adrianno1/aquarium-controller`, and the separately gated publisher has
+completed.
 
 ## 1. Record the release inputs
 
-Use the exact multi-platform digest reported by the successful `publish-image`
-job. The digest, not its temporary CI tag, is the deployment identity. Record
-the prior image digest and prior storage paths in the change record before an
-upgrade.
+Use this selected release:
+
+- source: `886ed05be89a1abed8e076d91ce2802f5d5668dd`;
+- repository: `ghcr.io/adrianno1/aquarium-controller`; and
+- digest:
+  `sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
+
+The digest, not its temporary CI tag, is the deployment identity. Record the
+prior image digest and prior storage paths in the change record before an
+upgrade. A later documentation-only merge does not silently replace this
+selection.
 
 Load production values into the current shell from an operator-managed secret
 store or a root-owned file outside the checkout. Do not commit credentials and
@@ -77,8 +88,8 @@ print environment values.
 ```sh
 set -Eeuo pipefail
 
-export AQUARIUM_CONTROLLER_IMAGE_REPOSITORY=ghcr.io/<owner>/<repository>
-export AQUARIUM_CONTROLLER_IMAGE_SHA256=<64-hex-characters-after-sha256:>
+export AQUARIUM_CONTROLLER_IMAGE_REPOSITORY=ghcr.io/adrianno1/aquarium-controller
+export AQUARIUM_CONTROLLER_IMAGE_SHA256=0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc
 export COMPOSE_DISABLE_ENV_FILE=1
 export AQUARIUM_HTTP_BIND_ADDRESS=<explicit-Pi-LAN-address>
 export AQUARIUM_HTTP_PORT=3001
@@ -90,12 +101,13 @@ export AQUARIUM_ARCHIVE_HOST_DIRECTORY=/srv/aquarium/archives
 export AQUARIUM_BACKUP_HOST_DIRECTORY=/srv/aquarium/backups
 ```
 
-Decide the GHCR package visibility before the Pi preflight. A public container
-package can be pulled anonymously. For a private package, authenticate the same
-unprivileged Pi account that will run the Compose commands with a classic
-personal access token scoped only to `read:packages` and an account that can
-read the package. Read the token without echoing it and remove it from the shell
-immediately after Docker receives it:
+The selected GHCR package was public and anonymously pullable when this evidence
+was recorded, so the Pi should not need a registry credential. The Pi preflight
+must still prove it can pull this exact digest. If package visibility later
+becomes private, authenticate the same unprivileged Pi account that will run the
+Compose commands with a classic personal access token scoped only to
+`read:packages` and an account that can read the package. Read the token without
+echoing it and remove it from the shell immediately after Docker receives it:
 
 ```sh
 set -Eeuo pipefail

@@ -6,20 +6,22 @@ migration evidence. The ESP32 sketch temporarily remains at
 `.old/slaveCode/ESP32Code/ESP32Code.ino`, but firmware 4.0.0 is now a supported,
 compiled part of this application rather than read-only legacy evidence.
 
-Current local evidence dated 2026-07-25 includes a real-Mosquitto 5/5 pass,
-three consecutive Playwright runs at 18/18 with zero retries, and a clean Linux
-Docker verification after the hermetic migration-fixture change: 95 files/618
-unit tests and 81 files/557 critical tests. The clean ARM64 image also reached
-health as UID/GID 1000 and passed both SQLite integrity checks. Production
-Compose rendering and the Pi preflight script's Bash syntax passed locally.
+Current release evidence dated 2026-07-25 includes 97 files/638 unit tests, 82
+files/571 critical tests, real-Mosquitto 5/5, and retry-free Playwright 18/18.
+The protected pull-request and `master` runs passed all six hosted validation
+jobs. The selected release source is
+`886ed05be89a1abed8e076d91ce2802f5d5668dd`; its published amd64/ARM64 image is
+`ghcr.io/adrianno1/aquarium-controller@sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`. That
+exact digest passed health and both SQLite integrity checks as UID/GID 1000 on
+both platforms.
 
 All reachable hosted branches contain only redacted credential sentinels and
 retain the original commit topology. One unreachable historical GitHub object
 remains directly addressable; credential revocation, GitHub Support cleanup,
-and resolution of its open secret-scanning alert remain external gates. A
-trusted hosted CI run, release-image publication, and Pi validation are also
-not claimed complete. The rewrite has not been deployed to or tested on the
-aquarium Pi.
+and resolution of its open secret-scanning alert remain external gates. The
+rewrite has not been deployed to or tested on the aquarium Pi. The canonical
+evidence and remaining operator gates are in the
+[readiness report](docs/readiness-report.md).
 
 ## Frameworks and technology stack
 
@@ -168,22 +170,23 @@ docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compi
 
 CI defines six validation jobs: static/unit, critical, real-Mosquitto
 integration, production-Chromium, firmware, and amd64/ARM64 container. It also
-renders the fail-closed production Compose template and rejects tracked/generated
-build artifacts. A separate GHCR `publish-image` job is limited to pushes on the
-repository's default branch and remains skipped until the repository variable
-`AQUARIUM_GHCR_IMAGE` names the intended lowercase GHCR repository. It publishes
-through a run-unique tag, reports the resulting manifest digest, and smoke-tests
+renders the fail-closed production Compose template and rejects
+tracked/generated build artifacts. A separate GHCR `publish-image` job is
+limited to pushes on the repository's default branch. The configured
+`AQUARIUM_GHCR_IMAGE` is `ghcr.io/adrianno1/aquarium-controller`. Publication
+uses a run-unique tag, reports the resulting manifest digest, and smoke-tests
 that exact digest on amd64 and ARM64.
 Pull-request code never runs on a Pi, and no deploy job exists.
 
-The six validation jobs still need their first trusted hosted evidence. GitHub
-Free provides standard hosted Actions without a minutes charge for public
-repositories; private repositories instead use an included quota. Protected
-branches are available on GitHub Free for public repositories, while
-private-repository branch protection requires an eligible paid plan. See
-GitHub's official
+The protected [pull-request run](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
+and selected-source [`master` run](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132)
+are green. `master` requires pull requests, a current branch, all six exact
+check contexts, and administrator enforcement; force-pushes and deletion are
+blocked. GitHub Free provides standard hosted Actions without a minutes charge
+for public repositories. See GitHub's official
 [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
-and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
+and
+[protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 documentation.
 
 ## Safe storage commands
@@ -267,8 +270,8 @@ separate verified database/archive backup procedure.
 
 - Confirm the affected credential was independently revoked, ask GitHub Support
   to purge the directly addressable unreachable object/cached view, resolve the
-  remaining secret-scanning alert as `revoked`, and obtain a trusted hosted CI
-  run before selecting a release image.
+  remaining secret-scanning alert as `revoked`, and keep secret scanning and
+  push protection enabled.
 - Flash firmware 4.0.0 to every deployed ESP32 before enabling actuator work.
   Older or unexpected versions remain visible but are marked
   `firmware_outdated`, excluded from schedule/override commands, and identified
@@ -286,11 +289,10 @@ separate verified database/archive backup procedure.
   listener to the trusted aquarium LAN. The current ESP firmware does not
   support `mqtts://`; enabling
   TLS would require another firmware change and physical validation.
-- Configure the protected GitHub/GHCR settings, then set the production
-  Compose `AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
-  `AQUARIUM_CONTROLLER_IMAGE_SHA256` (the 64 hex characters after `sha256:`)
-  values. Configure the Pi bind/storage/broker paths, production MQTT
-  confirmation, and backup/rollback locations. No Pi deploy workflow is
+- Set the production Compose `AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
+  `AQUARIUM_CONTROLLER_IMAGE_SHA256` to the selected public package and exact
+  digest recorded above. Configure the Pi bind/storage/broker paths, production
+  MQTT confirmation, and backup/rollback locations. No Pi deploy workflow is
   enabled. Follow the supervised
   [Raspberry Pi deployment and rollback runbook](docs/production-deployment.md),
   including its storage preflight and exact-digest checks.

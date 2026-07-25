@@ -20,19 +20,25 @@ Status means:
   repository parity claim.
 
 All 17 retained rows are **Implemented** at repository level. The cross-layer
-results below include settled-tree local evidence. They do not claim hosted CI,
-Pi deployment, or physical-device acceptance. The decisive evidence is:
+results below include settled-tree local evidence and protected hosted CI. They
+do not claim Pi deployment or physical-device acceptance. The decisive evidence
+is:
 
 - five Testcontainers tests against digest-pinned Mosquitto 2.0.22, covering
   the enumerated wire, fault, boundary, persistence, restart, and namespace
   cases;
-- three consecutive 18/18 retry-free Chromium runs against production-built
-  assets, fresh SQLite databases, real Mosquitto, and independent MQTT fake ESP
-  actors, covering routes, reload, responsive and axe checks, configuration
-  CRUD, devices, overrides, logs, alerts, faults, and restarts;
-- passing 95-file/618-test unit and 81-file/557-test critical selections in a
-  clean Linux build, plus healthy read-only/non-root amd64 and emulated ARM64
-  container evidence;
+- local, protected PR, and protected `master` 18/18 retry-free Chromium runs
+  against production-built assets, fresh SQLite databases, real Mosquitto, and
+  independent MQTT fake ESP actors, covering routes, reload, responsive and axe
+  checks, configuration CRUD, devices, explicit outcome reconciliation, logs,
+  alerts, faults, and restarts;
+- passing 97-file/638-test unit and 82-file/571-test critical selections, plus
+  healthy read-only/non-root amd64 and emulated ARM64 container evidence in both
+  protected hosted runs;
+- the selected multi-platform image
+  `ghcr.io/adrianno1/aquarium-controller@sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`,
+  published and passed exact-digest health and SQLite integrity smoke on both
+  platforms;
 - ESP firmware 4.0.0, independent compatibility/failover tests, exact-version
   gating with a visible frontend error, and a warning-free compile using the
   pinned Arduino toolchain. The focused 2026-07-19 compile used 1,036,431 bytes
