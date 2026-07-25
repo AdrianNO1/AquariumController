@@ -1,6 +1,7 @@
 FROM ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7092d90 AS compiler
 
 ARG ARDUINO_CLI_VERSION=1.5.0
+ARG ARDUINO_CLI_SHA256=f4e49fb6f5d6a043f7df792ef057143c542140508081aaa52d214a9ab33141c8
 ARG ESP32_CORE_VERSION=3.3.8
 ARG ARDUINOJSON_VERSION=7.4.3
 ARG PUBSUBCLIENT_VERSION=2.8
@@ -8,8 +9,13 @@ ARG PUBSUBCLIENT_VERSION=2.8
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
     && curl --fail --location --show-error \
+        --output /tmp/arduino-cli.tar.gz \
         "https://github.com/arduino/arduino-cli/releases/download/v${ARDUINO_CLI_VERSION}/arduino-cli_${ARDUINO_CLI_VERSION}_Linux_64bit.tar.gz" \
-        | tar --extract --gzip --directory /usr/local/bin arduino-cli \
+    && printf '%s  %s\n' "${ARDUINO_CLI_SHA256}" /tmp/arduino-cli.tar.gz \
+        | sha256sum --check --strict \
+    && tar --extract --gzip --file /tmp/arduino-cli.tar.gz \
+        --directory /usr/local/bin arduino-cli \
+    && rm --force /tmp/arduino-cli.tar.gz \
     && rm --recursive --force /var/lib/apt/lists/*
 
 RUN arduino-cli core update-index \

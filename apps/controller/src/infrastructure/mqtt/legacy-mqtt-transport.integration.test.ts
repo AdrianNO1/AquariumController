@@ -374,7 +374,13 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     const maximumResult = await controller.transport.executeCommands([
       exact(`${ALPHA_ID} sc ${maximumSchedule}`, ALPHA_ID, "schedule_ok"),
     ]);
-    expect(maximumResult.outcomes[0]?.status).toBe("succeeded");
+    const maximumOutcome = maximumResult.outcomes[0];
+    expect(
+      maximumOutcome?.status,
+      maximumOutcome?.status === "failed"
+        ? `Maximum schedule response: ${maximumOutcome.response}`
+        : "Maximum schedule produced no successful outcome",
+    ).toBe("succeeded");
     expect(
       utf8ByteLength(actor.session.actor.persistenceSnapshot().schedule ?? ""),
     ).toBe(4_095);
@@ -754,7 +760,7 @@ async function exerciseChunkFaults(actor: ActorFixture): Promise<void> {
 }
 
 function paddedEmptySchedule(bytes: number): string {
-  const json = '{"c":[]}';
+  const json = JSON.stringify({ c: [], syncTime: EPOCH_SECONDS });
   return `${" ".repeat(bytes - json.length)}${json}`;
 }
 

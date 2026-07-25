@@ -39,7 +39,8 @@ Build the pinned verification image from the repository root:
 docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.0.0 .
 ```
 
-The image build installs Arduino CLI 1.5.0, ESP32 Arduino core 3.3.8,
-ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles the real sketch for the
-generic ESP32 target. The final image contains only `ESP32Code.ino.bin`; it is a
-build artifact, not a runtime dependency of the controller.
+The image build verifies Arduino CLI 1.5.0 against its official archive SHA-256
+before extraction, installs ESP32 Arduino core 3.3.8, ArduinoJson 7.4.3, and
+PubSubClient 2.8, then compiles the real sketch for the generic ESP32 target.
+The final image contains only `ESP32Code.ino.bin`; it is a build artifact, not a
+runtime dependency of the controller.

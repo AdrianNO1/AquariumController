@@ -6,22 +6,20 @@ migration evidence. The ESP32 sketch temporarily remains at
 `.old/slaveCode/ESP32Code/ESP32Code.ino`, but firmware 4.0.0 is now a supported,
 compiled part of this application rather than read-only legacy evidence.
 
-Historical local evidence through 2026-07-15 covers unit, real-Mosquitto,
-production-browser, amd64/ARM64 container, production-shaped import, and
-backup/restore lanes. Firmware, API, alert/SSE, archive, and backup-artifact
-hardening has landed since that evidence; focused checks include a warning-free
-2026-07-19 firmware compile and 21/21 backup-artifact tests across four files.
-The final settled-tree verification and three-repeat browser audit are still
-pending, so this README does not claim final current-tree validation or a
-currently running local stack.
+Current local evidence dated 2026-07-25 includes a real-Mosquitto 5/5 pass,
+three consecutive Playwright runs at 18/18 with zero retries, and a clean Linux
+Docker verification after the hermetic migration-fixture change: 95 files/618
+unit tests and 81 files/557 critical tests. The clean ARM64 image also reached
+health as UID/GID 1000 and passed both SQLite integrity checks. Production
+Compose rendering and the Pi preflight script's Bash syntax passed locally.
 
-The hosted repository is currently public and is not a trusted release source.
-A historical Dropbox token must be revoked, the aquarium Wi-Fi password must be
-rotated, and Git history must be sanitized before CI output or a checkout can be
-used for release. Secret scanning and push protection are enabled, but neither
-invalidates credentials already exposed in public history. Follow
-[the credential gate](docs/production-deployment.md#0-clear-the-public-repository-credential-gate)
-before any release action. The rewrite has not been deployed to the aquarium.
+All reachable hosted branches contain only redacted credential sentinels and
+retain the original commit topology. One unreachable historical GitHub object
+remains directly addressable; credential revocation, GitHub Support cleanup,
+and resolution of its open secret-scanning alert remain external gates. A
+trusted hosted CI run, release-image publication, and Pi validation are also
+not claimed complete. The rewrite has not been deployed to or tested on the
+aquarium Pi.
 
 ## Frameworks and technology stack
 
@@ -178,12 +176,12 @@ through a run-unique tag, reports the resulting manifest digest, and smoke-tests
 that exact digest on amd64 and ARM64.
 Pull-request code never runs on a Pi, and no deploy job exists.
 
-The six validation jobs still need final current-tree and hosted evidence after
-the public-history credential gate is cleared. GitHub Free provides standard
-hosted Actions without a minutes charge for public repositories; private
-repositories instead use an included quota. Protected branches are available
-on GitHub Free for public repositories, while private-repository branch
-protection requires an eligible paid plan. See GitHub's official
+The six validation jobs still need their first trusted hosted evidence. GitHub
+Free provides standard hosted Actions without a minutes charge for public
+repositories; private repositories instead use an included quota. Protected
+branches are available on GitHub Free for public repositories, while
+private-repository branch protection requires an eligible paid plan. See
+GitHub's official
 [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 documentation.
@@ -254,21 +252,23 @@ npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts -
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-legacy-directory> --commit --state-db <explicit-state.db>
 ```
 
-Run and review the dry-run first, back up any intended target, and never repair
-invalid production input silently. The production-shaped `.old/data` snapshot
-was analyzed and committed into a disposable database on 2026-07-15 with source
-fingerprint
-`15580a1ec55c1181db2a5d78f494ba18bc195f47a135b4b700028d5854033275`:
-0 errors, 85 explicit warnings, 11 throttles, 66 channels/schedules, 318 points,
-7 mapping profiles, and 34 pin mappings. The warnings preserve orphan schedules,
-materialize only provably equivalent zero tails/duplicate endpoints, and record
-the intentionally skipped Sketch5/runtime files.
+Run and review the dry-run first, and never repair invalid production input
+silently. `.old/data` is intentionally ignored operator-local production input:
+it is not committed, copied into images, or used by CI. Automated migration
+coverage creates deterministic synthetic JSON fixtures in temporary
+directories. Those fixtures prove importer behavior but do not certify the
+aquarium's data. For the first production migration, preserve the legacy
+installation and an immutable copy of its JSON, then commit that exact stopped
+snapshot only into a newly claimed state database. Back up an existing target
+only for nonproduction importer work; subsequent SQLite upgrades use the
+separate verified database/archive backup procedure.
 
 ## Remaining release actions
 
-- Revoke the historically exposed Dropbox token, rotate the aquarium Wi-Fi
-  password, and publish only sanitized history. The repository is currently
-  public and untrusted even though secret scanning and push protection are on.
+- Confirm the affected credential was independently revoked, ask GitHub Support
+  to purge the directly addressable unreachable object/cached view, resolve the
+  remaining secret-scanning alert as `revoked`, and obtain a trusted hosted CI
+  run before selecting a release image.
 - Flash firmware 4.0.0 to every deployed ESP32 before enabling actuator work.
   Older or unexpected versions remain visible but are marked
   `firmware_outdated`, excluded from schedule/override commands, and identified
@@ -294,6 +294,10 @@ the intentionally skipped Sketch5/runtime files.
   enabled. Follow the supervised
   [Raspberry Pi deployment and rollback runbook](docs/production-deployment.md),
   including its storage preflight and exact-digest checks.
+- Use the concise
+  [Pi production handoff checklist](docs/pi-production-handoff.md) to collect
+  the remaining external inputs and choose the correct first-migration or
+  subsequent-upgrade rollback branch. Repository work does not contact the Pi.
 - Configure and test a separate backup/offsite lifecycle for the archive
   directory using `verify-archive-set`; database backups alone do not contain
   archived event payloads.
@@ -302,8 +306,9 @@ the intentionally skipped Sketch5/runtime files.
   passes through the URL, destination key, timeout, and paired authentication
   header variables without storing their values in the repository.
 - Run the documented dry-run again on the final Pi-side source snapshot, review
-  every warning, back up the target, commit the import during a controlled
-  outage, verify health, and retain the prior controller/data for rollback.
+  every warning, preserve the legacy installation and immutable JSON snapshot,
+  commit into newly claimed storage during a controlled outage, then create the
+  candidate schema-v2 backup and retain the legacy controller/data for rollback.
 - Perform a supervised hardware soak/cutover. Local tests cannot prove wiring,
   power-loss behavior, Wi-Fi quality, or the Raspberry Pi's real disk/load.
 

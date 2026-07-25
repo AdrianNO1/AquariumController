@@ -564,8 +564,8 @@ The local stack command is `npm run stack:test:up`, with UI/API on
 `http://127.0.0.1:3001` and Mosquitto on loopback port 18883. The Docker `local`
 log driver caps each service at five compressed 10 MiB files. CPU, memory, PID,
 restart, and graceful-stop policies are explicit and the controller is never
-horizontally scaled. Historical evidence recorded before the latest hardening
-included a healthy amd64 stack, persistence
-across controller/fake recreation, non-root/read-only checks, a bounded
-test-topic capture, and a successful emulated ARM64 database migration and HTTP
-startup. Current running status and final current-tree validation are not claimed.
+horizontally scaled. Settled-tree local evidence includes a healthy amd64 stack,
+persistence across controller/fake recreation, non-root/read-only checks, a
+bounded test-topic capture, and a successful emulated ARM64 database migration,
+HTTP startup, and integrity check. Hosted CI, Pi validation, and production
+deployment are separate external gates.

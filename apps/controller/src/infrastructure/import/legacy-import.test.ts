@@ -36,74 +36,28 @@ afterEach(async () => {
 });
 
 describe("legacy JSON import", () => {
-  it("accepts the audited production snapshot with only explicit safe normalizations", async () => {
-    const report = await analyzeLegacyDirectory(resolve(".old/data"));
+  it("accepts a deterministic representative snapshot", async () => {
+    const directory = await createValidFixture();
+    const first = await analyzeLegacyDirectory(directory);
+    const second = await analyzeLegacyDirectory(directory);
 
-    expect(report).toMatchObject({
+    expect(first).toMatchObject({
       importerVersion: "legacy-json-v2",
-      sourceFingerprint:
-        "15580a1ec55c1181db2a5d78f494ba18bc195f47a135b4b700028d5854033275",
       valid: true,
       canCommit: true,
       errorCount: 0,
-      warningCount: 85,
     });
-    expect(countIssues(report, "implicit-zero-tail-materialized")).toBe(30);
-    expect(countIssues(report, "duplicate-initial-segment-removed")).toBe(1);
-    expect(countIssues(report, "duplicate-terminal-segment-removed")).toBe(5);
-    expect(countIssues(report, "orphan-schedule-preserved")).toBe(37);
-    expect(countIssues(report, "legacy-throttle-default-materialized")).toBe(5);
-    expect(countIssues(report, "inconsistent-editor-coordinate")).toBe(2);
-    expect(countIssues(report, "skipped-legacy-file")).toBe(4);
-    expect(report.normalizedCounts).toEqual({
+    expect(first.normalizedCounts).toEqual({
       throttles: 11,
-      channels: 66,
-      schedules: 66,
-      schedulePoints: 318,
-      mappingProfiles: 7,
-      pinMappings: 34,
+      channels: 2,
+      schedules: 2,
+      schedulePoints: 4,
+      mappingProfiles: 1,
+      pinMappings: 1,
     });
-    expect(
-      report.files.map(({ fileName, rootRecordCount, nestedRecordCount }) => ({
-        fileName,
-        rootRecordCount,
-        nestedRecordCount,
-      })),
-    ).toEqual([
-      { fileName: "links.json", rootRecordCount: 66, nestedRecordCount: 228 },
-      { fileName: "channels.json", rootRecordCount: 7, nestedRecordCount: 34 },
-      {
-        fileName: "throttle.json",
-        rootRecordCount: 6,
-        nestedRecordCount: null,
-      },
-      {
-        fileName: "temporaryoverwritesliders.json",
-        rootRecordCount: 2,
-        nestedRecordCount: 6,
-      },
-      {
-        fileName: "device_memory.json",
-        rootRecordCount: 2,
-        nestedRecordCount: null,
-      },
-      {
-        fileName: "espstatuses.json",
-        rootRecordCount: 6,
-        nestedRecordCount: 32,
-      },
-      {
-        fileName: "homepagedata.json",
-        rootRecordCount: 4,
-        nestedRecordCount: 54,
-      },
-    ]);
-  });
-
-  it("produces byte-for-byte deterministic reports for unchanged source", async () => {
-    const first = await analyzeLegacyDirectory(resolve(".old/data"));
-    const second = await analyzeLegacyDirectory(resolve(".old/data"));
-
+    expect(countIssues(first, "legacy-throttle-default-materialized")).toBe(1);
+    expect(countIssues(first, "orphan-schedule-preserved")).toBe(1);
+    expect(countIssues(first, "skipped-legacy-file")).toBe(4);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
   });
 

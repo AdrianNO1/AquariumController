@@ -1,33 +1,32 @@
 # AquariumController remaining-work plan
 
-Updated: 2026-07-19
+Updated: 2026-07-25
 
-Inspected working basis: commit `8bb865e` plus the uncommitted rewrite on
-`codex/aquarium-rewrite`
+Purpose: execution record and handoff plan. R0-R14 implementation and local
+validation are complete. Current evidence includes real-Mosquitto 5/5, three
+consecutive Playwright runs at 18/18 with zero retries, clean Linux Docker
+verification at 95 files/618 unit tests and 81 files/557 critical tests, and a
+healthy integrity-clean ARM64 image. Hosted CI, release publication, production
+migration, ESP32 flashing, and Pi validation remain external.
 
-Purpose: execution record and handoff plan. R0-R13 are implemented; their cited
-passes are historical evidence. R14 final current-tree audit is still pending
-after the latest firmware, API, alert/SSE, archive, and backup-artifact changes.
-No currently running stack or completed settled-tree validation is claimed.
-
-This document is the execution plan for all work that remains before the
-repository is locally ready to replace the legacy controller. It is deliberately
-more prescriptive than `architecture.md`: future tasks should implement these
-decisions instead of reopening them unless evidence proves a decision unsafe.
+This document records the completed repository execution plan and hands off the
+remaining external release work. It is deliberately more prescriptive than
+`architecture.md`: future changes should preserve these decisions unless
+evidence proves one unsafe.
 
 The production aquarium, Raspberry Pi, production broker, credentials, GitHub
 settings, and live production paths remain out of scope during implementation.
-The operator-supplied production-shaped legacy JSON snapshot is in scope only
-for disposable local import analysis and verification.
+Operator-local legacy JSON is a production deployment input, not a repository
+or CI fixture. Repository verification uses deterministic synthetic migration
+fixtures; the real snapshot must be dry-run during the supervised deployment.
 
 ## 1. Completion boundary
 
 Repository work is complete only when the only remaining actions are:
 
-1. Revoke the historically exposed Dropbox token, rotate the aquarium Wi-Fi
-   password, and host only sanitized Git history. The repository is currently
-   public and untrusted; secret scanning and push protection are enabled but do
-   not invalidate credentials already disclosed in history.
+1. Confirm the exposed credential was revoked, have GitHub Support purge the
+   unreachable historical object/cached view, resolve its open alert as
+   `revoked`, and keep secret scanning and push protection enabled.
 2. Flash and identify firmware 4.0.0 on every production ESP32, then complete a
    controlled hardware/failover soak.
 3. Configure GitHub repository settings and the explicit GHCR image variable,
@@ -35,9 +34,10 @@ Repository work is complete only when the only remaining actions are:
    published `sha256` digest.
 4. Configure the Pi's production MQTT/database/archive/backup paths and
    credentials outside the repository.
-5. Back up the legacy installation and databases, repeat the importer dry-run on
-   the Pi, confirm the expected fingerprint/report, and commit only after
-   operator review.
+5. Preserve the legacy installation and an immutable JSON snapshot, repeat the
+   importer dry-run on the Pi, record the newly calculated fingerprint, review
+   the complete report, and commit only that exact snapshot into new storage
+   after operator approval. Then create the candidate schema-v2 backup.
 6. Set the separately required production Compose image-repository and
    `sha256`-digest inputs, deploy the locally verified image by that digest, run
    health/integrity/rollback checks, and perform the controlled cutover.
@@ -74,7 +74,9 @@ Every delegated task must follow these rules:
   implementation tasks.
 - Never read or modify `.env` files. Document variables by name and ask the
   operator to set values.
-- Never push. Commit only coherent milestones after their relevant checks pass.
+- Publish only with explicit operator authorization after relevant checks pass.
+  History rewriting is reserved for credential removal and must preserve
+  unrelated commit history.
 - Preserve unrelated user changes. Do not use destructive Git commands.
 - Timeout or interrupted QoS 0 publication means actuator outcome is unknown;
   never retry blindly.
@@ -216,7 +218,7 @@ documentation. Public visibility is not a credential-remediation mechanism.
   Its transport/runtime suite covers the complete command/chunk/fault/restart
   matrix and asserts that captured broker traffic never leaves
   `test/aquarium/*`.
-- R12 runs 17 retry-free Chromium scenarios against production-built assets,
+- R12 runs 18 retry-free Chromium scenarios against production-built assets,
   fresh SQLite files, the real broker, and two persistent fake ESPs. It covers
   all routes, CRUD, devices, overrides, logs/alerts, accessibility, responsive
   layouts, faults, SSE recovery, and controller/fake/broker restarts.
@@ -232,35 +234,35 @@ documentation. Public visibility is not a credential-remediation mechanism.
   configured 1-16-bit output; resolution reattachment rescales scheduled/current-
   overwrite caches and physical duty. Frequency/resolution pairs enforce
   `frequencyHz * 2^resolutionBits <= 80,000,000`, and sync accepts epoch seconds
-  1-2,147,483,647. The focused 2026-07-19 compile used 1,036,431 bytes flash,
-  63,180 bytes global RAM, and left 264,500 bytes local.
-- The production-shaped `.old/data` snapshot dry-runs and commits into a
-  disposable SQLite database with zero errors, 85 explicit warnings, and an
-  integrity-clean normalized result. Online backup, manifest verification,
-  restore-to-new-paths, application reopen, and integrity checks pass.
+  1-2,147,483,647. The pinned compile uses 1,036,431 bytes flash, 63,180 bytes
+  global RAM, and leaves 264,500 bytes local-variable capacity.
+- Migration verification uses deterministic synthetic JSON created in temporary
+  directories. `.old/data` is intentionally ignored operator-local production
+  input and is absent from Git, Docker build contexts, and CI. The actual source
+  must be dry-run again during deployment.
 - CI includes the independent static/unit, critical, integration, browser,
   firmware, container, and gated immutable-publish lanes.
 - The exact backup-artifact verifier passed its focused 2026-07-19 selection:
-  four files and 21/21 tests. Full settled-tree validation remains pending.
+  four files and 21/21 tests.
 
-### Remaining repository audit work
+### Remaining external release evidence
 
-- Finish the no-retry three-repeat browser stability audit and the clean Linux
-  `npm ci` verification target. The broker audit already passes three exact
-  consecutive runs.
-- Consolidate exact evidence in the parity/readiness/operator documentation and
-  run the final source-safety audit.
-- Do not broaden durable logging to every debug event, healthy read, or
-  five-second healthy tick while closing documentation findings.
+- Obtain the first trusted hosted run of all six CI validation jobs.
+- Configure the intended GHCR repository and capture a published immutable
+  multi-platform digest.
+- Keep future repository changes inside the same verification boundaries; do
+  not broaden durable logging to every debug event, healthy read, or five-second
+  healthy tick.
 
 ### Verification caveat
 
-The working tree contains a large uncommitted implementation. A complete
-settled-tree `npm run verify` passed on 2026-07-13: 89 files/520 unit tests,
-75 files/470 critical tests, every workspace typecheck, lint, formatting, and
-controller/web production builds. A clean-source Linux `npm ci` audit is the
-final reproducibility check now that the Docker-dependent source work and gates
-are resolved.
+The host verification before fixture isolation passed 95 files/619 unit tests
+and 81 files/558 critical tests, plus formatting, lint, workspace typechecks,
+and production builds. The clean Linux Docker verification after fixture
+isolation passed 95 files/618 unit tests and 81 files/557 critical tests with
+the same static/build gates. The one-test reduction in each selection is the
+intentional removal of environment-dependent `.old/data` coverage; deterministic
+synthetic fixtures now provide hermetic importer coverage.
 
 ## 5. Blocker and decision gates
 
@@ -282,22 +284,21 @@ the real sketch passes its pinned compiler lane. Old/unexpected firmware is
 visible as `firmware_outdated` but receives no actuator work. Flashing the new
 firmware is part of the external release checklist.
 
-### Gate D3: production-shaped legacy snapshot — resolved for local analysis
+### Gate D3: production legacy snapshot — external deployment gate
 
-The user replaced the relevant `.old/data` files with production-shaped data.
-Importer `legacy-json-v2` reports fingerprint
-`15580a1ec55c1181db2a5d78f494ba18bc195f47a135b4b700028d5854033275`,
-zero errors, and 85 explicit warnings; a disposable commit and integrity check
-pass. The Pi-side dry-run/backup/commit remains an external release action and
-must still stop on any changed fingerprint or fatal finding.
+`.old/data` is intentionally ignored operator-local production input.
+Deterministic synthetic fixtures prove importer behavior in CI, but cannot
+certify the aquarium snapshot. The stopped production source must be copied,
+fingerprinted, dry-run, reviewed, and committed from the same immutable copy.
+Any fatal finding stops migration.
 
-### Gate D4: public history contains exposed credentials — open
+### Gate D4: exposed credential history — reachable history clean, orphan remains
 
-The hosted repository is currently public. Revoke the historical Dropbox token,
-rotate the aquarium Wi-Fi password, then publish a clean-root repository or
-perform and independently verify a complete sensitive-history rewrite. Secret
-scanning and push protection are enabled, but changing visibility or closing an
-alert does not revoke an exposed credential.
+Every reachable hosted branch contains only redacted sentinels with the original
+commit topology preserved. GitHub still serves one unreachable historical
+object directly and its secret-scanning alert remains open. Confirm revocation,
+request GitHub Support garbage collection/cached-view removal, then resolve the
+alert as `revoked`. Rewriting history does not invalidate public clones.
 
 ## 6. Dependency and delegation map
 
@@ -333,8 +334,9 @@ Safe final-audit parallel lanes:
   Docker-dependent lanes, with one owner for any shared composition fix.
 - Documentation/readiness audit can proceed without Docker but may not invent
   integration, browser, or container results.
-- R8 and R13 are complete. R12's implementation is complete and its final
-  no-retry repetition is the remaining browser evidence.
+- R8, R12, and R13 are complete. Three consecutive no-retry R12 browser runs
+  passed locally; hosted CI and real production hardware remain separate
+  external evidence.
 
 ## 7. Standard task protocol
 
@@ -698,8 +700,8 @@ Acceptance:
 
 ### R7 — Manual overrides and failover decision
 
-Current status: **implemented; cited passes are historical evidence**. Service, repository,
-routes, scheduler overlay, restart, expiry, unknown outcome, typed
+Current status: **implemented and included in current verification**. Service,
+repository, routes, scheduler overlay, restart, expiry, unknown outcome, typed
 start/extend/cancel/reconcile UI, authoritative countdown/states, conflict
 refresh, no-optimistic-retry, real-broker, production-browser, and firmware
 4.0.0 failover evidence exist.
@@ -732,9 +734,10 @@ Acceptance (completed):
 
 ### R8 — Real pinned-Mosquitto integration suite
 
-Current status: **implemented; cited passes are historical evidence**. The isolated,
-digest-pinned Mosquitto harness and five transport/runtime integration tests
-cover the required matrix and capture both allowed and forbidden namespaces.
+Current status: **implemented; the current real-broker suite passes 5/5**. The
+isolated, digest-pinned Mosquitto harness and five transport/runtime integration
+tests cover the required matrix and capture both allowed and forbidden
+namespaces.
 
 Effort: large. Dependencies: D1, R2, R5-R7. Suggested mode: higher reasoning.
 
@@ -856,7 +859,7 @@ Acceptance:
 
 ### R11 — Runtime operations: retention, backup, restore, and disk alerts
 
-Current status: **implemented; final settled-tree evidence is pending**.
+Current status: **implemented and included in settled-tree verification**.
 Retention policies/scheduler/recovery, interaction
 redaction/logging, state-event and routine PWM retention, outbox/orphan-revision
 pruning, durable maintenance diagnostics, archives, usage projection, and the
@@ -911,10 +914,9 @@ Acceptance:
 
 ### R12 — Production-built full-stack Playwright E2E
 
-Current status: **implemented; one historical 17/17 pass exists and the final
-current-tree repeat audit is pending**. Seventeen retry-free Chromium scenarios
-run against production builds, real Mosquitto, fresh SQLite files, and two
-persistent fake actors.
+Current status: **implemented and repeat-validated**. Three consecutive
+retry-free Chromium runs passed 18/18 against production builds, real
+Mosquitto, fresh SQLite files, and two persistent fake actors.
 
 Effort: large. Dependencies: D1 and R3-R11. Suggested mode: higher reasoning for
 harness, ordinary for cases.
@@ -951,14 +953,14 @@ Acceptance:
 
 ### R13 — Docker, Compose, local stack, and CI
 
-Current status: **implemented; historical local evidence exists and final
-current-tree validation is pending**. The
-multi-stage image, production single-origin serving, fail-closed production
-template, historically healthy local stack, amd64/read-only/restart checks,
-test-topic capture, and emulated ARM64 migration/HTTP smoke have local evidence.
-Executable integration,
-browser, firmware, container, and guarded immutable-publish CI lanes exist;
-their first hosted GitHub runs and repository settings remain external.
+Current status: **implemented and locally validated**. The multi-stage image,
+production single-origin serving, fail-closed production template,
+amd64/read-only/restart checks, test-topic capture, and emulated ARM64
+migration/HTTP smoke have current local evidence. The ARM64 image reached
+health as UID/GID 1000 and both SQLite databases passed integrity. Executable
+integration, browser, firmware, container, and guarded immutable-publish CI
+lanes exist; their first hosted GitHub runs and repository settings remain
+external.
 
 Effort: medium/large. Dependencies: D1 and R8/R12. Suggested mode: ordinary
 with careful operations review.
@@ -1015,9 +1017,10 @@ Acceptance:
 
 ### R14 — Migration/operations documentation and final readiness audit
 
-Current status: **in progress**. D1/D2 and the implementation/evidence lanes are
-resolved; clean-source verification, repeat stability, final safety audit, and
-evidence consolidation remain.
+Current status: **local work complete; external handoff open**. Clean-source
+verification, repeat stability, Compose/preflight checks, ARM64 smoke, and
+evidence consolidation are complete. Hosted CI/GHCR, production migration,
+firmware flashing, and Pi validation remain operator actions.
 
 Effort: medium. Dependencies: every previous package and D2 resolution.
 Suggested mode: higher reasoning review.
@@ -1051,9 +1054,7 @@ Final audit:
   retries.
 - Demonstrate restart persistence, SSE resync, logs, retention, compression,
   backup/restore, alerts, storage budget, and ARM64 artifact locally.
-- At final handoff, start the complete local test stack, verify its observed
-  health, and leave it running unless the user requests otherwise. This is a
-  future audit action, not a statement that the stack is running now.
+- Record the external Pi checklist without contacting the Pi.
 
 Create `docs/readiness-report.md` containing:
 
@@ -1090,14 +1091,17 @@ Create `docs/readiness-report.md` containing:
 
 Execution status from the current working tree:
 
-1. R8 real-Mosquitto integration is implemented and has passed three
-   consecutive exact historical runs after lifecycle-reset hardening.
-2. R12 production-built Playwright has one historical 17/17 retry-free Chromium
-   pass; its final three-repeat current-tree audit has not started.
-3. R13 Docker/Compose, amd64/ARM64 checks, and CI lanes are implemented.
+1. R8 real-Mosquitto integration passes 5/5 on the current tree.
+2. R12 production-built Playwright passes 18/18 in three consecutive runs with
+   retries disabled.
+3. R13 Docker/Compose and CI lanes are implemented. Compose rendering and
+   preflight syntax are green; the ARM64 image reaches health as UID/GID 1000
+   and passes both SQLite integrity checks.
 4. D2 is resolved by firmware 4.0.0 and exact-version exclusion.
-5. R14 clean-source verification, browser repetition, final readiness
-   consolidation, and the public-history credential gate remain open.
+5. R14 clean Linux Docker verification passes 95 files/618 unit tests and 81
+   files/557 critical tests. Documentation consolidation is complete.
+6. Hosted CI/GHCR, operator verification of sanitized history, production data,
+   fleet flashing, and Pi work remain external.
 
 To minimize wasted turns:
 

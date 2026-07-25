@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+# Production preflight for a 64-bit Raspberry Pi host.
 set -Eeuo pipefail
 
 # Ignore any implicit repository .env file. Deployment inputs must come from
@@ -19,6 +20,19 @@ done
 
 if ! docker compose version >/dev/null 2>&1; then
   printf 'Docker Compose v2 is required.\n' >&2
+  exit 1
+fi
+
+compose_up_help="$(docker compose up --help)"
+if [[ ! "${compose_up_help}" =~ (^|[[:space:]])--wait([[:space:]]|$) ]] ||
+  [[ ! "${compose_up_help}" =~ (^|[[:space:]])--wait-timeout([[:space:]]|$) ]]; then
+  printf 'Docker Compose must support the production --wait and --wait-timeout flags.\n' >&2
+  exit 1
+fi
+
+compose_ps_help="$(docker compose ps --help)"
+if [[ ! "${compose_ps_help}" =~ (^|[[:space:]])--status([[:space:]]|$) ]]; then
+  printf 'Docker Compose must support the production ps --status safety check.\n' >&2
   exit 1
 fi
 

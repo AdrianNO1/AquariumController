@@ -295,7 +295,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
       dotfiles: "deny",
       cacheControl: false,
       setHeaders: (response, filePath) => {
-        response.setHeader(
+        response.header(
           "Cache-Control",
           filePath.endsWith(`${sep}index.html`)
             ? "no-cache"

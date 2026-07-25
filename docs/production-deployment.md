@@ -1,32 +1,36 @@
 # Raspberry Pi production deployment
 
-Updated: 2026-07-19
+Updated: 2026-07-25
 
 This is a supervised deployment and rollback runbook. No repository workflow
 contacts the Pi or deploys the controller. Commands in this document must be
 run by an operator on the intended Pi from a reviewed checkout.
 
-## 0. Clear the public-repository credential gate
+For a shorter inventory of missing inputs and approvals, start with the
+[Pi production handoff checklist](pi-production-handoff.md). Local evidence on
+2026-07-25 includes real MQTT 5/5, three consecutive retry-free Playwright
+18/18 runs, clean Linux verification, green Compose/preflight syntax, and a
+healthy integrity-clean ARM64 image. This runbook does not claim hosted CI or
+Pi validation.
 
-The hosted repository is currently public. Do not treat its checkout, CI output,
-or image as a trusted release source until this gate is closed. The 2026-07-19
-hosted audit found two exposed credential paths
-without reading or reproducing their values:
+## 0. Verify the repository release-source gate
 
-- GitHub secret scanning has an open Dropbox-token alert at historical
-  `test2.py`, commit `49167c6313df5b46e17858b56528fc360bc29d71`.
-- The aquarium Wi-Fi credential is present in the history of
-  `slaveCode/ESP32Code/ESP32Code.ino`; the rewrite's sanitized working path is
-  `.old/slaveCode/ESP32Code/ESP32Code.ino`.
+All reachable hosted branches contain only redacted credential sentinels and
+retain the original commit topology. One older, unreachable GitHub object is
+still directly addressable and its secret-scanning alert remains open. Before
+selecting an image:
 
-Secret scanning and push protection are enabled. They can prevent or report
-future exposure but do not revoke credentials already in history. Revoke the
-Dropbox token and rotate the aquarium Wi-Fi password first. Rotation
-is mandatory even if history is later rewritten: public clones and caches
-cannot be recalled. Keep the repository private while remediation is in
-progress when practical; changing visibility after exposure reduces new casual
-access but does not make either credential safe again. Never copy ignored local
-files such as `.env` files or private keys into a cleanup repository.
+1. confirm the affected credential was independently revoked;
+2. ask GitHub Support to purge the unreachable object and cached view;
+3. resolve the alert as `revoked` only after revocation is confirmed, and keep
+   secret scanning and push protection enabled; and
+4. require a fresh trusted run of all six hosted validation jobs.
+
+History rewriting for credential removal must preserve unrelated commits; do
+not replace the repository with a single squashed root. Public clones and caches
+cannot be recalled, so history cleanup is not a substitute for revocation or
+rotation. Never copy ignored operator files, private keys, or production input
+into the repository.
 
 The Free-plan tradeoff that prompted public visibility is real but separate from
 security remediation. GitHub does not charge standard hosted Actions minutes for
@@ -35,27 +39,18 @@ quota. Protected branches are available on GitHub Free for public repositories,
 while private-repository branch protection requires an eligible paid plan. See
 GitHub's official [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
-documentation. Making this repository private now would reduce new exposure but
-would not revoke either credential, erase clones, or sanitize history.
+documentation.
 
-The lowest-risk publication path is a new repository with one clean root commit
-containing only individually reviewed, sanitized project files and no inherited
-`.git` directory. Run a full-history-capable secret scanner on that commit before
-making it public, enable secret scanning and push protection, run CI once, then
-protect its default branch. Preserve the old repository privately as evidence
-only after both credentials are invalid.
-
-If retaining this repository and its history is required, follow GitHub's
+For sensitive-history cleanup, follow GitHub's
 [sensitive-data removal procedure](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
 with a fresh mirror and `git-filter-repo --sensitive-data-removal`. Remove the
-Dropbox-bearing file and replace the Wi-Fi credential in every branch and tag,
-verify the rewritten object set before any force-push, and coordinate cleanup
-of every other clone. Rewriting only `master`, deleting the current files, or
-closing the alert is insufficient. GitHub may retain direct-SHA and cached views;
-use the first-changed commits reported by `git-filter-repo` when contacting
-GitHub Support for final cached-reference removal. At audit time there were no
-forks, pull requests, or tags, but all three hosted branches (`master`, `test`,
-and `codex/aquarium-rewrite`) contained the affected ancestry.
+secret material in every branch and tag while retaining unrelated ancestry,
+verify the rewritten object set before the credential-only force-push, and
+coordinate cleanup of other clones. Rewriting only `master`, deleting current
+files, closing an alert, or squashing all history is not an acceptable cleanup.
+GitHub may retain direct-SHA and cached views; use the first-changed commits
+reported by `git-filter-repo` when contacting GitHub Support for final
+cached-reference removal.
 
 After sanitized history is hosted and CI has produced its real check names,
 protect the actual default branch: require pull requests and all six validation
@@ -80,6 +75,8 @@ Avoid `docker compose config` without `--quiet`, because a full rendering can
 print environment values.
 
 ```sh
+set -Eeuo pipefail
+
 export AQUARIUM_CONTROLLER_IMAGE_REPOSITORY=ghcr.io/<owner>/<repository>
 export AQUARIUM_CONTROLLER_IMAGE_SHA256=<64-hex-characters-after-sha256:>
 export COMPOSE_DISABLE_ENV_FILE=1
@@ -101,6 +98,8 @@ read the package. Read the token without echoing it and remove it from the shell
 immediately after Docker receives it:
 
 ```sh
+set -Eeuo pipefail
+
 read -rsp 'GHCR read token: ' GHCR_READ_TOKEN
 printf '\n'
 printf '%s' "${GHCR_READ_TOKEN}" | \
@@ -117,6 +116,8 @@ timeout. The authentication header name and value must either both be supplied
 or both be absent. Read the value without echoing it:
 
 ```sh
+set -Eeuo pipefail
+
 export AQUARIUM_ALERT_WEBHOOK_URL=https://<notification-destination>/aquarium
 export AQUARIUM_ALERT_WEBHOOK_KEY=primary
 export AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS=10000
@@ -130,6 +131,8 @@ When notifications are disabled, remove all five variables from the deployment
 shell so an orphaned option cannot accidentally make startup fail:
 
 ```sh
+set -Eeuo pipefail
+
 unset AQUARIUM_ALERT_WEBHOOK_URL AQUARIUM_ALERT_WEBHOOK_KEY
 unset AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS
 unset AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME
@@ -142,6 +145,8 @@ The image runs as UID/GID 1000. Create each bind directory explicitly, keep it
 private, and do not rely on Docker to create a root-owned path:
 
 ```sh
+set -Eeuo pipefail
+
 sudo install -d -o 1000 -g 1000 -m 0700 \
   "${AQUARIUM_STATE_HOST_DIRECTORY}" \
   "${AQUARIUM_EVENTS_HOST_DIRECTORY}" \
@@ -159,6 +164,8 @@ then pulls the exact digest for the Pi architecture and runs that image's full
 configuration parser without starting the controller service.
 
 ```sh
+set -Eeuo pipefail
+
 bash deployment/pi-preflight.sh compose.production.yaml
 ```
 
@@ -227,6 +234,8 @@ write permission. This snapshotâ€”not a fingerprint recorded for an older copyâ€
 the first-cutover rollback source:
 
 ```sh
+set -Eeuo pipefail
+
 legacy_snapshot="${AQUARIUM_CUTOVER_EVIDENCE_ROOT}/legacy-json"
 legacy_manifest="${AQUARIUM_CUTOVER_EVIDENCE_ROOT}/legacy-json.sha256"
 legacy_symlink="$(find "${AQUARIUM_LEGACY_DATA_DIRECTORY}" -type l -print -quit)"
@@ -250,11 +259,13 @@ chmod 0400 "${legacy_manifest}"
 
 Analyze only that read-only snapshot with the exact release digest and no
 network. Preserve the complete report, review every warning and normalized
-count, and stop on any error. The historical fingerprint in repository
-documentation describes only the snapshot analyzed there; it is not an expected
-production constant.
+count, and stop on any error. Record the fingerprint calculated for this
+snapshot; the repository deliberately contains no expected production
+fingerprint.
 
 ```sh
+set -Eeuo pipefail
+
 image_reference="${AQUARIUM_CONTROLLER_IMAGE_REPOSITORY}@sha256:${AQUARIUM_CONTROLLER_IMAGE_SHA256}"
 analysis_report="${AQUARIUM_CUTOVER_EVIDENCE_ROOT}/import-analysis.json"
 test ! -e "${analysis_report}"
@@ -284,6 +295,8 @@ transaction. A failed attempt is evidence: stop and choose new empty storage
 paths instead of deleting or reusing it.
 
 ```sh
+set -Eeuo pipefail
+
 (cd "${legacy_snapshot}" && sha256sum --check "${legacy_manifest}")
 state_database="${AQUARIUM_STATE_HOST_DIRECTORY}/state.db"
 for suffix in '' -wal -shm -journal; do
@@ -319,6 +332,8 @@ publishes it with a non-replacing hard link; it refuses the target or any SQLite
 sidecar if one already exists. Then check both databases with read-only mounts:
 
 ```sh
+set -Eeuo pipefail
+
 docker run --rm --network none --read-only --user 1000:1000 \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --mount "type=bind,src=${AQUARIUM_EVENTS_HOST_DIRECTORY},dst=/target/events" \
@@ -342,6 +357,8 @@ pending import outbox row is intentionally covered by the v2 coherence proof
 and will be mirrored into `events.db` on first startup.
 
 ```sh
+set -Eeuo pipefail
+
 backup_result="$(docker run --rm --network none --read-only --user 1000:1000 \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --mount "type=bind,src=${AQUARIUM_STATE_HOST_DIRECTORY},dst=/target/state,readonly" \
@@ -384,7 +401,19 @@ release image, then verify every complete archive against the backed-up events
 database:
 
 ```sh
+set -Eeuo pipefail
+
 docker compose --file compose.production.yaml stop --timeout 60 controller
+running_controller_id="$(
+  docker compose --file compose.production.yaml \
+    ps --status running --quiet controller
+)"
+restarting_controller_id="$(
+  docker compose --file compose.production.yaml \
+    ps --status restarting --quiet controller
+)"
+test -z "${running_controller_id}"
+test -z "${restarting_controller_id}"
 
 backup_result="$(docker compose --file compose.production.yaml run --rm --no-deps -T controller \
   node apps/controller/dist/storage-cli.js backup \
@@ -411,6 +440,8 @@ offsite or removable-media directory. Never merge it with a previous snapshot.
 The example assumes the destination is already mounted and protected:
 
 ```sh
+set -Eeuo pipefail
+
 backup_name="$(basename "${backup_directory}")"
 backup_host_directory="${AQUARIUM_BACKUP_HOST_DIRECTORY}/${backup_name}"
 copy_root="/mnt/aquarium-offsite/${backup_name}"
@@ -427,6 +458,8 @@ Re-open the copied events database and re-read every copied archive with the
 same exact image digest. The two deterministic manifests must be byte-identical:
 
 ```sh
+set -Eeuo pipefail
+
 image_reference="${AQUARIUM_CONTROLLER_IMAGE_REPOSITORY}@sha256:${AQUARIUM_CONTROLLER_IMAGE_SHA256}"
 docker run --rm --user 1000:1000 \
   --mount "type=bind,src=${copy_root},dst=/copy" \
@@ -449,6 +482,8 @@ Start only the already rendered digest. Compose may check the registry again
 because `pull_policy` is `always`, but it cannot select a mutable tag.
 
 ```sh
+set -Eeuo pipefail
+
 docker compose --file compose.production.yaml up \
   --detach --wait --wait-timeout 180 --no-build controller
 
@@ -474,41 +509,108 @@ integrity, or an unexplained actuator state as a failed deployment.
 
 ## 5. Roll back without overwriting evidence
 
+Choose the branch that matches section 3. A first migration has no prior
+controller image or SQLite state to restore; its rollback is the preserved
+legacy installation. A subsequent upgrade restores the verified pre-upgrade
+SQLite/archive set and prior image digest. Never combine the branches.
+
+### 5A. Roll back a first migration to the legacy controller
+
+Stop the new controller and prove no controller container is running before
+allowing the legacy publisher to restart. Keep all new state, events, archives,
+backups, reports, and the immutable source snapshot unchanged for diagnosis.
+
+```sh
+set -Eeuo pipefail
+
+docker compose --file compose.production.yaml stop --timeout 60 controller
+running_controller_id="$(
+  docker compose --file compose.production.yaml \
+    ps --status running --quiet controller
+)"
+restarting_controller_id="$(
+  docker compose --file compose.production.yaml \
+    ps --status restarting --quiet controller
+)"
+test -z "${running_controller_id}"
+test -z "${restarting_controller_id}"
+
+sudo systemctl start "${AQUARIUM_LEGACY_SERVICE}"
+sudo systemctl is-active --quiet "${AQUARIUM_LEGACY_SERVICE}"
+```
+
+If the legacy controller uses Docker, cron, or another supervisor, replace the
+`systemctl` commands with its reviewed start-and-prove-active procedure. Confirm
+only one controller can publish, then verify the legacy UI, broker connection,
+device discovery, schedules, and physical outputs. Do not point the legacy
+controller at the new SQLite directories. Do not delete the failed migration
+evidence before the incident is understood.
+
+The schema-v2 backup created in section 3A is a recovery copy of the newly
+imported candidate, not a pre-migration legacy-controller backup. It can recover
+the candidate for investigation, but it does not replace this legacy rollback
+branch.
+
+### 5B. Roll back a subsequent SQLite-based upgrade
+
 Stop the failed release. Do not start an older image against databases that a
 newer release may have migrated. Create new empty rollback directories, restore
 the verified pre-change database backup into them, copy the matching archive
 snapshot into a new archive directory, and verify the restored archive set.
 
 ```sh
+set -Eeuo pipefail
+
 docker compose --file compose.production.yaml stop --timeout 60 controller
+running_controller_id="$(
+  docker compose --file compose.production.yaml \
+    ps --status running --quiet controller
+)"
+restarting_controller_id="$(
+  docker compose --file compose.production.yaml \
+    ps --status restarting --quiet controller
+)"
+test -z "${running_controller_id}"
+test -z "${restarting_controller_id}"
+
+rollback_id="$(date -u +%Y%m%dT%H%M%SZ)"
+rollback_root="/srv/aquarium/rollback-${rollback_id}"
+test ! -e "${rollback_root}"
+test ! -L "${rollback_root}"
+sudo install -d -o 1000 -g 1000 -m 0700 "${rollback_root}"
+rollback_state_directory="${rollback_root}/state"
+rollback_events_directory="${rollback_root}/events"
+rollback_archive_directory="${rollback_root}/archives"
+rollback_backup_directory="${rollback_root}/backups"
 sudo install -d -o 1000 -g 1000 -m 0700 \
-  /srv/aquarium/rollback-state \
-  /srv/aquarium/rollback-events \
-  /srv/aquarium/rollback-archives \
-  /srv/aquarium/rollback-backups
+  "${rollback_state_directory}" \
+  "${rollback_events_directory}" \
+  "${rollback_archive_directory}" \
+  "${rollback_backup_directory}"
 
 docker run --rm --user 1000:1000 \
   --mount "type=bind,src=${copy_root}/database-backup,dst=/backup,readonly" \
-  --mount type=bind,src=/srv/aquarium/rollback-state,dst=/restore/state \
-  --mount type=bind,src=/srv/aquarium/rollback-events,dst=/restore/events \
+  --mount "type=bind,src=${rollback_state_directory},dst=/restore/state" \
+  --mount "type=bind,src=${rollback_events_directory},dst=/restore/events" \
   "${image_reference}" \
   node apps/controller/dist/storage-cli.js restore \
   --manifest /backup/manifest.json \
   --state-db /restore/state/state.db \
   --events-db /restore/events/events.db
-rsync -a --numeric-ids "${copy_root}/archives/" /srv/aquarium/rollback-archives/
+rsync -a --numeric-ids \
+  "${copy_root}/archives/" "${rollback_archive_directory}/"
 
 docker run --rm --user 1000:1000 \
-  --mount type=bind,src=/srv/aquarium/rollback-events,dst=/events,readonly \
-  --mount type=bind,src=/srv/aquarium/rollback-archives,dst=/archives,readonly \
-  --mount type=bind,src=/srv/aquarium/rollback-backups,dst=/output \
+  --mount "type=bind,src=${rollback_events_directory},dst=/events,readonly" \
+  --mount "type=bind,src=${rollback_archive_directory},dst=/archives,readonly" \
+  --mount "type=bind,src=${rollback_backup_directory},dst=/output" \
   "${image_reference}" \
   node apps/controller/dist/storage-cli.js verify-archive-set \
   --events-db /events/events.db \
   --archive-dir /archives \
   --output /output/restored-archive-set.json
 cmp "${copy_root}/database-backup/archive-set-before-copy.json" \
-  /srv/aquarium/rollback-backups/restored-archive-set.json
+  "${rollback_backup_directory}/restored-archive-set.json"
 ```
 
 Set the four `AQUARIUM_*_HOST_DIRECTORY` variables to these new rollback paths

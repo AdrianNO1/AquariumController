@@ -1,383 +1,255 @@
 # Readiness report
 
-Assessment date: 2026-07-19
+Assessment date: 2026-07-25
 
-Branch inspected: `codex/aquarium-rewrite`
-
-Basis: the current uncommitted rewrite plus explicitly dated historical and
-focused evidence recorded below. Final settled-tree validation after the latest
-hardening is pending. This is not a claim that the local stack is currently
-running or that the rewrite has been deployed to the production aquarium.
+Basis: the locally settled rewrite tree and the exact evidence recorded below.
+The hosted GitHub workflow and the aquarium Raspberry Pi were not used for this
+assessment.
 
 ## Verdict
 
-The repository is an **implemented release candidate awaiting final current-tree
-validation**. Docker, real-broker integration, production-browser, firmware,
-import, backup/restore, and amd64/ARM64 paths have historical or focused local
-evidence, but the latest combined tree has not completed final verification.
+The repository is a **locally validated release candidate**. The current tree
+has passed real-broker integration, three consecutive retry-free
+production-browser runs, host verification, clean Linux Docker verification,
+firmware compilation, production-Compose rendering, preflight syntax, and an
+emulated ARM64 image smoke.
 
-The hosted repository is currently **public and untrusted as a release source**.
-A historical Dropbox token must be revoked, the aquarium Wi-Fi password must be
-rotated, and Git history must be sanitized. Secret scanning and push protection
-are enabled; visibility changes do not revoke already exposed credentials.
+This is not production approval. Hosted CI has not yet produced trusted green
+checks or a release manifest digest, no production input has been imported, no
+ESP32 has been flashed as part of this work, and the Pi has not been contacted
+or validated. Follow the
+[Pi production handoff](pi-production-handoff.md) and the full
+[deployment/rollback runbook](production-deployment.md).
 
-The rewrite is **not yet approved to replace the legacy production controller**.
-That decision still requires actions which local tests cannot perform:
+Reachable history on all hosted branches has been checked and contains only the
+redacted credential sentinels while preserving the original commit topology.
+An older, now-unreachable GitHub object is still directly addressable and its
+secret-scanning alert remains open. Confirm the affected credential was
+independently revoked, ask GitHub Support to purge the orphaned object/cached
+view, then resolve the alert as revoked. Keep secret scanning and push
+protection enabled.
 
-- flash firmware 4.0.0 to every deployed ESP32 and confirm the reported version;
-- close the public-history credential gate described above;
-- run the workflow once on GitHub and configure the protected GHCR/repository
-  settings;
-- configure and start the immutable production image on the Raspberry Pi;
-- dry-run, review, back up, and import the final Pi-side production snapshot
-  during a controlled outage; and
-- supervise a hardware soak and cutover with a tested rollback path.
+## Current evidence
 
-The final settled-tree verification and the no-retry browser repetition audit
-should also be completed before release. Historical R8 evidence has three
-consecutive no-retry passes. This report records one historical complete 17/17
-R12 browser pass; it does
-not claim that the separate three-repeat R12 audit has finished.
+| Boundary                                               | 2026-07-25 result                                                               | Remaining boundary                                              |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Host verification before hermetic fixture refactor     | Unit 95 files/619 tests; critical 81 files/558 tests                            | Superseded by the clean Docker run for reproducibility          |
+| Settled-tree host verification                         | Unit 95 files/618 tests; critical 81 files/557 tests                            | Hosted CI still must run                                        |
+| Clean Linux Docker verification after fixture refactor | Unit 95 files/618 tests; critical 81 files/557 tests                            | Hosted CI still must run                                        |
+| Real Mosquitto                                         | 5/5                                                                             | Production broker and LAN not contacted                         |
+| Production Chromium                                    | Three consecutive 18/18 runs, zero retries                                      | Real Pi/browser clients not tested                              |
+| ESP32 firmware 4.0.0                                   | Warning-free pinned compile                                                     | Fleet flash and physical soak                                   |
+| Production Compose                                     | Rendered successfully with fail-closed inputs                                   | Pi values and exact release digest                              |
+| Pi preflight                                           | Bash syntax passed                                                              | Must run for real on the intended Pi                            |
+| ARM64 container                                        | Built, became healthy, ran as UID/GID 1000, both SQLite integrity checks passed | Emulation is not real Pi validation                             |
+| Hosted GitHub CI/GHCR                                  | Workflow implemented                                                            | No hosted-green or published-digest claim                       |
+| Production migration                                   | Importer and synthetic fixtures implemented                                     | Actual stopped production snapshot must be dry-run and reviewed |
 
-## Readiness summary
+The one-test difference between the pre-refactor host verification and the clean
+Docker verification is intentional. `.old/data` is operator-local production
+input and is ignored by Git, Docker build contexts, and CI. The former
+environment-dependent fixture assertion was removed; the importer is now
+exercised with deterministic synthetic JSON created in temporary directories.
+The clean run therefore has one fewer unit test and one fewer critical test,
+without reducing importer behavior coverage.
 
-| Boundary                                     | State on 2026-07-19                        | Meaning                                                                                     |
-| -------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| Framework, API, persistence, runtime, and UI | Implemented; final validation pending      | Latest combined-tree verification remains open                                              |
-| Docker/Testcontainers                        | Closed locally                             | Docker Desktop 4.81.0 exposes engine 29.6.1, Linux/amd64                                    |
-| R8 real-Mosquitto integration                | Historical evidence complete               | Three consecutive 5/5 retry-free runs passed before the latest hardening                    |
-| R12 production browser                       | Historical 17/17; current repeats open     | No final current-tree three-repeat claim                                                     |
-| Firmware defects                             | Fixed in source and compiler-tested        | Physical ESP32 fleet still needs firmware 4.0.0                                             |
-| Production-shaped legacy data                | Valid locally                              | Final Pi-side dry-run/import remains a deployment action                                    |
-| Backup/restore                               | Implemented; final validation pending      | Historical round trip plus focused backup-artifact verifier 21/21 across four files          |
-| amd64/ARM64 containers                       | Historical evidence                        | Both architectures previously built/started; final current-tree rerun remains open           |
-| GitHub CI                                    | Six validation jobs plus gated publish     | Hosted repo remains untrusted until credential/history remediation                           |
-| Public credential/history gate               | Open, release-blocking                      | Revoke Dropbox token, rotate aquarium Wi-Fi, sanitize history                                |
-| Raspberry Pi and physical aquarium           | Not exercised                              | Wiring, Wi-Fi, power loss, real disk/load, and actuator behavior need supervised validation |
+## Verification details
 
-## Executable local evidence
+### Host and clean-source verification
 
-Unless a 2026-07-19 focused run is named, results in this section are historical
-evidence and are not a final combined-tree validation claim.
+Before the fixture isolation change, the host `npm run verify` completed with:
 
-### R8: real broker integration
+- unit: 95 files, 619 tests;
+- critical: 81 files, 558 tests; and
+- formatting, lint, workspace typechecks, and production builds green.
 
-The integration suite uses pinned Mosquitto
-`eclipse-mosquitto:2.0.22-openssl@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c`
-through Testcontainers. Five tests cover the required real-wire matrix:
+After migration tests became hermetic, a clean Linux Docker verification
+installed from the lockfile and completed with:
 
-- multi-device discovery plus fake, controller, and broker restarts;
-- canonical global command batching, local response indexes, and legacy command
-  fixtures;
-- UTF-8, chunking, schedules, hashes, evaluation, persistence, time boundaries,
-  and EEPROM behavior;
-- malformed, missing, duplicate, late, disconnect, and broker-loss outcomes with
-  no actuator retry; and
-- persisted schedule, time, refresh, and override safety across every restart
-  boundary.
+- unit: 95 files, 618 tests;
+- critical: 81 files, 557 tests; and
+- formatting, lint, workspace typechecks, and production builds green.
 
-Three consecutive exact `npm run test:integration` runs passed 5/5 without
-retries or weakened assertions. Their wall times were 13.9 seconds, 20.6
-seconds, and 14.3 seconds. A lifecycle race exposed by the repetition audit was
-fixed; the focused fake-MQTT lifecycle regression also passed 10/10. No
-Testcontainers resources were intentionally retained by the suite.
+The clean Docker result is the current reproducibility evidence. It does not
+substitute for the first hosted Actions run.
 
-### R12: production browser evidence
+The same settled tree also passed the complete host verification after the
+Fastify/static and React Router security upgrades: 95 files/618 unit tests, 81
+files/557 critical tests, and every static/build gate.
 
-One complete retry-free Playwright Chromium run passed 17/17 in approximately
-one minute. It ran production-built assets against fresh SQLite databases, the
-real pinned broker, and two persistent fake ESP actors. The scenarios cover:
+### Real broker integration
 
-- all retained direct routes, reloads, useful 404 recovery, keyboard access,
-  automated accessibility checks, and phone/tablet/desktop overflow;
-- channel, schedule, throttle, mapping, device, and override workflows,
-  persistence, deletion, and visible revision conflicts;
-- bounded logs, URL-backed filters, pagination, details, exports, alerts, and
-  explicit invalid filter states; and
-- offline/reconnect behavior, SSE recovery, unknown actuator outcomes, and
-  controller, fake-ESP, and broker restarts.
+The current real-wire suite passed 5/5 against digest-pinned Mosquitto
+`eclipse-mosquitto:2.0.22-openssl@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c`.
+It covers multi-device discovery, controller/broker/fake restarts, command and
+chunk boundaries, persisted schedules and fake EEPROM state, time/override
+safety, malformed and late replies, disconnects, broker loss, and the
+no-actuator-retry rule. Test traffic is restricted to `test/aquarium/*`.
 
-The suite also audits browser console errors and unexpected external requests.
-The independent three-consecutive-run browser audit is not claimed complete in
-this report.
+### Production-browser stability
+
+Three consecutive Playwright Chromium runs passed 18/18 with retries disabled.
+They used production-built assets, fresh SQLite databases, real Mosquitto, and
+two independent fake ESPs. Coverage includes:
+
+- every retained route, direct reload, useful 404 recovery, responsive layouts,
+  keyboard access, and automated accessibility checks;
+- channel, schedule, throttle, mapping, device, and override workflows;
+- revision conflicts, persistence, logs, exports, alerts, and invalid filters;
+- SSE recovery, offline/reconnect and unknown outcomes; and
+- controller, broker, and fake-ESP restart behavior.
+
+The harness rejects unexpected external requests and browser console errors.
 
 ### ESP32 firmware 4.0.0
 
-The actual sketch at `.old/slaveCode/ESP32Code/ESP32Code.ino` is now a supported
-part of this rewrite. Firmware 4.0.0 fixes all four identified failover hazards:
+The supported sketch is `.old/slaveCode/ESP32Code/ESP32Code.ino`. It compiles
+warning-free with pinned Arduino CLI 1.5.0, ESP32 core 3.3.8, ArduinoJson 7.4.3,
+and PubSubClient 2.8. The compiler image verifies the official Arduino CLI
+archive SHA-256 before extraction:
 
-- override expiry uses rollover-safe unsigned elapsed-time comparison;
-- schedule output is forced after override expiry;
-- PWM frequency/resolution reattachment invalidates the scheduled-value cache;
-  and
-- boot and schedule replacement force the first write, including a replacement
-  schedule whose target is zero.
+| Resource                          |          Result |
+| --------------------------------- | --------------: |
+| Program flash                     | 1,036,431 bytes |
+| Global RAM                        |    63,180 bytes |
+| Local-variable capacity remaining |   264,500 bytes |
 
-Pin bookkeeping now stays synchronized with scheduled writes. The fake ESP
-implements the same behavior and boundary fixtures. The controller requires the
-exact version `4.0.0`: an older or unexpected version is visible as
-`firmware_outdated`, is excluded from reconciliation and manual override work,
-and produces an explicit frontend installation message. Compatibility with the
-old firmware is deliberately not claimed.
+Firmware 4.0.0 fixes rollover-safe override expiry, forces schedule restoration,
+invalidates output caches after PWM reattachment or schedule replacement, and
+holds persisted schedule pins off until current time is freshly confirmed.
+Wire duty is normalized 0-255 and scaled to the configured 1-16-bit resolution.
+The controller marks other versions `firmware_outdated` and excludes them from
+actuator work.
 
-Wire duty remains normalized from 0 through 255. Firmware scales that value into
-the configured 1-16-bit LEDC range. Reattaching at a new resolution rescales the
-scheduled/current-overwrite caches and physical output, including an active
-override. All configuration boundaries enforce
-`frequencyHz * 2^resolutionBits <= 80,000,000`. The `sync` command accepts Unix
-epoch seconds from 1 through 2,147,483,647.
+Compilation and fake-firmware tests cannot prove physical pin assignments,
+power-loss behavior, Wi-Fi quality, NTP reachability, or deployed output.
 
-NTP setup is now asynchronous and its hostname comes from the ignored firmware
-configuration. DNS/NTP failure no longer blocks MQTT or manual control startup:
-attempts have a non-blocking 15-second bookkeeping deadline, retry after 60
-seconds, and re-arm after six hours if periodic SNTP callbacks stop. The MQTT
-`sync` command remains an immediate controller-provided time source. On every
-boot, persisted schedule pins are explicitly held off until either source
-confirms current time; restored EEPROM time alone cannot authorize actuation.
+### Containers, Compose, and ARM64
 
-The real sketch compiles warning-free in the pinned firmware image using Arduino
-CLI 1.5.0, ESP32 core 3.3.8, ArduinoJson 7.4.3, and PubSubClient 2.8. The compiled
-program uses 1,036,431 bytes (79% of flash) and 63,180 bytes (19% of global RAM),
-leaving 264,500 bytes for local variables.
-The compiler image contains only the resulting firmware binary in its final
-scratch stage.
+The production Compose template rendered successfully with explicit placeholder
+inputs, and `deployment/pi-preflight.sh` passed Bash syntax checking. The
+template still fails closed without an immutable image reference, bind address,
+broker URL, MQTT confirmation, and four explicit storage directories.
+Preflight also rejects Compose installations that lack the `up --wait`,
+`--wait-timeout`, or `ps --status` capabilities used by the start and
+single-publisher safety procedures.
 
-This closes the firmware source gate. It does not prove that any physical ESP32
-has been flashed, that its board/pin wiring matches production, or that it has
-survived a real power/network failure.
+The clean ARM64 image built and reached health under emulation. The running
+process reported UID/GID 1000, and `state.db` and `events.db` both passed SQLite
+integrity checks. The image is non-root and supports a read-only application
+filesystem with only declared data directories and `/tmp` writable.
 
-The tracked sketch no longer contains Wi-Fi or MQTT credential values. A local
-ignored header preserves this machine's configuration, and a safe example is
-used only for compiler verification. Firmware 4.0.0 supports an MQTT username/
-password pair but still uses plaintext MQTT. Production therefore needs an
-authenticated broker listener restricted to the trusted aquarium LAN; `mqtts://`
-would require a future firmware change and physical validation. Because the old
-credential exists in now-public Git history, it must be rotated. Making the
-repository private later would not revoke it or recall public clones.
+This demonstrates image-level ARM64 compatibility, not the production Pi's
+kernel, filesystem, storage latency, memory pressure, or LAN.
 
-### Production-shaped import
+### Dependency security
 
-Importer `legacy-json-v2` analyzed the production-shaped `.old/data` snapshot
-with fingerprint
-`15580a1ec55c1181db2a5d78f494ba18bc195f47a135b4b700028d5854033275`.
-The result is valid with zero errors and 85 explicit warnings:
+`npm audit --omit=dev` reports zero production vulnerabilities. CI rejects high
+or critical production advisories after installing the lockfile.
 
-| Imported entity  | Count |
-| ---------------- | ----: |
-| Throttles        |    11 |
-| Channels         |    66 |
-| Schedules        |    66 |
-| Schedule points  |   318 |
-| Mapping profiles |     7 |
-| Pin mappings     |    34 |
+The full development tree reports
+[`GHSA-mh99-v99m-4gvg`](https://github.com/advisories/GHSA-mh99-v99m-4gvg)
+through Testcontainers 12.0.4 and its Archiver 7 dependency. It is not shipped
+in the runtime image, current test code supplies no attacker-controlled glob
+pattern, and no compatible Testcontainers release exposes the repaired Archiver
+tree. npm's automated proposal is an unsafe five-major Testcontainers
+downgrade; a direct `brace-expansion` override is API-incompatible. Revisit this
+exception when Testcontainers supports Archiver 8 or publishes a compatible
+backport.
 
-The importer only performs safe, declared normalization: it removes exact
-duplicate start/terminal segments and materializes an implicit final zero at
-minute 1439 when the preceding final target is already zero. Ambiguous or
-nonzero tails remain fatal. Sketch5-era and runtime-only files are intentionally
-skipped rather than treated as active configuration.
+### Storage and backup safety
 
-The snapshot committed to a disposable `state.db` as revision 1 with the counts
-above, and an independent SQLite integrity check returned `ok`. No production
-database was opened or modified. A changed final source snapshot must be
-dry-run again; matching this historical fingerprint must not be assumed.
+`state.db` remains normalized authoritative control state. `events.db` stores
+structured operational history. Variable-shaped JSON is limited to versioned,
+validated payload columns rather than used as a document database.
 
-### Backup, integrity, and restore
+Pino logs are redacted JSON on stdout. Compose uses Docker's compressed `local`
+driver, capped at five 10 MiB files per service. Queryable interactions live in
+`events.db`; high-volume raw rows are short-lived, and longer-lived rows are
+archived as deterministic Zstandard-compressed NDJSON before deletion.
 
-The exact backup-artifact verifier added on 2026-07-19 passed its focused
-four-file selection, 21/21 tests. Startup and storage health share one reader
-that verifies only the canonical `backup-<createdAt>/manifest.json` named by the
-latest successful interaction. It performs full schema-v2 checksum, SQLite
-integrity/foreign-key, and replay-boundary verification and does not scan or fall
-back to an older backup. Missing, corrupt, replaced, escaped, and symlinked
-artifacts are unverified. Its cache is reused only while strong `lstat` identity
-for the root, backup directory, manifest, and both databases remains unchanged,
-with identity checked before and after verification. This prevents a stale audit
-row from producing false-green health. Final settled-tree validation is pending.
+Schema-v2 backups include independent SQLite files, SHA-256 values, integrity
+results, and a cross-database replay boundary. Startup and storage health verify
+the exact artifact named by the latest successful backup interaction; a missing,
+changed, corrupt, escaped, or symlinked artifact is not accepted. Restore writes
+only to new paths during a controlled outage.
 
-In the historical 2026-07-15 round trip, the disposable imported state database
-and a migrated events database were
-backed up with SQLite's online backup API using coherent manifest schema v2.
-The events-first copy intentionally captured no mirrored state event while the
-later state copy contained import revision 1, exercising the replayable copy
-gap. The verified manifest recorded boundaries `B=1`, `E=0`, and `S=1` and:
+## Production-data boundary
 
-| Database    |   Bytes | SHA-256                                                            | Integrity |
-| ----------- | ------: | ------------------------------------------------------------------ | --------- |
-| `state.db`  | 684,032 | `ee796b489c814816ef0417d4b24def828e56a7383e392d1fe77471a0c34cb712` | `ok`      |
-| `events.db` | 167,936 | `b116ad2c0d3bb8870b10310664af7f820284274459201713b551153626461ac0` | `ok`      |
+`.old/data` is intentionally ignored operator-local production input. It is not
+a repository fixture, CI dependency, Docker build input, or immutable expected
+snapshot. CI and clean verification generate deterministic synthetic migration
+fixtures in temporary directories.
 
-Manifest verification passed, restore to two new paths passed, and both
-restored databases passed integrity checks. The application reopened revision 1
-with 66 channels, 66 schedules, seven mapping profiles, and one import run. Its
-normalized pending outbox then replayed revision 1 into the restored earlier
-events snapshot, producing events revision 1 without conflict. The original
-disposable databases were not replaced. Production restore still requires a
-controlled outage, new destination paths, application-open checks, an
-operator-managed path switch, and retention of the prior files for rollback.
+Synthetic fixtures prove parsing, strict JSON handling, normalization,
+all-or-nothing commit behavior, provenance, revision/outbox creation, and
+failure cases. They do not prove that the aquarium's current files are valid.
+For production:
 
-### Production containers and local stack
+1. stop and prove the legacy publisher inactive;
+2. copy the actual source to an immutable rollback snapshot;
+3. dry-run that snapshot with the exact release digest;
+4. review every warning, count, and its newly calculated fingerprint;
+5. commit that same snapshot only into new storage; and
+6. preserve the legacy installation until the new controller completes its
+   supervised soak.
 
-The following is historical container evidence, not a current running-status
-claim. The production image uses a pinned Node 24 Bookworm base, runs as the
-non-root `node` user, and has read-only filesystem support with only declared data
-volumes and `/tmp` writable. The two verified local images are:
-
-| Platform      | Image ID                                                                  |             Size |
-| ------------- | ------------------------------------------------------------------------- | ---------------: |
-| `linux/amd64` | `sha256:ab7b8a1d95d52b5f291456cf4a4b8dbbfbcad53875b18e0db0a283fc404e073a` | 92,990,812 bytes |
-| `linux/arm64` | `sha256:c8caeb5db5673a1b3cb6ae8dc03d752f81d394fa5d394137dd0599b500be51ad` | 92,876,759 bytes |
-
-The native amd64 image and emulated ARM64 image both reached readiness, served
-the production SPA with HTTP 200, and created/opened both SQLite databases. The
-ARM64 result is useful compatibility evidence, but it is not a substitute for
-running under the production Pi's real kernel, disk, and load.
-
-The pinned local Compose stack contains the controller, Mosquitto, and two
-persistent fake ESP actors. A prior run reached healthy state, kept the A1/B2
-device identity/configuration and fake EEPROM documents across restart, and
-captured MQTT traffic only inside the test namespace. This report does not claim
-that those services are running now.
-
-The production Compose template fails closed without an explicit immutable
-image, bind address/port, broker URL, MQTT safety interlock, and four host
-storage directories. It drops capabilities, enables `no-new-privileges`, and
-uses Docker's compressed `local` log driver capped at five 10 MiB files per
-service. No production Pi deployment is encoded or performed by the repository.
-
-## Database, logs, storage, and compression
-
-The rewrite does not use a JSON-document database. `state.db` is the normalized,
-authoritative configuration and controller-state database. `events.db` is a
-separate append-oriented store for structured interactions, alert history,
-maintenance diagnostics, and retained operational evidence. Filterable fields
-are relational and indexed. Variable-shaped bodies use explicit schema-version
-columns and strict parsers; they are not an unstructured substitute for the
-relational model.
-
-Cross-cutting API hardening caps identifiers and Fastify route parameters at 128
-characters. `/api/events` and `/api/logs/export` are GET-only with implicit HEAD
-disabled. Automatic built-in alert-rule seeding and delivery transitions through
-`attempting`, `delivered`, `failed`, and `outcome_unknown` commit global
-revision/outbox events with precise invalidations, but do not advance the
-operator concurrency floor.
-
-Pino writes redacted structured operational logs to stdout. In containers,
-Docker stores and compresses those logs with the bounded `local` driver
-described above. Durable application evidence belongs in structured
-`events.db` rows, not in stdout log files. MQTT evidence stores metadata rather
-than raw wire payloads; ordinary successful PWM traffic is short-lived `raw`
-retention, healthy five-second scheduler ticks are omitted, mutation and HTTP
-5xx interactions store bounded method/route/status metadata, and callback
-failures store sanitized error classes without messages or stacks.
-
-Default live logical event budgets total 6.5 GiB:
-
-| Class         |      Age |  Budget | Disposal path                                   |
-| ------------- | -------: | ------: | ----------------------------------------------- |
-| `raw`         |   7 days | 512 MiB | Aggregate to five-minute summaries, then delete |
-| `operational` | 180 days |   2 GiB | Verify Zstandard archive, then delete           |
-| `aggregate`   |  3 years |   1 GiB | Verify Zstandard archive, then delete           |
-| `audit`       |  3 years |   2 GiB | Verify Zstandard archive, then delete           |
-| `critical`    | 10 years |   1 GiB | Verify Zstandard archive, then delete           |
-
-Archives are deterministic NDJSON compressed as `.ndjson.zst`. The system
-verifies compressed/content hashes, byte counts, schema, record counts, range,
-and retention class before deleting live rows. Internal deletion batches are
-capped at 10,000 records. Storage-health checks monitor available bytes,
-one-year growth projection, unresolved retention/archive failures, and latest
-backup outcome and freshness of the exact verified artifact. Backups remain
-independent SQLite files plus a hash/integrity manifest; they are not the
-retention archive format. Concurrent archive creation is monotonic: a completed
-winner cannot be returned to pending/failed by a losing creator, and source rows
-are deleted only after the winning artifact verifies.
+Never compare production against a fingerprint copied from old documentation,
+and never silently repair a fatal report.
 
 ## CI status
 
-`.github/workflows/ci.yml` defines six independent validation jobs for:
+`.github/workflows/ci.yml` defines six validation jobs:
 
-- formatting, lint, typechecks, unit tests, and production builds;
-- the critical suite;
-- pinned-Mosquitto integration;
-- production Chromium/Playwright;
-- the pinned ESP32 compiler; and
-- amd64/ARM64 container builds, health, hardening, restart, and SQLite checks.
+1. static/unit;
+2. critical;
+3. real-Mosquitto integration;
+4. production Chromium;
+5. pinned ESP32 firmware compilation; and
+6. amd64/ARM64 container smoke and hardening.
 
-Jobs install from the lockfile with `npm ci`. A separate optional
-`publish-image` job runs only for pushes on the repository's default branch when
-`AQUARIUM_GHCR_IMAGE` names the intended lowercase GHCR repository. It fails
-closed unless registry inspection proves its
-run-unique tag absent, publishes with provenance and SBOM metadata, captures the
-returned manifest digest, and smoke-tests that exact digest on amd64 and ARM64.
-Only the digest is a deployment identity; the tag is not treated as immutable.
-Pull requests cannot publish, and there is deliberately no Pi deployment job.
+An independently gated `publish-image` job is restricted to default-branch
+pushes and requires the explicit lowercase `AQUARIUM_GHCR_IMAGE` repository
+variable. It publishes by a run-unique tag, captures the returned
+multi-platform manifest digest, and smoke-tests that exact digest. There is no
+Pi deployment job. The static lane also fails on high or critical production
+dependency advisories.
 
-GitHub Free does not charge standard hosted Actions minutes for public
-repositories; private repositories use the included Actions quota. Free-plan
-protected branches apply to public repositories, while private branch
-protection requires an eligible paid plan. See GitHub's official
-[Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
-and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
-documentation. Public visibility is not credential remediation.
-
-This is repository evidence only. The workflow still needs a trusted hosted
-run after history sanitization, repository/GHCR variable configuration,
-appropriate branch protection, and review of the resulting artifacts.
-
-## Resolved repository gates
-
-### D1: Docker/Testcontainers
-
-Resolved. Docker Desktop 4.81.0 exposes engine 29.6.1 on Linux/amd64. Real
-Testcontainers, local Compose, native amd64, and emulated ARM64 evidence have
-all run against that engine.
-
-### D2: firmware failover defects
-
-Resolved in firmware source 4.0.0 and its pinned compiler/fake fixtures. The
-remaining fleet flash and physical validation are deployment gates, not an
-unresolved controller-code fallback.
-
-### D3: production-shaped legacy data
-
-Resolved for the supplied local snapshot: analysis, disposable commit, counts,
-and integrity all pass. The final Pi-side dry-run, operator review, target
-backup, import, and cutover remain external. Any changed fingerprint or fatal
-finding must stop migration; the importer must not silently repair it.
+Local workflow-equivalent evidence is green, but **hosted CI is not claimed
+green**. The first trusted run must complete before branch-protection check
+names and a deployment digest are selected.
 
 ## Remaining release gates
 
-### Finish locally
+### GitHub and release image
 
-1. Run the complete settled-tree verification from a clean Linux `npm ci`
-   context and record the final test/build counts.
-2. Finish the independent three-consecutive-run, no-retry R12 audit and resolve
-   any repeat-only failure before release.
-3. Run the final source-safety, skipped-test, leaked-container, and documentation
-   consistency audit.
+- Confirm the affected credential was revoked independently of history
+  rewriting, request GitHub Support cleanup of the directly addressable
+  unreachable object, and close the remaining alert only as `revoked`.
+- Run all six hosted validation jobs and require their actual check names on
+  `master`.
+- Configure the intended lowercase `AQUARIUM_GHCR_IMAGE`, review package
+  visibility, run the gated publisher, and record its immutable manifest digest.
 
-### Complete outside this repository
+### ESP32 fleet
 
-1. Revoke the historical Dropbox token, rotate the aquarium Wi-Fi password, and
-   publish only independently verified sanitized history. Keep secret scanning
-   and push protection enabled afterward.
-2. Flash every deployed ESP32 with 4.0.0, verify the exact reported version in
-   the UI, and bench-test override expiry, schedule restoration, Wi-Fi loss, and
-   power cycling before connecting production actuators.
-3. Run CI on GitHub, configure branch protection and the intended lowercase
-   `AQUARIUM_GHCR_IMAGE`, review artifacts, and select the reported immutable
-   manifest digest.
-4. Configure the Pi bind address, four storage directories, broker URL,
-   production MQTT interlock, backup/rollback paths, and optional real alert
-   webhook. Follow `docs/production-deployment.md` and start the digest without
-   changing the legacy service yet.
-5. Re-run the importer against the final source files, review all warnings,
-   back up the intended target, commit during a controlled outage, and verify
-   integrity, application health, devices, schedules, overrides, logs, and
-   alerts. Retain the old data and controller for rollback.
-6. Perform a supervised soak and cutover that exercises real wiring, Wi-Fi,
-   Raspberry Pi disk/load, controller/broker/ESP restarts, and sudden power
-   loss. Roll back on any unexplained actuator state or unresolved operation.
+- Build the ignored local firmware configuration without committing secrets.
+- Flash every deployed board with 4.0.0 and confirm its reported version.
+- Bench-test override expiry, schedule restoration, resolution changes, time
+  acquisition, Wi-Fi/broker loss, reboot, and power cycling before enabling
+  aquarium actuators.
 
-Until those steps are complete, the local evidence supports release preparation
-and staging—not unattended production replacement.
+### Pi and production
+
+- Complete every unchecked item in
+  [the Pi production handoff](pi-production-handoff.md).
+- Run preflight on the intended Pi with operator-managed values and the exact
+  published digest.
+- Dry-run and review the actual stopped production JSON snapshot.
+- Choose the explicit first-migration rollback branch; there is no prior SQLite
+  release to restore on the first cutover.
+- Perform a supervised soak covering real wiring, broker, Wi-Fi, disk/load,
+  restart, and sudden power loss.
+
+Until those external steps succeed, the correct claim is **locally validated
+release candidate**, not deployed production controller.

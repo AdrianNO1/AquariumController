@@ -1,50 +1,79 @@
-# Legacy development fixture audit
+# Legacy production-input policy
 
-Updated: 2026-07-10
+Updated: 2026-07-25
 
-Scope: `.old/data` only. These files are imperfect development fixtures, not production data. Seven UTF-8 JSON files parse without a BOM or exact duplicate object keys. The migration dry-run must reproduce this report from code; this document is not a substitute for validation.
+## Scope
 
-## Import disposition
+`.old/data` is intentionally ignored operator-local production input. Its
+contents can change as the operator refreshes the aquarium snapshot, so they are
+not a versioned development fixture, a Docker build input, or a CI dependency.
+This document deliberately does not record expected file contents, counts, or a
+fingerprint.
 
-| File                             | Shape / count                                           | Disposition                                                                                                    |
-| -------------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `links.json`                     | 53 channels, 160 schedule segments, seven control types | Core schedule/channel import; currently contains fatal graph defects                                           |
-| `channels.json`                  | Nine prefix profiles, eight nonempty, 40 pin mappings   | Core output/mapping import; empty profile is reported and skipped; eight missing schedule references are fatal |
-| `throttle.json`                  | Five per-type throttle values                           | Core throttle import; missing legacy defaults are materialized only with an explicit warning                   |
-| `temporaryoverwritesliders.json` | Six values with a 2025 timestamp                        | Expired ephemeral actuator state; checksum/count recorded, never imported as active override                   |
-| `device_memory.json`             | Two experimental runtime entries                        | Unreferenced runtime/WIP state; checksum/count recorded and skipped                                            |
-| `espstatuses.json`               | Experimental switch/sensor/DSL status snapshot          | Stale WIP runtime state; checksum/count recorded and skipped                                                   |
-| `homepagedata.json`              | Sketch5 codegroups, switches, timers and sensors        | Explicitly deferred WIP file; checksum/count and detailed warning, no DSL execution or active import           |
+The importer never infers this path. Both analysis and commit require an
+explicit `--source`, and commit additionally requires an explicit new
+`--state-db`.
 
-## Fatal findings in the current fixtures
+## Hermetic automated coverage
 
-The expected dry-run result is `valid: false`, `canCommit: false` with at least 35 fatal findings:
+Migration tests create deterministic synthetic legacy JSON in temporary
+directories. The synthetic set covers:
 
-- Three zero-duration first segments: `Royal Blue`, `Pump 1`, and `Pump 2` at minute 0.
-- Twenty-four schedules end at minute 274 rather than 1439: all six `Test ...`, lowercase `bad ...`, uppercase `Bad ...`, and `Biljard ...` channels.
-- Eight pin mappings reference schedules that do not exist: `Loft Violet`, `Loft Royal Blue`, `Loft Blue`, `Loft White`, `Qt3 Violet`, `Qt3 Royal Blue`, `Qt3 Blue`, and `Qt3 White`.
+- strict UTF-8 JSON parsing and exact duplicate-key rejection;
+- a representative valid import and deterministic report;
+- missing legacy throttle defaults with explicit provenance;
+- orphan-schedule preservation;
+- skipped ephemeral and deferred files without executing their contents;
+- only output-equivalent zero-boundary normalization;
+- fatal schedule and reference errors;
+- read-only dry-run behavior; and
+- atomic commit, revision, outbox, and repeat-import protection.
 
-No state rows may be committed while any fatal issue remains.
+CI therefore tests importer behavior without reading or embedding production
+data. The clean Linux Docker verification after this isolation passed 95
+files/618 unit tests and 81 files/557 critical tests. The preceding host run
+reported 95 files/619 and 81 files/558; the one-test difference in each
+selection is the intentional removal of environment-dependent `.old/data`
+coverage.
 
-## Warnings that preserve data explicitly
+Synthetic fixtures do not certify the aquarium snapshot.
 
-- `channels.json` has an empty prefix with zero rows. Report and skip it; never insert an empty matching prefix.
-- Six case-only channel pairs exist (`bad ...` and `Bad ...`). Preserve both under verified SQLite `BINARY` identity and report the collision; never case-fold or merge them.
-- Throttles are absent for `bad`, `loft`, `biljard`, `qt2`, `qt3`, and `qt4`. The running compiler defaults missing values to 100. An import may materialize 100 only with provenance `legacy-default` in the report.
-- Thirty-one schedules are currently unmapped. Preserve and report them; an unused schedule is not data loss or a fatal referential error.
-- Twenty-four canonical route channels are missing, including every `loft`, `qt2`, `qt3`, and `qt4` channel. Missing but unmapped channels are warnings and are never silently invented.
-- Legacy `x/y` graph coordinates are redundant presentation data. Recompute them from authoritative minute/percentage values; report discarded coordinates, including inconsistent `Pump 4` endpoints.
-- Ephemeral/WIP files are skipped with file hash, row counts, reason, and importer version so the omission is auditable.
+## Production procedure
 
-## Fatal policy for any source directory
+Use the exact release-image digest and the first-migration branch in
+[the production deployment runbook](production-deployment.md):
+
+1. Stop the legacy controller and prove it cannot publish MQTT commands.
+2. Copy the actual legacy directory to a new immutable rollback location.
+3. Reject symlinks and create and verify a deterministic SHA-256 inventory.
+4. Run the importer in analysis mode against that read-only copy.
+5. Preserve the full report and record its newly calculated source fingerprint,
+   normalized counts, warnings, and errors.
+6. Review every warning. Any error or unexplained transformation stops the
+   migration.
+7. Commit the same verified copy to a newly claimed `state.db`; never re-read a
+   live or later-mutated source.
+8. Keep the legacy installation and snapshot unchanged until the supervised
+   cutover and soak have passed.
+
+Do not compare the current production source against a fingerprint copied from
+an earlier report. A different fingerprint means only that the source differs;
+it requires a new human review rather than an automatic accept or reject.
+
+## Fatal import policy
 
 Abort the entire atomic import for:
 
-- Invalid UTF-8/JSON, exact duplicate JSON keys, wrong core root/record shape, or ambiguous unknown core fields.
-- Duplicate normalized identities; an empty mapping prefix with rows; overlapping nonempty prefixes; duplicate pin/channel within a profile; invalid pins; mapping references to missing channels.
-- Unknown schedule type, empty links, malformed points, noninteger/out-of-range times, nonfinite/out-of-range percentages, reversed/zero-duration segments, start other than 0, end other than 1439, gaps, overlaps, adjacent discontinuities, or wrap mismatch.
-- Nonnumeric/out-of-range throttles.
-- A case collision when the target database/query path is not demonstrably case-sensitive.
-- Any transformation that could change actuator output without an explicit operator-approved policy.
+- invalid UTF-8/JSON, exact duplicate keys, wrong core shapes, or ambiguous core
+  fields;
+- duplicate identities, unsafe mapping prefixes, invalid pins, or mappings to
+  missing channels;
+- unknown schedule types, malformed/nonfinite/out-of-range points, reversed or
+  zero-duration segments, gaps, overlaps, discontinuities, or unsafe tails;
+- invalid throttles;
+- a case collision without demonstrably case-sensitive target behavior; or
+- any transformation that could change actuator output without an explicit
+  reviewed policy.
 
-The tool must report every discoverable issue in one dry-run rather than stopping at the first error. It may not repair, discard, merge, extend, clamp, or rename control data silently.
+The analyzer reports all discoverable issues in one dry-run. It does not
+silently repair, discard, merge, extend, clamp, or rename control data.
