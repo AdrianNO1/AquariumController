@@ -7,6 +7,7 @@ import type { Kysely } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "./app.js";
+import { ConfigurationRelationalConflictError } from "./application/configuration/index.js";
 import {
   ControllerConfigurationRepository,
   openStateDatabase,
@@ -85,6 +86,17 @@ describe("configuration HTTP routes", () => {
     });
     expect(device.statusCode).toBe(503);
     expect(device.json()).toMatchObject({
+      code: "service_unavailable",
+      service: "device configuration command service",
+    });
+
+    const reconciliation = await app.inject({
+      method: "POST",
+      url: "/api/operations/operation-main/reconcile",
+      payload: { expectedRevision: 0 },
+    });
+    expect(reconciliation.statusCode).toBe(503);
+    expect(reconciliation.json()).toMatchObject({
       code: "service_unavailable",
       service: "device configuration command service",
     });
@@ -174,12 +186,18 @@ describe("configuration HTTP routes", () => {
     const patchDeviceConfiguration = vi.fn(
       async (): Promise<MutationResult> => unchanged,
     );
+    const reconcileDeviceOperation = vi.fn(
+      async (): Promise<MutationResult> => unchanged,
+    );
     const acknowledgeAlert = vi.fn(
       async (): Promise<MutationResult> => unchanged,
     );
     const app = trackApp(
       buildApp({
-        deviceConfigurationCommands: { patchDeviceConfiguration },
+        deviceConfigurationCommands: {
+          patchDeviceConfiguration,
+          reconcileDeviceOperation,
+        },
         alertAcknowledgementCommands: { acknowledgeAlert },
       }),
     );
@@ -223,6 +241,54 @@ describe("configuration HTTP routes", () => {
     expect(patchDeviceConfiguration).toHaveBeenCalledWith("device-main", {
       expectedRevision: 4,
       name: "Main-Tank",
+    });
+
+    const reconciled = await app.inject({
+      method: "POST",
+      url: "/api/operations/operation-main/reconcile",
+      payload: { expectedRevision: 4 },
+    });
+    expect(reconciled.statusCode).toBe(200);
+    expect(reconciled.json()).toEqual(unchanged);
+    expect(reconcileDeviceOperation).toHaveBeenCalledWith("operation-main", 4);
+
+    const invalidReconciliation = await app.inject({
+      method: "POST",
+      url: "/api/operations/operation-main/reconcile",
+      payload: { expectedRevision: 4, retry: true },
+    });
+    expect(invalidReconciliation.statusCode).toBe(400);
+    expect(reconcileDeviceOperation).toHaveBeenCalledTimes(1);
+
+    reconcileDeviceOperation.mockRejectedValueOnce(
+      new ConfigurationRelationalConflictError([
+        {
+          resource: "operation",
+          id: "operation-main",
+          relation: "firmware_safety_window",
+          message:
+            "Operation operation-main cannot be reconciled before the firmware safety window ends",
+        },
+      ]),
+    );
+    const safetyBlocked = await app.inject({
+      method: "POST",
+      url: "/api/operations/operation-main/reconcile",
+      payload: { expectedRevision: 4 },
+    });
+    expect(safetyBlocked.statusCode).toBe(409);
+    expect(safetyBlocked.json()).toEqual({
+      code: "relational_conflict",
+      message: "Configuration mutation conflicts with related state",
+      conflicts: [
+        {
+          resource: "operation",
+          id: "operation-main",
+          relation: "firmware_safety_window",
+          message:
+            "Operation operation-main cannot be reconciled before the firmware safety window ends",
+        },
+      ],
     });
 
     const alert = await app.inject({
@@ -293,6 +359,64 @@ describe("configuration HTTP routes", () => {
     });
     expect(deleted.statusCode).toBe(200);
     expect(deleted.json()).toMatchObject({ changed: true, revision: 3 });
+  });
+
+  it("inspects a valid manual-override aggregate operation", async () => {
+    const { database, repository } = await createRepository();
+    await database
+      .insertInto("control_operations")
+      .values({
+        id: "manual-aggregate",
+        device_id: null,
+        kind: "manual_override_start",
+        status: "outcome_unknown",
+        requested_at_ms: 100,
+        deadline_at_ms: 200,
+        completed_at_ms: 150,
+        request_json: JSON.stringify({
+          kind: "manual_override_start",
+          overrideId: "override-main",
+          target: { targetType: "channel", targetId: "channel-main" },
+          commands: [
+            {
+              deviceId: "device-main",
+              mappingId: "mapping-main",
+              pin: 4,
+              value: 200,
+              overwrite: true,
+            },
+          ],
+          valuePercentage: 78,
+          expiresAtMs: 120_100,
+        }),
+        request_schema_version: 1,
+        result_json: JSON.stringify({
+          status: "outcome_unknown",
+          childOperationIds: ["child-unknown"],
+          reason: "child_outcome_not_succeeded",
+          unknownChildOperationId: "child-unknown",
+          safetyReconcileAtMs: 120_150,
+          reconciledAtMs: null,
+        }),
+        result_schema_version: 1,
+      })
+      .executeTakeFirstOrThrow();
+    const app = trackApp(buildApp({ configurationService: repository }));
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/operations/manual-aggregate",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      operation: {
+        id: "manual-aggregate",
+        deviceId: null,
+        kind: "manual_override_start",
+      },
+      request: { data: { overrideId: "override-main" } },
+      result: { data: { unknownChildOperationId: "child-unknown" } },
+    });
   });
 
   it("does not expose unexpected repository failures", async () => {

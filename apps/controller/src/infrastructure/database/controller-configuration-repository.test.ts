@@ -159,6 +159,91 @@ describe("ControllerConfigurationRepository", () => {
     ).resolves.toEqual({ last_operator_revision: 2 });
   });
 
+  it("reads valid manual-override aggregate operation documents and rejects corrupt ones", async () => {
+    const database = await openDatabase();
+    const base = {
+      device_id: null,
+      kind: "manual_override_start" as const,
+      status: "outcome_unknown" as const,
+      requested_at_ms: 100,
+      deadline_at_ms: 200,
+      completed_at_ms: 150,
+      request_schema_version: 1,
+      result_json: JSON.stringify({
+        status: "outcome_unknown",
+        childOperationIds: ["child-unknown"],
+        reason: "child_outcome_not_succeeded",
+        unknownChildOperationId: "child-unknown",
+        safetyReconcileAtMs: 120_150,
+        reconciledAtMs: null,
+      }),
+      result_schema_version: 1,
+    };
+    const validRequest = {
+      kind: "manual_override_start",
+      overrideId: "override-main",
+      target: { targetType: "channel", targetId: "channel-main" },
+      commands: [
+        {
+          deviceId: "device-main",
+          mappingId: "mapping-main",
+          pin: 4,
+          value: 200,
+          overwrite: true,
+        },
+      ],
+      valuePercentage: 78,
+      expiresAtMs: 120_100,
+    };
+    await database
+      .insertInto("control_operations")
+      .values([
+        {
+          ...base,
+          id: "manual-aggregate",
+          request_json: JSON.stringify(validRequest),
+        },
+        {
+          ...base,
+          id: "corrupt-manual-aggregate",
+          request_json: JSON.stringify({
+            ...validRequest,
+            kind: "manual_override_cancel",
+          }),
+        },
+      ])
+      .execute();
+    const repository = new ControllerConfigurationRepository(database);
+
+    await expect(
+      repository.getOperation("manual-aggregate"),
+    ).resolves.toMatchObject({
+      operation: {
+        id: "manual-aggregate",
+        deviceId: null,
+        kind: "manual_override_start",
+        status: "outcome_unknown",
+      },
+      request: {
+        schemaVersion: 1,
+        data: {
+          kind: "manual_override_start",
+          overrideId: "override-main",
+        },
+      },
+      result: {
+        schemaVersion: 1,
+        data: {
+          status: "outcome_unknown",
+          unknownChildOperationId: "child-unknown",
+        },
+      },
+    });
+    await expect(
+      repository.getOperation("corrupt-manual-aggregate"),
+    ).rejects.toThrow();
+  });
+
   it("creates and deletes each channel with its owned UTC schedule atomically", async () => {
     const database = await openDatabase();
     await database

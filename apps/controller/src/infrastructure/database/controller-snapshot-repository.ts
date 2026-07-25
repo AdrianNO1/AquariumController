@@ -6,14 +6,19 @@ import {
   type ControllerSnapshot,
   type ControlArea,
 } from "@aquarium/contracts";
-import type { Kysely } from "kysely";
+import { sql, type Kysely, type Selectable } from "kysely";
 import { z, type ZodType } from "zod";
 
+import {
+  DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
+  deviceOperationResultSchema,
+} from "../../application/operations/index.js";
 import type { ControllerSnapshotReader } from "../../application/snapshot/index.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 import type { StateDatabaseSchema } from "./types.js";
 
 export const RECENT_OPERATION_LIMIT = 100;
+export const UNRESOLVED_DEVICE_OPERATION_LIMIT = 100;
 const RECENT_IMPORT_RUN_LIMIT = 100;
 const ALERT_DELIVERY_LIMIT = 100;
 
@@ -100,6 +105,32 @@ function parseOptionalStoredJson<Output>(
   );
 }
 
+function toOperationSummary(
+  operation: Selectable<StateDatabaseSchema["control_operations"]>,
+) {
+  return {
+    id: operation.id,
+    deviceId: operation.device_id,
+    kind: operation.kind,
+    status: operation.status,
+    requestedAt: toIsoTimestamp(
+      operation.requested_at_ms,
+      `operation ${operation.id} request time`,
+    ),
+    deadlineAt: toIsoTimestamp(
+      operation.deadline_at_ms,
+      `operation ${operation.id} deadline`,
+    ),
+    completedAt:
+      operation.completed_at_ms === null
+        ? null
+        : toIsoTimestamp(
+            operation.completed_at_ms,
+            `operation ${operation.id} completion time`,
+          ),
+  };
+}
+
 export class ControllerSnapshotRepository implements ControllerSnapshotReader {
   readonly #now: () => Date;
 
@@ -131,6 +162,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         mappingRows,
         deviceRows,
         operationRows,
+        unresolvedDeviceOperationRows,
         importRunRows,
         overrideRows,
         alertRuleRows,
@@ -193,6 +225,18 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
           .orderBy("requested_at_ms", "desc")
           .orderBy("id", "asc")
           .limit(RECENT_OPERATION_LIMIT + 1)
+          .execute(),
+        transaction
+          .selectFrom("control_operations")
+          .selectAll()
+          .where("device_id", "is not", null)
+          .where("status", "=", "outcome_unknown")
+          .where(
+            sql<boolean>`json_extract(${sql.ref("result_json")}, '$.reconciledAtMs') is null`,
+          )
+          .orderBy("requested_at_ms", "asc")
+          .orderBy("id", "asc")
+          .limit(UNRESOLVED_DEVICE_OPERATION_LIMIT + 1)
           .execute(),
         transaction
           .selectFrom("import_runs")
@@ -376,28 +420,33 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
           z.json(),
           `operation ${operation.id} result`,
         );
-        return {
-          id: operation.id,
-          deviceId: operation.device_id,
-          kind: operation.kind,
-          status: operation.status,
-          requestedAt: toIsoTimestamp(
-            operation.requested_at_ms,
-            `operation ${operation.id} request time`,
-          ),
-          deadlineAt: toIsoTimestamp(
-            operation.deadline_at_ms,
-            `operation ${operation.id} deadline`,
-          ),
-          completedAt:
-            operation.completed_at_ms === null
-              ? null
-              : toIsoTimestamp(
-                  operation.completed_at_ms,
-                  `operation ${operation.id} completion time`,
-                ),
-        };
+        return toOperationSummary(operation);
       });
+      const unresolvedDeviceOperationWindow =
+        unresolvedDeviceOperationRows.slice(
+          0,
+          UNRESOLVED_DEVICE_OPERATION_LIMIT,
+        );
+      const unresolvedDeviceOperations = unresolvedDeviceOperationWindow.map(
+        (operation) => {
+          const result = parseOptionalStoredJson(
+            operation.result_json,
+            operation.result_schema_version,
+            DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
+            deviceOperationResultSchema,
+            `operation ${operation.id} result`,
+          );
+          if (
+            result?.status !== "outcome_unknown" ||
+            result.reconciledAtMs !== null
+          ) {
+            throw new InvalidPersistedSnapshotDataError(
+              `operation ${operation.id} unresolved outcome`,
+            );
+          }
+          return toOperationSummary(operation);
+        },
+      );
 
       const importRuns = importRunRows.map((run) => {
         parseOptionalStoredJson(
@@ -639,6 +688,13 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
           items: operations,
           limit: RECENT_OPERATION_LIMIT,
           truncated: operationRows.length > RECENT_OPERATION_LIMIT,
+        },
+        unresolvedDeviceOperations: {
+          items: unresolvedDeviceOperations,
+          limit: UNRESOLVED_DEVICE_OPERATION_LIMIT,
+          truncated:
+            unresolvedDeviceOperationRows.length >
+            UNRESOLVED_DEVICE_OPERATION_LIMIT,
         },
         importRuns,
         overrides: overrideRows.map((override) => {

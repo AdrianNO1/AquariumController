@@ -215,6 +215,56 @@ external release action. The focused 2026-07-19 compile used 1,036,431 bytes of
 flash and 63,180 bytes of global RAM, leaving 264,500 bytes for local variables;
 this targeted result is not a substitute for final settled-tree validation.
 
+## Unknown actuator outcomes and reconciliation
+
+The ESP wire response has no request identifier, so a failure after publication
+cannot prove that an actuator command did not run. The controller therefore
+never retries an ambiguous command. It persists the operation as terminal
+`outcome_unknown`; reconciliation later records `reconciledAtMs` while leaving
+that status unchanged. Reconciliation is an acknowledgement of verified
+physical state, not a retroactive success or failure claim.
+
+The safety latch is both durable and live. Startup recovery converts an
+interrupted in-flight device operation to `outcome_unknown`, finds every
+unreconciled unknown result, and restores the latch before command readiness.
+A new runtime unknown immediately marks MQTT command readiness false and blocks
+the serialized transport and scheduled dispatcher. Broker reconnection does not
+clear it. Only after every unknown device operation is durably reconciled does
+the controller release both latches and rerun the full transport-ready schedule
+reconciliation before becoming ready again.
+
+`POST /api/operations/:operationId/reconcile` is revision checked. A successful
+operator reconciliation updates the versioned result document and atomically
+commits a critical-retention `operation.outcome-reconciled` state/outbox event.
+For an unknown `set_pwm` with `overwrite: true`, the repository rejects
+reconciliation until 120 seconds after operation completion because the
+firmware may still be holding the overwrite. Non-overwrite operations have no
+such delay.
+
+Manual overrides keep aggregate ownership of their child operations. The
+generic device-operation route rejects both a manual-override aggregate and an
+unknown child owned by an unresolved aggregate. The override service must first
+reconcile that child through its internal path, then finalize the aggregate
+through its own critical `override.outcome-reconciled` event, no earlier than
+the stored 120-second safety deadline. Its due timer also completes that safe
+owner workflow after the deadline; neither path resends the uncertain command.
+
+In the React operation details, an unreconciled device outcome shows the exact
+request/result and requires the operator to check that physical and device state
+were verified before the reconciliation button is enabled. The mutation has
+retries disabled. Success displays the authoritative revision while continuing
+to label the original outcome unknown; an already reconciled result shows its
+durable timestamp and no action. A rejected safety-window attempt remains
+available with the server conflict shown. Manual-override aggregates instead
+use their owner-specific card and reconciliation route.
+
+The snapshot exposes unresolved device outcomes in a separate bounded,
+oldest-first window, independent of recent history and current pin mappings.
+The global `/operations` page therefore keeps old or unmapped blockers
+inspectable. If more than 100 exist, the UI reports truncation; reconciling the
+displayed oldest entries reveals the next rows without making every snapshot
+unbounded.
+
 ## Realtime and consistency model
 
 Every authoritative state transaction increments the singleton revision and

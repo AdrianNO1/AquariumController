@@ -308,6 +308,44 @@ export const recentOperationsSchema = z
     }
   });
 
+export const unresolvedDeviceOperationsSchema = z
+  .strictObject({
+    items: z.array(operationSummarySchema).max(500),
+    limit: z.number().int().min(1).max(500),
+    truncated: z.boolean(),
+  })
+  .superRefine((window, context) => {
+    if (window.items.length > window.limit) {
+      context.addIssue({
+        code: "custom",
+        path: ["items"],
+        message:
+          "Unresolved device operations exceed the declared window limit",
+      });
+    }
+    if (window.truncated && window.items.length !== window.limit) {
+      context.addIssue({
+        code: "custom",
+        path: ["truncated"],
+        message:
+          "A truncated unresolved device operation window must fill its declared limit",
+      });
+    }
+    for (const [index, operation] of window.items.entries()) {
+      if (
+        operation.deviceId === null ||
+        operation.status !== "outcome_unknown"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["items", index],
+          message:
+            "Unresolved device operation entries must identify a device and have an unknown outcome",
+        });
+      }
+    }
+  });
+
 export const importRunSummarySchema = z
   .strictObject({
     id: identifierSchema,
@@ -840,6 +878,7 @@ export const controllerSnapshotSchema = z
     mappingProfiles: z.array(mappingProfileSchema),
     devices: z.array(deviceSchema),
     operations: recentOperationsSchema,
+    unresolvedDeviceOperations: unresolvedDeviceOperationsSchema,
     importRuns: z.array(importRunSummarySchema).max(100),
     overrides: z.array(overrideSchema),
     alertRules: z.array(alertRuleSchema),
@@ -857,6 +896,10 @@ export const controllerSnapshotSchema = z
       { path: "mappingProfiles", items: snapshot.mappingProfiles },
       { path: "devices", items: snapshot.devices },
       { path: "operations.items", items: snapshot.operations.items },
+      {
+        path: "unresolvedDeviceOperations.items",
+        items: snapshot.unresolvedDeviceOperations.items,
+      },
       { path: "importRuns", items: snapshot.importRuns },
       { path: "overrides", items: snapshot.overrides },
       { path: "alertRules", items: snapshot.alertRules },
@@ -957,6 +1000,18 @@ export const controllerSnapshotSchema = z
           code: "custom",
           path: ["operations", "items", index, "deviceId"],
           message: "Operation device must exist in the snapshot",
+        });
+      }
+    }
+    for (const [
+      index,
+      operation,
+    ] of snapshot.unresolvedDeviceOperations.items.entries()) {
+      if (operation.deviceId !== null && !deviceIds.has(operation.deviceId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["unresolvedDeviceOperations", "items", index, "deviceId"],
+          message: "Unresolved operation device must exist in the snapshot",
         });
       }
     }
@@ -1558,6 +1613,9 @@ export type MappingProfile = z.infer<typeof mappingProfileSchema>;
 export type Device = z.infer<typeof deviceSchema>;
 export type OperationSummary = z.infer<typeof operationSummarySchema>;
 export type RecentOperations = z.infer<typeof recentOperationsSchema>;
+export type UnresolvedDeviceOperations = z.infer<
+  typeof unresolvedDeviceOperationsSchema
+>;
 export type ImportRunSummary = z.infer<typeof importRunSummarySchema>;
 export type Override = z.infer<typeof overrideSchema>;
 export type AlertObservation = z.infer<typeof alertObservationSchema>;

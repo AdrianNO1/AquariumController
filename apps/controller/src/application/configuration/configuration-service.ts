@@ -106,6 +106,10 @@ export interface DeviceConfigurationCommandPort {
     deviceId: string,
     request: PatchDeviceConfigurationRequest,
   ): Promise<MutationResult>;
+  reconcileDeviceOperation(
+    operationId: string,
+    expectedRevision: number,
+  ): Promise<MutationResult>;
 }
 
 export interface AlertAcknowledgementCommandPort {

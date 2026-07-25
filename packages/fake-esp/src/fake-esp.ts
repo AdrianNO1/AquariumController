@@ -38,8 +38,17 @@ const UINT32_MODULUS = 0x1_0000_0000;
 export interface FakeEspResponseFaults {
   readonly delayMilliseconds?: number;
   readonly drop?: boolean;
+  readonly dropNextResponseForCommand?: string;
   readonly duplicateResponses?: number;
   readonly malformed?: boolean;
+}
+
+interface NormalizedFakeEspResponseFaults {
+  readonly delayMilliseconds: number;
+  readonly drop: boolean;
+  readonly dropNextResponseForCommand: string | null;
+  readonly duplicateResponses: number;
+  readonly malformed: boolean;
 }
 
 export interface FakeEspActorOptions {
@@ -141,7 +150,7 @@ export class FakeEspActor {
   private lastScheduleUpdateMilliseconds: number;
   private lastOverwriteCheckMilliseconds: number;
   private lastTimeSaveMilliseconds: number;
-  private responseFaults: Required<FakeEspResponseFaults>;
+  private responseFaults: NormalizedFakeEspResponseFaults;
 
   public constructor(options: FakeEspActorOptions) {
     this.transport = options.transport;
@@ -401,6 +410,9 @@ export class FakeEspActor {
     if (message.endsWith(";")) {
       commands.pop();
     }
+    const commandNames = commands.map((command) =>
+      this.commandName(command, responseId, responseName),
+    );
 
     commands.forEach((command, index) => {
       const response = this.processCommand(command);
@@ -412,6 +424,7 @@ export class FakeEspActor {
     if (responses.length > 0) {
       this.publishResponse(
         JSON.stringify({ id: responseId, name: responseName, responses }),
+        commandNames,
       );
     }
   }
@@ -790,8 +803,19 @@ export class FakeEspActor {
     this.chunkAssembly.lastChunkTimeMilliseconds = 0;
   }
 
-  private publishResponse(payload: string): void {
+  private publishResponse(
+    payload: string,
+    commandNames: readonly (string | null)[] = [],
+  ): void {
     if (this.responseFaults.drop) {
+      return;
+    }
+    const dropCommand = this.responseFaults.dropNextResponseForCommand;
+    if (dropCommand !== null && commandNames.includes(dropCommand)) {
+      this.responseFaults = {
+        ...this.responseFaults,
+        dropNextResponseForCommand: null,
+      };
       return;
     }
     const publishedPayload = this.responseFaults.malformed ? "{" : payload;
@@ -810,6 +834,24 @@ export class FakeEspActor {
         });
       }
     }
+  }
+
+  private commandName(
+    message: string,
+    deviceId: string,
+    deviceName: string,
+  ): string | null {
+    const firstSpace = message.indexOf(" ");
+    if (firstSpace === -1) {
+      return null;
+    }
+    const targetDevice = message.slice(0, firstSpace);
+    if (targetDevice !== deviceName && targetDevice !== deviceId) {
+      return null;
+    }
+    const remainder = message.slice(firstSpace + 1);
+    const secondSpace = remainder.indexOf(" ");
+    return secondSpace === -1 ? remainder : remainder.slice(0, secondSpace);
   }
 
   private flushPendingResponses(now: number): void {
@@ -847,9 +889,10 @@ export class FakeEspActor {
 
 function normalizeResponseFaults(
   faults: FakeEspResponseFaults = {},
-): Required<FakeEspResponseFaults> {
+): NormalizedFakeEspResponseFaults {
   const delayMilliseconds = faults.delayMilliseconds ?? 0;
   const duplicateResponses = faults.duplicateResponses ?? 0;
+  const dropNextResponseForCommand = faults.dropNextResponseForCommand ?? null;
   if (!Number.isSafeInteger(delayMilliseconds) || delayMilliseconds < 0) {
     throw new RangeError(
       "Response delay must be a non-negative integer millisecond value",
@@ -860,9 +903,18 @@ function normalizeResponseFaults(
       "Duplicate response count must be a non-negative integer",
     );
   }
+  if (
+    dropNextResponseForCommand !== null &&
+    !/^[a-z]{1,16}$/u.test(dropNextResponseForCommand)
+  ) {
+    throw new RangeError(
+      "One-shot response fault command must contain 1-16 lowercase letters",
+    );
+  }
   return {
     delayMilliseconds,
     drop: faults.drop ?? false,
+    dropNextResponseForCommand,
     duplicateResponses,
     malformed: faults.malformed ?? false,
   };

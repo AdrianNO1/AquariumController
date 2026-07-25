@@ -7,12 +7,15 @@ export {
 export {
   ControlOperationRepository,
   DeviceOperationDeviceNotFoundError,
+  DeviceOperationNotFoundError,
+  DeviceOperationReconciliationConflictError,
   DeviceOperationRevisionConflictError,
   InvalidDeviceOperationTransitionError,
   type CreatePendingDeviceOperationInput,
   type CreatePendingUserConfigurationOperationInput,
   type CreatedUserConfigurationOperation,
   type InterruptedOperationRecovery,
+  type DeviceOperationReconciliationConflictRelation,
   type StoredDeviceOperation,
 } from "./control-operation-repository.js";
 export {
@@ -52,6 +55,7 @@ export {
   ControllerSnapshotRepository,
   InvalidPersistedSnapshotDataError,
   RECENT_OPERATION_LIMIT,
+  UNRESOLVED_DEVICE_OPERATION_LIMIT,
   type ControllerSnapshotRepositoryOptions,
 } from "./controller-snapshot-repository.js";
 export {

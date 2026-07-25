@@ -121,6 +121,8 @@ export class ControllerMqttRuntime
   #transportReady = false;
   #readyForCommands = false;
   #transportGeneration = 0;
+  #postReconciliationRecoveryScheduled = false;
+  #postReconciliationRecoveryRequested = false;
   #stopping = false;
   #started = false;
   #stopPromise: Promise<void> | undefined;
@@ -206,6 +208,9 @@ export class ControllerMqttRuntime
         now: options.now,
         operationTimeoutMs: options.mqtt.responseTimeoutMs,
         onBackgroundError: options.onError,
+        onUnknownOutcomeLatched: () => this.#handleUnknownOutcomeLatched(),
+        onAllUnknownOutcomesReconciled: () =>
+          this.#releaseScheduledUnknownOutcomeLatch(),
       },
     );
     this.#scheduleReconciliation = new ScheduleReconciliationService(
@@ -274,6 +279,48 @@ export class ControllerMqttRuntime
     return this.#deviceOperations;
   }
 
+  async #releaseScheduledUnknownOutcomeLatch(): Promise<void> {
+    if (this.#scheduledCommands.blockedReason === "outcome_unknown") {
+      await this.#scheduledCommands.acknowledgeReconciledOutcome();
+    }
+    this.#schedulePostReconciliationRecovery();
+  }
+
+  #schedulePostReconciliationRecovery(): void {
+    if (!this.#started || this.#stopping || !this.#transportReady) {
+      return;
+    }
+    this.#postReconciliationRecoveryRequested = true;
+    if (this.#postReconciliationRecoveryScheduled) {
+      return;
+    }
+    this.#postReconciliationRecoveryScheduled = true;
+    this.#tasks.run(async () => {
+      await Promise.resolve();
+      try {
+        while (
+          this.#postReconciliationRecoveryRequested &&
+          this.#started &&
+          !this.#stopping &&
+          this.#transportReady
+        ) {
+          this.#postReconciliationRecoveryRequested = false;
+          await this.#handleTransportReady(this.#transportGeneration);
+        }
+      } finally {
+        this.#postReconciliationRecoveryScheduled = false;
+        if (this.#postReconciliationRecoveryRequested) {
+          this.#schedulePostReconciliationRecovery();
+        }
+      }
+    });
+  }
+
+  #handleUnknownOutcomeLatched(): void {
+    this.#readyForCommands = false;
+    this.#scheduledCommands.latchUnknownOutcome();
+  }
+
   get manualOverrideCommands(): ManualOverrideService {
     return this.#manualOverrides;
   }
@@ -315,7 +362,8 @@ export class ControllerMqttRuntime
     if (
       !this.#stopping &&
       this.#transportReady &&
-      transportGeneration === this.#transportGeneration
+      transportGeneration === this.#transportGeneration &&
+      this.#scheduledCommands.blockedReason === null
     ) {
       this.#readyForCommands = true;
     }

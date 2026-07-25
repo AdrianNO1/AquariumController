@@ -9,9 +9,10 @@ import {
   type OperationSummary,
   type Override,
 } from "@aquarium/contracts";
+import { ESP32_PWM_OVERWRITE_DURATION_MS } from "@aquarium/esp-protocol";
 import { z } from "zod";
 
-export const MANUAL_OVERRIDE_DURATION_MS = 120_000;
+export const MANUAL_OVERRIDE_DURATION_MS = ESP32_PWM_OVERWRITE_DURATION_MS;
 export const MANUAL_OVERRIDE_OPERATION_TIMEOUT_MS = 30_000;
 export const MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION = 1;
 

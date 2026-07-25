@@ -6,6 +6,7 @@ import {
   createEspTopicSet,
   CURRENT_ESP_FIRMWARE_VERSION,
   encodeLegacyMessage,
+  ESP32_PWM_OVERWRITE_DURATION_MS,
   espAnnouncementSchema,
   isSupportedEsp32PwmConfiguration,
   isCurrentEspFirmwareVersion,
@@ -16,6 +17,7 @@ import {
 describe("legacy ESP protocol", () => {
   it("requires the refactored reliability firmware exactly", () => {
     expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("4.0.0");
+    expect(ESP32_PWM_OVERWRITE_DURATION_MS).toBe(120_000);
     expect(isCurrentEspFirmwareVersion("4.0.0")).toBe(true);
     expect(isCurrentEspFirmwareVersion("3.2w")).toBe(false);
     expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);

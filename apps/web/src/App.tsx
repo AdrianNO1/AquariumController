@@ -9,6 +9,7 @@ import { AlertsPage } from "./AlertsPage.js";
 import { fetchHealth } from "./api.js";
 import { ControlAreaPage } from "./ControlAreaPage.js";
 import { LogsPage } from "./LogsPage.js";
+import { OperationsPage } from "./OperationsPage.js";
 import { useControllerState } from "./use-controller-state.js";
 
 const controlAreas = [
@@ -155,6 +156,7 @@ export default function App(): React.JSX.Element {
           <NavLink to="/" end>
             Overview
           </NavLink>
+          <NavLink to="/operations">Operations</NavLink>
           <NavLink to="/alerts">Alerts</NavLink>
           <NavLink to="/logs">Logs</NavLink>
         </nav>
@@ -163,6 +165,7 @@ export default function App(): React.JSX.Element {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/control/:deviceType" element={<ControlArea />} />
+        <Route path="/operations" element={<OperationsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="*" element={<NotFound />} />

@@ -123,6 +123,11 @@ export function createTestControlSnapshot(revision = 8): ControllerSnapshot {
       limit: 100,
       truncated: false,
     },
+    unresolvedDeviceOperations: {
+      items: [],
+      limit: 100,
+      truncated: false,
+    },
     overrides: [
       {
         id: "override-light",

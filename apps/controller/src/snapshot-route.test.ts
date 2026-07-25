@@ -25,6 +25,11 @@ const EMPTY_SNAPSHOT: ControllerSnapshot = {
   mappingProfiles: [],
   devices: [],
   operations: { items: [], limit: 100, truncated: false },
+  unresolvedDeviceOperations: {
+    items: [],
+    limit: 100,
+    truncated: false,
+  },
   importRuns: [],
   overrides: [],
   alertRules: [],
