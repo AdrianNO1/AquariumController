@@ -520,6 +520,7 @@ jobs:
               docker rm --force "${resource_prefix}-${suffix}" >/dev/null 2>&1 || true
               docker volume rm --force "${resource_prefix}-${suffix}-data" >/dev/null 2>&1 || true
             done
+            docker image rm --force "${image_reference}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
           cleanup
@@ -575,6 +576,7 @@ jobs:
               --events-db /var/lib/aquarium/events/events.db
             docker rm "${container_name}" >/dev/null
             docker volume rm "${volume_name}" >/dev/null
+            docker image rm --force "${image_reference}" >/dev/null
           }
 
           smoke_platform linux/amd64 amd64
