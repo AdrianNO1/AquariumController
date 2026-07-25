@@ -4,10 +4,10 @@ Updated: 2026-07-25
 
 Purpose: execution record and handoff plan. R0-R14 implementation and local
 validation are complete. Current evidence includes real-Mosquitto 5/5, three
-consecutive Playwright runs at 18/18 with zero retries, clean Linux Docker
-verification at 95 files/618 unit tests and 81 files/557 critical tests, and a
-healthy integrity-clean ARM64 image. Hosted CI, release publication, production
-migration, ESP32 flashing, and Pi validation remain external.
+retry-free Playwright runs at 18/18, 97 files/638 unit tests, 82 files/571
+critical tests, two protected six-job hosted runs, and a published
+integrity-clean amd64/ARM64 image. Production migration, ESP32 flashing, and Pi
+validation remain external.
 
 This document records the completed repository execution plan and hands off the
 remaining external release work. It is deliberately more prescriptive than
@@ -29,19 +29,16 @@ Repository work is complete only when the only remaining actions are:
    `revoked`, and keep secret scanning and push protection enabled.
 2. Flash and identify firmware 4.0.0 on every production ESP32, then complete a
    controlled hardware/failover soak.
-3. Configure GitHub repository settings and the explicit GHCR image variable,
-   then observe the first CI and immutable-image publication runs and record the
-   published `sha256` digest.
-4. Configure the Pi's production MQTT/database/archive/backup paths and
+3. Configure the Pi's production MQTT/database/archive/backup paths and
    credentials outside the repository.
-5. Preserve the legacy installation and an immutable JSON snapshot, repeat the
+4. Preserve the legacy installation and an immutable JSON snapshot, repeat the
    importer dry-run on the Pi, record the newly calculated fingerprint, review
    the complete report, and commit only that exact snapshot into new storage
    after operator approval. Then create the candidate schema-v2 backup.
-6. Set the separately required production Compose image-repository and
-   `sha256`-digest inputs, deploy the locally verified image by that digest, run
-   health/integrity/rollback checks, and perform the controlled cutover.
-7. Configure and prove the selected real alert destination.
+5. Set the separately required production Compose image-repository and
+   `sha256`-digest inputs, deploy the selected verified image by that digest,
+   run health/integrity/rollback checks, and perform the controlled cutover.
+6. Configure and prove the selected real alert destination.
 
 The following stay explicitly deferred:
 
@@ -50,7 +47,7 @@ The following stay explicitly deferred:
 - Direct Pi sensors, USB Arduino support, remote access, Tailscale, and public
   HTTPS.
 - Actual production-data migration, Pi configuration, flashing devices, and
-  GitHub configuration.
+  hardware validation.
 - Kill, shutdown, reboot, git-pull, and self-update HTTP endpoints.
 
 ## 2. Non-negotiable safety rules
@@ -245,11 +242,16 @@ documentation. Public visibility is not a credential-remediation mechanism.
 - The exact backup-artifact verifier passed its focused 2026-07-19 selection:
   four files and 21/21 tests.
 
-### Remaining external release evidence
+### Recorded hosted release evidence
 
-- Obtain the first trusted hosted run of all six CI validation jobs.
-- Configure the intended GHCR repository and capture a published immutable
-  multi-platform digest.
+- Selected source:
+  `886ed05be89a1abed8e076d91ce2802f5d5668dd`.
+- All six checks passed in protected
+  [PR run 30158546118](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
+  and protected
+  [`master` run 30158994132](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132).
+- Selected public multi-platform image:
+  `ghcr.io/adrianno1/aquarium-controller@sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
 - Keep future repository changes inside the same verification boundaries; do
   not broaden durable logging to every debug event, healthy read, or five-second
   healthy tick.
@@ -334,8 +336,8 @@ Safe final-audit parallel lanes:
   Docker-dependent lanes, with one owner for any shared composition fix.
 - Documentation/readiness audit can proceed without Docker but may not invent
   integration, browser, or container results.
-- R8, R12, and R13 are complete. Three consecutive no-retry R12 browser runs
-  passed locally; hosted CI and real production hardware remain separate
+- R8, R12, and R13 are complete. Local, protected PR, and protected `master`
+  no-retry R12 browser runs passed; real production hardware remains separate
   external evidence.
 
 ## 7. Standard task protocol
@@ -953,14 +955,14 @@ Acceptance:
 
 ### R13 — Docker, Compose, local stack, and CI
 
-Current status: **implemented and locally validated**. The multi-stage image,
+Current status: **implemented and hosted-validated**. The multi-stage image,
 production single-origin serving, fail-closed production template,
 amd64/read-only/restart checks, test-topic capture, and emulated ARM64
 migration/HTTP smoke have current local evidence. The ARM64 image reached
 health as UID/GID 1000 and both SQLite databases passed integrity. Executable
 integration, browser, firmware, container, and guarded immutable-publish CI
-lanes exist; their first hosted GitHub runs and repository settings remain
-external.
+lanes passed on the protected PR and `master`; the selected digest was
+published and smoke-tested on both platforms.
 
 Effort: medium/large. Dependencies: D1 and R8/R12. Suggested mode: ordinary
 with careful operations review.
@@ -1017,10 +1019,11 @@ Acceptance:
 
 ### R14 — Migration/operations documentation and final readiness audit
 
-Current status: **local work complete; external handoff open**. Clean-source
+Current status: **repository work complete; external handoff open**. Clean-source
 verification, repeat stability, Compose/preflight checks, ARM64 smoke, and
-evidence consolidation are complete. Hosted CI/GHCR, production migration,
-firmware flashing, and Pi validation remain operator actions.
+evidence consolidation are complete. Hosted CI/GHCR publication is recorded;
+production migration, firmware flashing, and Pi validation remain operator
+actions.
 
 Effort: medium. Dependencies: every previous package and D2 resolution.
 Suggested mode: higher reasoning review.
@@ -1098,10 +1101,11 @@ Execution status from the current working tree:
    preflight syntax are green; the ARM64 image reaches health as UID/GID 1000
    and passes both SQLite integrity checks.
 4. D2 is resolved by firmware 4.0.0 and exact-version exclusion.
-5. R14 clean Linux Docker verification passes 95 files/618 unit tests and 81
-   files/557 critical tests. Documentation consolidation is complete.
-6. Hosted CI/GHCR, operator verification of sanitized history, production data,
-   fleet flashing, and Pi work remain external.
+5. R14 selected-source verification passes 97 files/638 unit tests and 82
+   files/571 critical tests. Documentation consolidation is complete.
+6. Protected PR and `master` validation plus exact-digest GHCR publication are
+   green. Credential/support cleanup, production data, fleet flashing, and Pi
+   work remain external.
 
 To minimize wasted turns:
 

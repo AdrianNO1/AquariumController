@@ -10,21 +10,31 @@ this checklist does not replace it.
 
 ## Current handoff state
 
-Local release-candidate evidence is green:
+Repository release-candidate evidence is green:
 
 - real Mosquitto integration: 5/5;
-- production Playwright: three consecutive 18/18 runs, zero retries;
-- clean Linux Docker verification: 95 files/618 unit tests and 81 files/557
+- production Playwright: local, protected PR, and protected `master` runs at
+  18/18 with zero retries;
+- selected-source host verification: 97 files/638 unit tests and 82 files/571
   critical tests;
 - firmware 4.0.0 compile: 1,036,431 bytes program, 63,180 bytes global RAM,
   264,500 bytes local-variable capacity remaining;
 - production Compose render and Pi-preflight Bash syntax: green; and
-- emulated ARM64 image: built, healthy as UID/GID 1000, and both SQLite
-  integrity checks green.
+- protected PR and `master` runs: all six required validation jobs green; and
+- selected amd64/ARM64 image: published, publicly pullable, healthy as UID/GID
+  1000, and both SQLite integrity checks green.
 
-These are local results. Hosted CI, GHCR publication, Pi health, production
-storage, broker access, legacy-data validity, and physical actuators are not
-claimed verified.
+Selected release inputs:
+
+- source: `886ed05be89a1abed8e076d91ce2802f5d5668dd`;
+- validation/publication:
+  [GitHub Actions run 30158994132](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132);
+- repository: `ghcr.io/adrianno1/aquarium-controller`; and
+- digest:
+  `sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
+
+Pi health, production storage, broker access, legacy-data validity, and physical
+actuators are not claimed verified.
 
 ## 1. Release-source and GitHub gates
 
@@ -33,14 +43,14 @@ claimed verified.
       historical object and cached view.
 - [ ] Resolve its open secret-scanning alert as `revoked`; keep secret scanning
       and push protection enabled.
-- [ ] Run all six hosted validation jobs successfully.
-- [ ] Protect `master` using the actual hosted check names; block deletion and
+- [x] Run all six hosted validation jobs successfully.
+- [x] Protect `master` using the actual hosted check names; require pull
+      requests/current branches/admin enforcement and block deletion and
       ordinary force-pushes.
-- [ ] Set `AQUARIUM_GHCR_IMAGE` to the reviewed lowercase GHCR repository.
-- [ ] Decide whether the GHCR package is public or private. For private access,
-      prepare a least-privilege `read:packages` credential for the unprivileged
-      Pi operator account.
-- [ ] Run the gated image publisher and record the returned multi-platform
+- [x] Set `AQUARIUM_GHCR_IMAGE` to the reviewed lowercase GHCR repository.
+- [x] Publish the package publicly and verify the selected exact digest is
+      anonymously pullable.
+- [x] Run the gated image publisher and record the returned multi-platform
       `sha256` manifest digest. Do not deploy a mutable tag.
 
 There is deliberately no CI job that deploys to the Pi.
@@ -57,7 +67,8 @@ There is deliberately no CI job that deploys to the Pi.
       databases, backups, archives, and rollback copies.
 - [ ] Decide the explicit Pi LAN bind address and controller port. Do not expose
       the plain-HTTP UI beyond the trusted LAN.
-- [ ] Confirm the Pi can pull the exact GHCR digest using the intended account.
+- [ ] Confirm the Pi deployment account can pull the exact GHCR digest
+      anonymously while the package remains public.
 - [ ] Record the previously running service/supervisor and its reviewed
       stop/start/prove-state commands.
 

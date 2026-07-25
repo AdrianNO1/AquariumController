@@ -1,11 +1,11 @@
 # Target architecture
 
-Status: implemented architecture, updated 2026-07-19. Historical local evidence
-is identified below; final settled-tree validation after the latest firmware,
-API, alert/SSE, archive, and backup-artifact hardening is pending. This document
-does not claim that the local stack is currently running. Physical ESP flashing,
-Raspberry Pi deployment, and production configuration remain operator-run
-release steps.
+Status: implemented architecture, updated 2026-07-25. Selected source
+`886ed05be89a1abed8e076d91ce2802f5d5668dd` passed complete local, protected PR,
+and protected `master` validation. Its selected multi-platform digest is
+recorded in the [readiness report](readiness-report.md). Physical ESP flashing,
+Raspberry Pi deployment, production-data migration, and production
+configuration remain operator-run release steps.
 
 ## Decision
 
@@ -560,16 +560,19 @@ literal-loopback broker guard; captured traffic remains under
 `test/aquarium/*`.
 
 Pull-request code never runs on a Pi. No deploy workflow exists. The hosted
-repository is currently public and is not a trusted release source until the
-historical Dropbox token is revoked, the aquarium Wi-Fi password is rotated,
-and Git history is sanitized. Secret scanning and push protection are enabled,
-but they do not revoke already exposed credentials. Enabling GHCR publishing and
-any future protected deployment still requires sanitized history plus external
-GitHub repository/environment configuration. GitHub Free does not charge
-standard hosted Actions minutes for public repositories; private repositories
-use an included quota. Free-plan protected branches apply to public repositories,
-while private-repository branch protection requires an eligible paid plan. See
-GitHub's official [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+repository is public, reachable branch history contains only redacted
+sentinels, and `master` is protected by all six exact validation contexts.
+GHCR publication is configured and the selected image passed exact-digest smoke
+on both platforms. One unreachable historical object remains directly
+addressable and its secret-scanning alert remains open; independently confirm
+revocation, request GitHub Support cleanup, and resolve the alert only as
+`revoked`. Secret scanning and push protection remain enabled, but they do not
+revoke exposed credentials. GitHub Free does not charge standard hosted Actions
+minutes for public repositories; private repositories use an included quota.
+Free-plan protected branches apply to public repositories, while
+private-repository branch protection requires an eligible paid plan. See
+GitHub's official
+[Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 and [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
 documentation.
 
@@ -614,8 +617,8 @@ The local stack command is `npm run stack:test:up`, with UI/API on
 `http://127.0.0.1:3001` and Mosquitto on loopback port 18883. The Docker `local`
 log driver caps each service at five compressed 10 MiB files. CPU, memory, PID,
 restart, and graceful-stop policies are explicit and the controller is never
-horizontally scaled. Settled-tree local evidence includes a healthy amd64 stack,
-persistence across controller/fake recreation, non-root/read-only checks, a
-bounded test-topic capture, and a successful emulated ARM64 database migration,
-HTTP startup, and integrity check. Hosted CI, Pi validation, and production
-deployment are separate external gates.
+horizontally scaled. Settled-tree and hosted evidence includes a healthy amd64
+stack, persistence across controller/fake recreation, non-root/read-only checks,
+a bounded test-topic capture, and successful emulated ARM64 database migration,
+HTTP startup, and integrity checks. Pi validation and production deployment
+remain separate external gates.

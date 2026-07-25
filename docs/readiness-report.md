@@ -2,20 +2,19 @@
 
 Assessment date: 2026-07-25
 
-Basis: the locally settled rewrite tree and the exact evidence recorded below.
-The hosted GitHub workflow and the aquarium Raspberry Pi were not used for this
-assessment.
+Basis: the selected release source
+`886ed05be89a1abed8e076d91ce2802f5d5668dd`, its local verification, and the
+exact hosted evidence recorded below. The aquarium Raspberry Pi was not
+contacted or used for this assessment.
 
 ## Verdict
 
-The repository is a **locally validated release candidate**. The current tree
-has passed real-broker integration, three consecutive retry-free
-production-browser runs, host verification, clean Linux Docker verification,
-firmware compilation, production-Compose rendering, preflight syntax, and an
-emulated ARM64 image smoke.
+The repository is a **repository-validated release candidate ready for Pi
+handoff**. The selected source passed all six protected validation jobs in both
+its pull-request and `master` runs. Its immutable multi-architecture image was
+published and then smoke-tested by exact digest on amd64 and ARM64.
 
-This is not production approval. Hosted CI has not yet produced trusted green
-checks or a release manifest digest, no production input has been imported, no
+This is not production approval. No production input has been imported, no
 ESP32 has been flashed as part of this work, and the Pi has not been contacted
 or validated. Follow the
 [Pi production handoff](pi-production-handoff.md) and the full
@@ -29,21 +28,40 @@ independently revoked, ask GitHub Support to purge the orphaned object/cached
 view, then resolve the alert as revoked. Keep secret scanning and push
 protection enabled.
 
+## Selected release evidence
+
+- Source commit:
+  `886ed05be89a1abed8e076d91ce2802f5d5668dd`.
+- Protected pull-request validation:
+  [run 30158546118](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118),
+  six of six required jobs green.
+- Protected `master` validation and publication:
+  [run 30158994132](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132),
+  six of six required jobs green plus the publication job.
+- Selected image:
+  `ghcr.io/adrianno1/aquarium-controller@sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
+- Package access at evidence time: publicly pullable without a registry
+  credential.
+
+The selected source and digest remain the deployment identity even if a later
+documentation-only merge creates another CI image. Do not substitute a newer
+tag or digest without selecting and recording a new release.
+
 ## Current evidence
 
-| Boundary                                               | 2026-07-25 result                                                               | Remaining boundary                                              |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Host verification before hermetic fixture refactor     | Unit 95 files/619 tests; critical 81 files/558 tests                            | Superseded by the clean Docker run for reproducibility          |
-| Settled-tree host verification                         | Unit 95 files/618 tests; critical 81 files/557 tests                            | Hosted CI still must run                                        |
-| Clean Linux Docker verification after fixture refactor | Unit 95 files/618 tests; critical 81 files/557 tests                            | Hosted CI still must run                                        |
-| Real Mosquitto                                         | 5/5                                                                             | Production broker and LAN not contacted                         |
-| Production Chromium                                    | Three consecutive 18/18 runs, zero retries                                      | Real Pi/browser clients not tested                              |
-| ESP32 firmware 4.0.0                                   | Warning-free pinned compile                                                     | Fleet flash and physical soak                                   |
-| Production Compose                                     | Rendered successfully with fail-closed inputs                                   | Pi values and exact release digest                              |
-| Pi preflight                                           | Bash syntax passed                                                              | Must run for real on the intended Pi                            |
-| ARM64 container                                        | Built, became healthy, ran as UID/GID 1000, both SQLite integrity checks passed | Emulation is not real Pi validation                             |
-| Hosted GitHub CI/GHCR                                  | Workflow implemented                                                            | No hosted-green or published-digest claim                       |
-| Production migration                                   | Importer and synthetic fixtures implemented                                     | Actual stopped production snapshot must be dry-run and reviewed |
+| Boundary                                           | 2026-07-25 result                                                         | Remaining boundary                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Host verification before hermetic fixture refactor | Unit 95 files/619 tests; critical 81 files/558 tests                      | Superseded by the clean Docker run for reproducibility          |
+| Selected-source host verification                  | Unit 97 files/638 tests; critical 82 files/571 tests                      | Production hardware is outside this boundary                    |
+| Historical clean Linux Docker verification         | Unit 95 files/618 tests; critical 81 files/557 tests                      | Superseded by selected-source local and hosted runs             |
+| Real Mosquitto                                     | 5/5                                                                       | Production broker and LAN not contacted                         |
+| Production Chromium                                | Local, PR, and `master` runs each 18/18 with zero retries                 | Real Pi/browser clients not tested                              |
+| ESP32 firmware 4.0.0                               | Warning-free pinned compile                                               | Fleet flash and physical soak                                   |
+| Production Compose                                 | Rendered successfully with fail-closed inputs                             | Pi values and storage paths                                     |
+| Pi preflight                                       | Bash syntax passed                                                        | Must run for real on the intended Pi                            |
+| ARM64 container                                    | Selected digest became healthy as UID/GID 1000; both SQLite checks passed | Emulation is not real Pi validation                             |
+| Hosted GitHub CI/GHCR                              | PR and `master` six-job runs green; exact multi-platform digest published | Pi pull and production start                                    |
+| Production migration                               | Importer and synthetic fixtures implemented                               | Actual stopped production snapshot must be dry-run and reviewed |
 
 The one-test difference between the pre-refactor host verification and the clean
 Docker verification is intentional. `.old/data` is operator-local production
@@ -70,12 +88,12 @@ installed from the lockfile and completed with:
 - critical: 81 files, 557 tests; and
 - formatting, lint, workspace typechecks, and production builds green.
 
-The clean Docker result is the current reproducibility evidence. It does not
-substitute for the first hosted Actions run.
+That clean Docker result established the hermetic baseline before the final
+unknown-outcome reconciliation work.
 
-The same settled tree also passed the complete host verification after the
-Fastify/static and React Router security upgrades: 95 files/618 unit tests, 81
-files/557 critical tests, and every static/build gate.
+The selected release source then passed the complete host verification after
+the reconciliation work: 97 files/638 unit tests, 82 files/571 critical tests,
+and every static/build gate. The same source passed both protected hosted runs.
 
 ### Real broker integration
 
@@ -88,15 +106,17 @@ no-actuator-retry rule. Test traffic is restricted to `test/aquarium/*`.
 
 ### Production-browser stability
 
-Three consecutive Playwright Chromium runs passed 18/18 with retries disabled.
-They used production-built assets, fresh SQLite databases, real Mosquitto, and
-two independent fake ESPs. Coverage includes:
+The local, protected pull-request, and protected `master` Playwright Chromium
+runs each passed 18/18 with retries disabled. They used production-built assets,
+fresh SQLite databases, real Mosquitto, and two independent fake ESPs. Coverage
+includes:
 
 - every retained route, direct reload, useful 404 recovery, responsive layouts,
   keyboard access, and automated accessibility checks;
 - channel, schedule, throttle, mapping, device, and override workflows;
 - revision conflicts, persistence, logs, exports, alerts, and invalid filters;
-- SSE recovery, offline/reconnect and unknown outcomes; and
+- SSE recovery, offline/reconnect, global unknown-outcome discovery, explicit
+  physical-state reconciliation, and no command resend; and
 - controller, broker, and fake-ESP restart behavior.
 
 The harness rejects unexpected external requests and browser console errors.
@@ -215,21 +235,19 @@ multi-platform manifest digest, and smoke-tests that exact digest. There is no
 Pi deployment job. The static lane also fails on high or critical production
 dependency advisories.
 
-Local workflow-equivalent evidence is green, but **hosted CI is not claimed
-green**. The first trusted run must complete before branch-protection check
-names and a deployment digest are selected.
+The protected pull-request and `master` runs are green for all six jobs.
+`master` requires those exact current checks, pull requests, a current branch,
+and administrator enforcement; force-pushes and deletion are blocked. The
+`master` publisher returned the selected digest above and smoke-tested it on
+both platforms.
 
 ## Remaining release gates
 
-### GitHub and release image
+### GitHub security
 
 - Confirm the affected credential was revoked independently of history
   rewriting, request GitHub Support cleanup of the directly addressable
   unreachable object, and close the remaining alert only as `revoked`.
-- Run all six hosted validation jobs and require their actual check names on
-  `master`.
-- Configure the intended lowercase `AQUARIUM_GHCR_IMAGE`, review package
-  visibility, run the gated publisher, and record its immutable manifest digest.
 
 ### ESP32 fleet
 
@@ -251,5 +269,6 @@ names and a deployment digest are selected.
 - Perform a supervised soak covering real wiring, broker, Wi-Fi, disk/load,
   restart, and sudden power loss.
 
-Until those external steps succeed, the correct claim is **locally validated
-release candidate**, not deployed production controller.
+Until those external steps succeed, the correct claim is
+**repository-validated release candidate ready for Pi handoff**, not deployed
+production controller.
