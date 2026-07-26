@@ -217,15 +217,27 @@ export class ControlOperationRepository {
         }
         if (
           expectedRevision !== null &&
-          parsed.request.kind === "edit_configuration" &&
-          existingDevice.name === parsed.request.name &&
-          existingDevice.desired_pwm_frequency_hz ===
-            parsed.request.pwmFrequencyHz &&
-          existingDevice.desired_pwm_resolution_bits ===
-            parsed.request.pwmResolutionBits &&
-          existingDevice.last_error_code !== "configuration_mismatch"
+          parsed.request.kind === "edit_configuration"
         ) {
-          return { changed: false, result: null };
+          const desiredConfigurationMatches =
+            existingDevice.name === parsed.request.name &&
+            existingDevice.desired_pwm_frequency_hz ===
+              parsed.request.pwmFrequencyHz &&
+            existingDevice.desired_pwm_resolution_bits ===
+              parsed.request.pwmResolutionBits;
+          const reportedConfigurationMatches =
+            existingDevice.reported_name === parsed.request.name &&
+            existingDevice.reported_pwm_frequency_hz ===
+              parsed.request.pwmFrequencyHz &&
+            existingDevice.reported_pwm_resolution_bits ===
+              parsed.request.pwmResolutionBits;
+          if (
+            desiredConfigurationMatches &&
+            reportedConfigurationMatches &&
+            existingDevice.last_error_code !== "configuration_mismatch"
+          ) {
+            return { changed: false, result: null };
+          }
         }
         await transaction
           .insertInto("control_operations")

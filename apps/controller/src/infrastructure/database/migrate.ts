@@ -6,6 +6,7 @@ import {
   type MigrationResult,
 } from "kysely/migration";
 
+import { channelColorMigration } from "./channel-color-migration.js";
 import { eventsQueryMigration } from "./events-query-migration.js";
 import { eventsRetentionMigration } from "./events-retention-migration.js";
 import { eventsNotificationOutcomeMigration } from "./events-notification-outcome-migration.js";
@@ -22,6 +23,7 @@ export const STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME =
   "003_notification_outcome_audit";
 export const STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME =
   "004_operator_concurrency";
+export const STATE_CHANNEL_COLOR_MIGRATION_NAME = "005_channel_color";
 export const EVENTS_INITIAL_MIGRATION_NAME = "001_initial_events";
 export const EVENTS_QUERY_MIGRATION_NAME = "002_log_query_indexes";
 export const EVENTS_RETENTION_MIGRATION_NAME =
@@ -33,7 +35,8 @@ export type StateMigrationTarget =
   | typeof STATE_INITIAL_MIGRATION_NAME
   | typeof STATE_RUNTIME_MIGRATION_NAME
   | typeof STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME
-  | typeof STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME;
+  | typeof STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME
+  | typeof STATE_CHANNEL_COLOR_MIGRATION_NAME;
 export type EventsMigrationTarget =
   | typeof EVENTS_INITIAL_MIGRATION_NAME
   | typeof EVENTS_QUERY_MIGRATION_NAME
@@ -58,6 +61,7 @@ const stateMigrationProvider = new EmbeddedMigrationProvider({
   [STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME]:
     notificationOutcomeAuditMigration,
   [STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME]: operatorConcurrencyMigration,
+  [STATE_CHANNEL_COLOR_MIGRATION_NAME]: channelColorMigration,
 });
 
 const eventsMigrationProvider = new EmbeddedMigrationProvider({

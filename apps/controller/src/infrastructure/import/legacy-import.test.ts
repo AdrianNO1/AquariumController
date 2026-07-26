@@ -241,12 +241,22 @@ describe("legacy JSON import", () => {
       expect(
         await database
           .selectFrom("channels")
-          .select(["name", "kind", "display_order"])
+          .select(["name", "color", "kind", "display_order"])
           .orderBy("display_order")
           .execute(),
       ).toEqual([
-        { name: "bad Blue", kind: "bad", display_order: 0 },
-        { name: "Bad Blue", kind: "bad", display_order: 1 },
+        {
+          name: "bad Blue",
+          color: "#6f5bd5",
+          kind: "bad",
+          display_order: 0,
+        },
+        {
+          name: "Bad Blue",
+          color: "#a747a9",
+          kind: "bad",
+          display_order: 1,
+        },
       ]);
       expect(
         await database

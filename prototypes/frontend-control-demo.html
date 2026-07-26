@@ -97,6 +97,32 @@
         backdrop-filter: blur(18px);
       }
 
+      .brand-home {
+        color: var(--text);
+        text-decoration: none;
+      }
+
+      .primary-nav {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .primary-nav a {
+        padding: 7px 10px;
+        border-radius: 6px;
+        color: var(--muted);
+        font-size: 0.78rem;
+        font-weight: 680;
+        text-decoration: none;
+      }
+
+      .primary-nav a:hover,
+      .primary-nav a.active {
+        color: #effffc;
+        background: var(--surface-hover);
+      }
+
       .brand-line,
       .topbar-actions,
       .page-heading,
@@ -151,6 +177,155 @@
         width: min(1580px, calc(100vw - 32px));
         margin: 0 auto;
         padding: 18px 0 42px;
+      }
+
+      .overview-heading {
+        display: flex;
+        min-height: 44px;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 12px;
+      }
+
+      .overview-heading h1 {
+        margin-bottom: 2px;
+      }
+
+      .overview-heading p:last-child {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .overview-stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .overview-stat {
+        min-width: 0;
+        padding: 13px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .overview-stat span,
+      .overview-stat strong,
+      .overview-stat small {
+        display: block;
+      }
+
+      .overview-stat span {
+        margin-bottom: 7px;
+        color: var(--subtle);
+        font-size: 0.65rem;
+        font-weight: 760;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .overview-stat strong {
+        margin-bottom: 4px;
+        font-size: 1.08rem;
+      }
+
+      .overview-stat small {
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 0.72rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .overview-section-heading {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 16px;
+        margin: 0 2px 8px;
+      }
+
+      .overview-section-heading h2 {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .overview-section-heading span {
+        color: var(--subtle);
+        font-size: 0.72rem;
+      }
+
+      .area-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .area-card {
+        display: grid;
+        min-height: 112px;
+        align-content: space-between;
+        gap: 18px;
+        padding: 13px 14px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        background: rgba(5, 25, 30, 0.72);
+        text-align: left;
+      }
+
+      .area-card:hover {
+        border-color: var(--border-strong);
+        background: rgba(13, 46, 53, 0.72);
+      }
+
+      .area-card-heading,
+      .area-card-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .area-card-heading strong {
+        overflow: hidden;
+        font-size: 0.92rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .area-card-state {
+        width: 8px;
+        height: 8px;
+        flex: 0 0 auto;
+        border-radius: 50%;
+        background: #4bc093;
+      }
+
+      .area-card.attention .area-card-state {
+        background: #e7bd67;
+      }
+
+      .area-card.offline .area-card-state {
+        background: #ed7f78;
+      }
+
+      .area-card.idle .area-card-state {
+        background: #839f9d;
+      }
+
+      .area-card-meta {
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+
+      .area-card-open {
+        color: var(--accent);
+        font-weight: 720;
       }
 
       .page-heading {
@@ -1041,6 +1216,11 @@
       }
 
       @media (max-width: 1050px) {
+        .overview-stats,
+        .area-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
         .schedule-layout {
           grid-template-columns: minmax(0, 1fr) 210px;
         }
@@ -1070,6 +1250,15 @@
           justify-content: space-between;
         }
 
+        .primary-nav {
+          width: 100%;
+          overflow-x: auto;
+        }
+
+        .primary-nav a {
+          flex: 0 0 auto;
+        }
+
         .topbar-actions {
           justify-content: space-between;
         }
@@ -1081,6 +1270,11 @@
 
         .page-heading {
           align-items: stretch;
+          flex-direction: column;
+        }
+
+        .overview-heading {
+          align-items: flex-start;
           flex-direction: column;
         }
 
@@ -1130,29 +1324,26 @@
           flex-direction: column;
         }
       }
+
+      @media (max-width: 500px) {
+        .overview-stats,
+        .area-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
     </style>
   </head>
   <body>
     <header class="topbar">
       <div class="brand-line">
-        <span class="brand">Aquarium</span>
-        <label>
-          <span class="visually-hidden">Control area</span>
-          <select class="area-select" id="areaSelect">
-            <option selected>Lights</option>
-            <option>Pumps</option>
-            <option>Test lights</option>
-            <option>Bad</option>
-            <option>Loft</option>
-            <option>Biljard</option>
-            <option>Frag</option>
-            <option>Quarantine 1</option>
-            <option>Quarantine 2</option>
-            <option>Quarantine 3</option>
-            <option>Quarantine 4</option>
-          </select>
-        </label>
+        <a class="brand brand-home" href="#/">Aquarium</a>
       </div>
+      <nav class="primary-nav" aria-label="Primary navigation">
+        <a class="active" data-overview-link href="#/">Overview</a>
+        <a data-retained-page="Operations" href="#/operations">Operations</a>
+        <a data-retained-page="Alerts" href="#/alerts">Alerts</a>
+        <a data-retained-page="Logs" href="#/logs">Logs</a>
+      </nav>
       <div class="topbar-actions">
         <span class="save-state" id="saveState">Demo data · unsaved</span>
         <span class="save-state">
@@ -1164,170 +1355,221 @@
     </header>
 
     <main class="app">
-      <div class="page-heading">
-        <div>
-          <h1 id="pageTitle">Lights</h1>
-        </div>
-        <div class="heading-actions">
-          <button class="button" id="manageMappingsButton" type="button">
-            Pin mappings
-          </button>
-          <button class="button" id="manageChannelsButton" type="button">
-            Manage channels
-          </button>
-          <button
-            class="button primary"
-            id="saveConfigurationButton"
-            type="button"
-          >
-            Save configuration
-          </button>
-        </div>
-      </div>
-
-      <section class="control-surface" aria-label="Schedule editor">
-        <div class="schedule-layout">
-          <div class="chart-region">
-            <div class="chart-toolbar">
-              <h2 class="chart-title">
-                Daily schedule · <span id="selectedChannelTitle">UV</span>
-              </h2>
-            </div>
-            <svg
-              id="scheduleChart"
-              viewBox="0 0 1000 360"
-              role="img"
-              aria-label="Combined daily channel schedule"
-            ></svg>
+      <section id="overviewView">
+        <div class="overview-heading">
+          <div>
+            <p class="section-kicker">System</p>
+            <h1>Overview</h1>
+            <p>Current controller state and aquarium areas.</p>
           </div>
-          <aside class="channel-panel" aria-label="Channel selector">
-            <div class="channel-panel-header">
-              <span>Channels</span>
-              <span>Now</span>
-            </div>
-            <div class="channel-list" id="channelList"></div>
-          </aside>
-        </div>
-
-        <div class="point-editor">
-          <div class="point-actions">
-            <button class="button small" id="newPointButton" type="button">
-              New point
-            </button>
-            <button
-              class="button danger small"
-              id="deletePointButton"
-              type="button"
-            >
-              Delete
-            </button>
-          </div>
-          <div class="inline-fields">
-            <label class="field compact">
-              <span>Time</span>
-              <input id="pointTimeInput" type="time" step="60" />
-            </label>
-            <label class="field compact">
-              <span>Output</span>
-              <input
-                id="pointValueInput"
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-              />
-            </label>
-            <button class="button small" id="applyPointButton" type="button">
-              Apply
-            </button>
-          </div>
-          <div
-            class="point-list"
-            id="pointList"
-            aria-label="Schedule points"
-          ></div>
-          <span class="editor-message" id="editorMessage"></span>
-        </div>
-      </section>
-
-      <section
-        class="test-controls"
-        aria-label="Schedule multiplier and manual overrides"
-      >
-        <div class="throttle-panel">
-          <p class="section-kicker">Area control</p>
-          <h2 class="compact-heading">Schedule multiplier</h2>
-          <div class="throttle-value">
-            <output id="throttleOutput">100%</output>
-            <span>all light channels</span>
-          </div>
-          <label>
-            <span class="visually-hidden">Lights schedule multiplier</span>
-            <input
-              class="throttle-range"
-              id="throttleInput"
-              type="range"
-              min="0"
-              max="100"
-              value="100"
-            />
-          </label>
-          <p class="dialog-note">
-            Multiplies scheduled output without changing any graph points.
-          </p>
-        </div>
-
-        <div class="override-panel">
-          <div class="override-heading">
-            <div>
-              <p class="section-kicker">Live testing</p>
-              <h2>Temporary overrides</h2>
-            </div>
-            <div class="override-heading-meta">
-              <span>Duration</span>
-              <select class="duration-select" id="overrideDuration">
-                <option value="60">1 minute</option>
-                <option value="120" selected>2 minutes</option>
-                <option value="300">5 minutes</option>
-                <option value="600">10 minutes</option>
-              </select>
-            </div>
-          </div>
-          <div class="override-bank" id="overrideBank"></div>
-          <div class="override-actions">
-            <button
-              class="button small"
-              id="releaseOverridesButton"
-              type="button"
-            >
-              Release all
-            </button>
-            <button
-              class="button primary small"
-              id="applyOverridesButton"
-              type="button"
-            >
-              Apply test levels
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section class="devices-section" aria-labelledby="devicesHeading">
-        <div class="devices-heading">
-          <h2 id="devicesHeading">ESP32 devices</h2>
-          <button class="button small" id="refreshDevicesButton" type="button">
+          <button class="button small" id="refreshOverviewButton" type="button">
             Refresh
           </button>
         </div>
-        <div class="device-grid" id="deviceList"></div>
+
+        <section class="overview-stats" aria-label="Controller status">
+          <article class="overview-stat">
+            <span>Controller</span>
+            <strong>Connected</strong>
+            <small>Snapshot revision 142</small>
+          </article>
+          <article class="overview-stat">
+            <span>ESP32 devices</span>
+            <strong id="overviewOnlineDevices">6 online</strong>
+            <small id="overviewRegisteredDevices">9 registered</small>
+          </article>
+          <article class="overview-stat">
+            <span>Needs attention</span>
+            <strong id="overviewAttentionDevices">3 devices</strong>
+            <small id="overviewAttentionSummary">1 stale · 2 offline</small>
+          </article>
+          <article class="overview-stat">
+            <span>Manual overrides</span>
+            <strong>0 active</strong>
+            <small>All outputs following schedules</small>
+          </article>
+        </section>
+
+        <div class="overview-section-heading">
+          <h2>Areas</h2>
+          <span>Select an area to manage it</span>
+        </div>
+        <div class="area-grid" id="areaGrid"></div>
+      </section>
+
+      <section id="controlView" hidden>
+        <div class="page-heading">
+          <div>
+            <p class="section-kicker">Control area</p>
+            <h1 id="pageTitle">Lights</h1>
+          </div>
+          <div class="heading-actions">
+            <button class="button" id="manageMappingsButton" type="button">
+              Pin mappings
+            </button>
+            <button class="button" id="manageChannelsButton" type="button">
+              Manage channels
+            </button>
+            <button
+              class="button primary"
+              id="saveConfigurationButton"
+              type="button"
+            >
+              Save configuration
+            </button>
+          </div>
+        </div>
+
+        <section class="control-surface" aria-label="Schedule editor">
+          <div class="schedule-layout">
+            <div class="chart-region">
+              <div class="chart-toolbar">
+                <h2 class="chart-title">
+                  Daily schedule · <span id="selectedChannelTitle">UV</span>
+                </h2>
+              </div>
+              <svg
+                id="scheduleChart"
+                viewBox="0 0 1000 360"
+                role="img"
+                aria-label="Combined daily channel schedule"
+              ></svg>
+            </div>
+            <aside class="channel-panel" aria-label="Channel selector">
+              <div class="channel-panel-header">
+                <span>Channels</span>
+                <span>Now</span>
+              </div>
+              <div class="channel-list" id="channelList"></div>
+            </aside>
+          </div>
+
+          <div class="point-editor">
+            <div class="point-actions">
+              <button class="button small" id="newPointButton" type="button">
+                New point
+              </button>
+              <button
+                class="button danger small"
+                id="deletePointButton"
+                type="button"
+              >
+                Delete
+              </button>
+            </div>
+            <div class="inline-fields">
+              <label class="field compact">
+                <span>Time</span>
+                <input id="pointTimeInput" type="time" step="60" />
+              </label>
+              <label class="field compact">
+                <span>Output</span>
+                <input
+                  id="pointValueInput"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                />
+              </label>
+              <button class="button small" id="applyPointButton" type="button">
+                Apply
+              </button>
+            </div>
+            <div
+              class="point-list"
+              id="pointList"
+              aria-label="Schedule points"
+            ></div>
+            <span class="editor-message" id="editorMessage"></span>
+          </div>
+        </section>
+
+        <section
+          class="test-controls"
+          aria-label="Schedule multiplier and manual overrides"
+        >
+          <div class="throttle-panel">
+            <p class="section-kicker">Area control</p>
+            <h2 class="compact-heading">Schedule multiplier</h2>
+            <div class="throttle-value">
+              <output id="throttleOutput">100%</output>
+              <span id="throttleAreaDescription">all light channels</span>
+            </div>
+            <label>
+              <span class="visually-hidden" id="throttleInputLabel"
+                >Lights schedule multiplier</span
+              >
+              <input
+                class="throttle-range"
+                id="throttleInput"
+                type="range"
+                min="0"
+                max="100"
+                value="100"
+              />
+            </label>
+            <p class="dialog-note">
+              Multiplies scheduled output without changing any graph points.
+            </p>
+          </div>
+
+          <div class="override-panel">
+            <div class="override-heading">
+              <div>
+                <p class="section-kicker">Live testing</p>
+                <h2>Temporary overrides</h2>
+              </div>
+              <div class="override-heading-meta">
+                <span>Duration</span>
+                <select class="duration-select" id="overrideDuration">
+                  <option value="60">1 minute</option>
+                  <option value="120" selected>2 minutes</option>
+                  <option value="300">5 minutes</option>
+                  <option value="600">10 minutes</option>
+                </select>
+              </div>
+            </div>
+            <div class="override-bank" id="overrideBank"></div>
+            <div class="override-actions">
+              <button
+                class="button small"
+                id="releaseOverridesButton"
+                type="button"
+              >
+                Release all
+              </button>
+              <button
+                class="button primary small"
+                id="applyOverridesButton"
+                type="button"
+              >
+                Apply test levels
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="devices-section" aria-labelledby="devicesHeading">
+          <div class="devices-heading">
+            <h2 id="devicesHeading">ESP32 devices</h2>
+            <button
+              class="button small"
+              id="refreshDevicesButton"
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
+          <div class="device-grid" id="deviceList"></div>
+        </section>
       </section>
     </main>
 
     <dialog id="channelDialog">
       <div class="dialog-header">
         <div>
-          <p class="section-kicker">Lights</p>
+          <p class="section-kicker" id="channelDialogAreaLabel">Lights</p>
           <h2>Manage channels</h2>
         </div>
         <button
@@ -1442,6 +1684,13 @@
           <button class="button" id="newMappingProfileButton" type="button">
             New profile
           </button>
+          <button
+            class="button danger"
+            id="deleteMappingProfileButton"
+            type="button"
+          >
+            Delete profile
+          </button>
         </div>
         <div class="mapping-profile-fields">
           <label class="field">
@@ -1498,7 +1747,87 @@
         let addPointHoverMinute = null;
         let editingDeviceId = null;
         let editingMappingProfileId = "profile-lys";
+        let deletingMappingProfileId = null;
         let toastTimer = null;
+        const controlAreas = Object.freeze([
+          {
+            slug: "lights",
+            label: "Lights",
+            channels: 6,
+            devices: 2,
+            status: "online",
+          },
+          {
+            slug: "pumps",
+            label: "Pumps",
+            channels: 2,
+            devices: 2,
+            status: "online",
+          },
+          {
+            slug: "testlights",
+            label: "Test lights",
+            channels: 2,
+            devices: 1,
+            status: "offline",
+          },
+          {
+            slug: "bad",
+            label: "Bad",
+            channels: 1,
+            devices: 1,
+            status: "online",
+          },
+          {
+            slug: "loft",
+            label: "Loft",
+            channels: 1,
+            devices: 1,
+            status: "attention",
+          },
+          {
+            slug: "biljard",
+            label: "Biljard",
+            channels: 4,
+            devices: 0,
+            status: "idle",
+          },
+          {
+            slug: "frag",
+            label: "Frag",
+            channels: 4,
+            devices: 1,
+            status: "offline",
+          },
+          {
+            slug: "qt1",
+            label: "Quarantine 1",
+            channels: 2,
+            devices: 0,
+            status: "idle",
+          },
+          {
+            slug: "qt2",
+            label: "Quarantine 2",
+            channels: 2,
+            devices: 0,
+            status: "idle",
+          },
+          {
+            slug: "qt3",
+            label: "Quarantine 3",
+            channels: 2,
+            devices: 1,
+            status: "online",
+          },
+          {
+            slug: "qt4",
+            label: "Quarantine 4",
+            channels: 0,
+            devices: 0,
+            status: "idle",
+          },
+        ]);
         const deviceHardwareIds = Object.freeze({
           "main-lights": "7C9EBD34",
           qt3: "3CE2E93B",
@@ -1772,8 +2101,21 @@
           mappingList: document.querySelector("#mappingList"),
           saveState: document.querySelector("#saveState"),
           toast: document.querySelector("#toast"),
-          areaSelect: document.querySelector("#areaSelect"),
+          overviewView: document.querySelector("#overviewView"),
+          controlView: document.querySelector("#controlView"),
+          areaGrid: document.querySelector("#areaGrid"),
+          overviewLink: document.querySelector("[data-overview-link]"),
           pageTitle: document.querySelector("#pageTitle"),
+          channelDialogAreaLabel: document.querySelector(
+            "#channelDialogAreaLabel",
+          ),
+          throttleAreaDescription: document.querySelector(
+            "#throttleAreaDescription",
+          ),
+          throttleInputLabel: document.querySelector("#throttleInputLabel"),
+          deleteMappingProfileButton: document.querySelector(
+            "#deleteMappingProfileButton",
+          ),
         };
 
         function point(id, minute, value) {
@@ -1847,6 +2189,95 @@
               (schedulePoint) => schedulePoint.id === state.selectedPointId,
             ) ?? null
           );
+        }
+
+        function renderOverview() {
+          const onlineDevices = state.devices.filter(
+            (device) => device.status === "online",
+          ).length;
+          const staleDevices = state.devices.filter(
+            (device) => device.status === "stale",
+          ).length;
+          const offlineDevices = state.devices.filter(
+            (device) => device.status === "offline",
+          ).length;
+          document.querySelector("#overviewOnlineDevices").textContent =
+            `${onlineDevices} online`;
+          document.querySelector("#overviewRegisteredDevices").textContent =
+            `${state.devices.length} registered`;
+          document.querySelector("#overviewAttentionDevices").textContent =
+            `${staleDevices + offlineDevices} devices`;
+          document.querySelector("#overviewAttentionSummary").textContent =
+            `${staleDevices} stale · ${offlineDevices} offline`;
+
+          elements.areaGrid.replaceChildren();
+          for (const area of controlAreas) {
+            const card = document.createElement("button");
+            card.className = `area-card ${area.status}`;
+            card.type = "button";
+            card.setAttribute("aria-label", `Open ${area.label}`);
+            const deviceLabel = area.devices === 1 ? "ESP" : "ESPs";
+            const channelLabel = area.channels === 1 ? "channel" : "channels";
+            const statusLabel = {
+              online: "OK",
+              attention: "Stale device",
+              offline: "Offline device",
+              idle: "No devices",
+            }[area.status];
+            card.innerHTML = `
+              <span class="area-card-heading">
+                <strong>${escapeHtml(area.label)}</strong>
+                <span class="area-card-state" aria-hidden="true"></span>
+              </span>
+              <span class="area-card-meta">
+                <span>${area.channels} ${channelLabel} · ${area.devices} ${deviceLabel}</span>
+                <span class="area-card-open">${statusLabel}</span>
+              </span>
+            `;
+            card.addEventListener("click", () => {
+              const nextHash = `#/control/${area.slug}`;
+              if (window.location.hash === nextHash) {
+                showControlArea(area);
+              } else {
+                window.location.hash = nextHash;
+              }
+            });
+            elements.areaGrid.append(card);
+          }
+        }
+
+        function showOverview() {
+          elements.overviewView.hidden = false;
+          elements.controlView.hidden = true;
+          elements.overviewLink.classList.add("active");
+          document.title = "Aquarium Controller — Overview";
+          renderOverview();
+          window.scrollTo(0, 0);
+        }
+
+        function showControlArea(area) {
+          elements.overviewView.hidden = true;
+          elements.controlView.hidden = false;
+          elements.overviewLink.classList.remove("active");
+          elements.pageTitle.textContent = area.label;
+          elements.channelDialogAreaLabel.textContent = area.label;
+          elements.throttleAreaDescription.textContent = `all ${area.label.toLocaleLowerCase()} channels`;
+          elements.throttleInputLabel.textContent = `${area.label} schedule multiplier`;
+          document.title = `Aquarium Controller — ${area.label}`;
+          renderAll();
+          window.scrollTo(0, 0);
+        }
+
+        function routeFromHash() {
+          const match = /^#\/control\/([^/]+)$/u.exec(window.location.hash);
+          const area = controlAreas.find(
+            (candidate) => candidate.slug === match?.[1],
+          );
+          if (area === undefined) {
+            showOverview();
+            return;
+          }
+          showControlArea(area);
         }
 
         function markDirty() {
@@ -2342,6 +2773,7 @@
           if (controller === undefined) return;
           state.devices = state.devices.filter((item) => item.id !== deviceId);
           renderDevices();
+          renderOverview();
           showToast(
             `${controller.name} excluded from command dispatch. It can return when rediscovered.`,
           );
@@ -2512,6 +2944,7 @@
         }
 
         function openMappingDialog() {
+          deletingMappingProfileId = null;
           if (
             !state.mappingProfiles.some(
               (profile) => profile.id === editingMappingProfileId,
@@ -2534,6 +2967,16 @@
             elements.mappingProfileSelect.append(option);
           }
           elements.mappingProfileSelect.value = editingMappingProfileId;
+          renderMappingProfileDeleteButton();
+        }
+
+        function renderMappingProfileDeleteButton() {
+          const profile = editingMappingProfile();
+          elements.deleteMappingProfileButton.disabled = profile === null;
+          elements.deleteMappingProfileButton.textContent =
+            profile !== null && deletingMappingProfileId === profile.id
+              ? "Confirm delete"
+              : "Delete profile";
         }
 
         function editingMappingProfile() {
@@ -2800,10 +3243,43 @@
           );
           state.mappingProfiles.push(profile);
           editingMappingProfileId = profile.id;
+          deletingMappingProfileId = null;
           markDirty();
           renderMappingProfileSelector();
           renderMappings(profile);
           elements.mappingProfileNameInput.focus();
+        }
+
+        function deleteMappingProfile() {
+          const profile = editingMappingProfile();
+          if (profile === null) return;
+          const affectedDevices = state.devices.filter(
+            (device) => device.mappingProfileId === profile.id,
+          );
+          if (deletingMappingProfileId !== profile.id) {
+            deletingMappingProfileId = profile.id;
+            renderMappingProfileDeleteButton();
+            showToast(
+              `Press Confirm delete to remove ${profile.name}. ${affectedDevices.length} ESP${affectedDevices.length === 1 ? "" : "s"} will become unmapped.`,
+            );
+            return;
+          }
+
+          state.mappingProfiles = state.mappingProfiles.filter(
+            (candidate) => candidate.id !== profile.id,
+          );
+          for (const controller of affectedDevices) {
+            controller.mappingProfileId = null;
+          }
+          editingMappingProfileId = state.mappingProfiles[0]?.id ?? null;
+          deletingMappingProfileId = null;
+          markDirty();
+          renderMappingProfileSelector();
+          renderMappings(editingMappingProfile());
+          renderDevices();
+          showToast(
+            `${profile.name} deleted. ${affectedDevices.length} ESP${affectedDevices.length === 1 ? "" : "s"} became unmapped.`,
+          );
         }
 
         function saveDevice() {
@@ -3097,13 +3573,20 @@
         document
           .querySelector("#newMappingProfileButton")
           .addEventListener("click", addMappingProfile);
+        elements.deleteMappingProfileButton.addEventListener(
+          "click",
+          deleteMappingProfile,
+        );
         elements.mappingProfileSelect.addEventListener("change", () => {
           editingMappingProfileId = elements.mappingProfileSelect.value;
+          deletingMappingProfileId = null;
+          renderMappingProfileDeleteButton();
           renderMappings(editingMappingProfile());
         });
         elements.mappingProfileNameInput.addEventListener("input", () => {
           const profile = editingMappingProfile();
           if (profile === null) return;
+          deletingMappingProfileId = null;
           profile.name =
             elements.mappingProfileNameInput.value.trim() || "Untitled";
           elements.mappingProfileHeading.textContent = `${profile.name} · ${profile.deviceNamePrefix}*`;
@@ -3114,6 +3597,7 @@
         elements.mappingProfilePrefixInput.addEventListener("input", () => {
           const profile = editingMappingProfile();
           if (profile === null) return;
+          deletingMappingProfileId = null;
           profile.deviceNamePrefix =
             elements.mappingProfilePrefixInput.value.trim();
           for (const controller of state.devices) {
@@ -3132,6 +3616,8 @@
         elements.mappingProfileMultiplierInput.addEventListener("input", () => {
           const profile = editingMappingProfile();
           if (profile === null) return;
+          deletingMappingProfileId = null;
+          renderMappingProfileDeleteButton();
           profile.outputMultiplier = clamp(
             Number(elements.mappingProfileMultiplierInput.value) || 0,
             0,
@@ -3142,12 +3628,21 @@
         document
           .querySelector("#saveDeviceButton")
           .addEventListener("click", saveDevice);
-        elements.areaSelect.addEventListener("change", () => {
-          elements.pageTitle.textContent = elements.areaSelect.value;
-          showToast(
-            `${elements.areaSelect.value} selected. This prototype keeps the Lights dummy data visible.`,
-          );
+        document
+          .querySelector("#refreshOverviewButton")
+          .addEventListener("click", () => {
+            renderOverview();
+            showToast("Overview refreshed from dummy controller state.");
+          });
+        document.querySelectorAll("[data-retained-page]").forEach((link) => {
+          link.addEventListener("click", (event) => {
+            event.preventDefault();
+            showToast(
+              `${link.dataset.retainedPage} keeps its existing interface and is not duplicated in this prototype.`,
+            );
+          });
         });
+        window.addEventListener("hashchange", routeFromHash);
         document.addEventListener("click", () => closeTargetPickers());
 
         document.querySelectorAll("[data-close-dialog]").forEach((button) => {
@@ -3166,6 +3661,7 @@
         }
 
         renderAll();
+        routeFromHash();
       })();
     </script>
   </body>

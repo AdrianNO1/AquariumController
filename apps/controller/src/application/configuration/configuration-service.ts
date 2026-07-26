@@ -11,6 +11,7 @@ import type {
   ReplaceMappingProfileRequest,
   ReplaceScheduleRequest,
   SetDeviceEnabledRequest,
+  UpdateChannelRequest,
   UpdateThrottleRequest,
 } from "@aquarium/contracts";
 
@@ -73,6 +74,10 @@ export interface ControllerConfigurationService {
     channelId: string,
     request: RenameChannelRequest,
   ): Promise<MutationResult>;
+  updateChannel(
+    channelId: string,
+    request: UpdateChannelRequest,
+  ): Promise<MutationResult>;
   deleteChannel(
     channelId: string,
     expectedRevision: number,
@@ -88,6 +93,10 @@ export interface ControllerConfigurationService {
   replaceMappingProfile(
     profileId: string,
     request: ReplaceMappingProfileRequest,
+  ): Promise<MutationResult>;
+  deleteMappingProfile(
+    profileId: string,
+    expectedRevision: number,
   ): Promise<MutationResult>;
   setDeviceEnabled(
     deviceId: string,

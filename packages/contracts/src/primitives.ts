@@ -41,6 +41,23 @@ export const boundedTextSchema = z
 export const percentageSchema = z.number().min(0).max(100);
 export const gainSchema = z.number().min(0).max(1);
 
+export const canonicalHexColorSchema = z.string().regex(/^#[0-9a-f]{6}$/u);
+
+export const CHANNEL_COLOR_PALETTE = [
+  "#6f5bd5",
+  "#a747a9",
+  "#3c66db",
+  "#13a4c7",
+  "#80909a",
+  "#dc5450",
+  "#2aa7a0",
+  "#e0953b",
+  "#5caf62",
+  "#d46a9a",
+  "#7b74d8",
+  "#bc6c3e",
+] as const;
+
 export const canonicalUint32HashSchema = z
   .string()
   .regex(/^(0|[1-9][0-9]{0,9})$/u)

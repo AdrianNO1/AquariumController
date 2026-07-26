@@ -12,6 +12,7 @@ import {
 } from "../../application/configuration/index.js";
 import {
   ControllerConfigurationRepository,
+  ControllerSnapshotRepository,
   commitStateChange,
   openStateDatabase,
   readCurrentStateRevision,
@@ -333,6 +334,7 @@ describe("ControllerConfigurationRepository", () => {
         expectedRevision: 0,
         id: "channel-new",
         name: "New channel",
+        color: "#13a4c7",
         typeKey: "light",
         throttleId: "throttle-light",
         displayOrder: 0,
@@ -433,6 +435,66 @@ describe("ControllerConfigurationRepository", () => {
         .where("channel_id", "=", "channel-new")
         .executeTakeFirst(),
     ).resolves.toBeUndefined();
+  });
+
+  it("updates a channel name and color atomically with its schedule name", async () => {
+    const database = await openDatabase();
+    await database
+      .insertInto("throttles")
+      .values({
+        id: "throttle-light",
+        type_key: "light",
+        percentage: 100,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+
+    await repository.createChannel({
+      expectedRevision: 0,
+      id: "channel-blue",
+      name: "Blue",
+      color: "#13a4c7",
+      typeKey: "light",
+      throttleId: "throttle-light",
+      displayOrder: 0,
+      enabled: true,
+    });
+    await expect(
+      repository.updateChannel("channel-blue", {
+        expectedRevision: 1,
+        name: "Ocean blue",
+        color: "#3c66db",
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 2 });
+    await expect(
+      database
+        .selectFrom("channels")
+        .select(["name", "color", "updated_at_ms"])
+        .where("id", "=", "channel-blue")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({
+      name: "Ocean blue",
+      color: "#3c66db",
+      updated_at_ms: 100,
+    });
+    await expect(
+      database
+        .selectFrom("schedules")
+        .select(["name", "updated_at_ms"])
+        .where("channel_id", "=", "channel-blue")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ name: "Ocean blue", updated_at_ms: 100 });
+    await expect(
+      repository.updateChannel("channel-blue", {
+        expectedRevision: 2,
+        name: "Ocean blue",
+        color: "#3c66db",
+      }),
+    ).resolves.toEqual({ changed: false, revision: 2, event: null });
   });
 
   it("reports every schedule graph problem before writing state", async () => {
@@ -536,6 +598,190 @@ describe("ControllerConfigurationRepository", () => {
       },
     ]);
     await expect(repository.listAlertRules()).resolves.toEqual({ items: [] });
+  });
+
+  it("deletes a mapping profile and atomically detaches its devices", async () => {
+    const database = await openDatabase();
+    await database
+      .insertInto("mapping_profiles")
+      .values([
+        {
+          id: "profile-main",
+          name: "Main",
+          device_name_prefix: "Main",
+          output_gain: 0.7,
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        },
+        {
+          id: "profile-other",
+          name: "Other",
+          device_name_prefix: "Other",
+          output_gain: 1,
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        },
+      ])
+      .execute();
+    await database
+      .insertInto("outputs")
+      .values({
+        id: "output-main",
+        name: "Main output",
+        kind: "light",
+        display_order: 0,
+        output_gain: 1,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("pin_mappings")
+      .values({
+        id: "mapping-main",
+        mapping_profile_id: "profile-main",
+        output_id: "output-main",
+        channel_id: null,
+        pin: 4,
+        display_order: 0,
+        enabled: 1,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("devices")
+      .values([
+        {
+          id: "device-main-a",
+          hardware_id: "hardware-main-a",
+          name: "MainA",
+          mapping_profile_id: "profile-main",
+          desired_pwm_frequency_hz: 5_000,
+          desired_pwm_resolution_bits: 8,
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        },
+        {
+          id: "device-main-b",
+          hardware_id: "hardware-main-b",
+          name: "MainB",
+          mapping_profile_id: "profile-main",
+          desired_pwm_frequency_hz: 5_000,
+          desired_pwm_resolution_bits: 8,
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        },
+        {
+          id: "device-other",
+          hardware_id: "hardware-other",
+          name: "Other",
+          mapping_profile_id: "profile-other",
+          desired_pwm_frequency_hz: 5_000,
+          desired_pwm_resolution_bits: 8,
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        },
+        {
+          id: "device-unmapped",
+          hardware_id: "hardware-unmapped",
+          name: "Unmapped",
+          mapping_profile_id: null,
+          desired_pwm_frequency_hz: 5_000,
+          desired_pwm_resolution_bits: 8,
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        },
+      ])
+      .execute();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+
+    await expect(
+      repository.deleteMappingProfile("profile-main", 1),
+    ).rejects.toBeInstanceOf(ConfigurationRevisionConflictError);
+    await expect(
+      database
+        .selectFrom("mapping_profiles")
+        .select("id")
+        .where("id", "=", "profile-main")
+        .executeTakeFirst(),
+    ).resolves.toEqual({ id: "profile-main" });
+    await expect(
+      database
+        .selectFrom("devices")
+        .select("mapping_profile_id")
+        .where("id", "=", "device-main-a")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ mapping_profile_id: "profile-main" });
+
+    const deleted = await repository.deleteMappingProfile("profile-main", 0);
+    expect(deleted).toMatchObject({
+      changed: true,
+      revision: 1,
+      event: {
+        type: "mapping_profile.deleted",
+        entity: { type: "mapping_profile", id: "profile-main" },
+        data: {
+          invalidations: [{ resource: "mapping_profile", id: "profile-main" }],
+        },
+      },
+    });
+    await expect(
+      database
+        .selectFrom("mapping_profiles")
+        .select("id")
+        .orderBy("id")
+        .execute(),
+    ).resolves.toEqual([{ id: "profile-other" }]);
+    await expect(
+      database
+        .selectFrom("pin_mappings")
+        .select("id")
+        .where("mapping_profile_id", "=", "profile-main")
+        .execute(),
+    ).resolves.toEqual([]);
+    await expect(
+      database
+        .selectFrom("devices")
+        .select(["id", "mapping_profile_id", "updated_at_ms"])
+        .orderBy("id")
+        .execute(),
+    ).resolves.toEqual([
+      {
+        id: "device-main-a",
+        mapping_profile_id: null,
+        updated_at_ms: 100,
+      },
+      {
+        id: "device-main-b",
+        mapping_profile_id: null,
+        updated_at_ms: 100,
+      },
+      {
+        id: "device-other",
+        mapping_profile_id: "profile-other",
+        updated_at_ms: 1,
+      },
+      {
+        id: "device-unmapped",
+        mapping_profile_id: null,
+        updated_at_ms: 1,
+      },
+    ]);
+    const snapshot = await new ControllerSnapshotRepository(database, {
+      now: () => new Date(100),
+    }).read();
+    expect(snapshot.mappingProfiles.map((profile) => profile.id)).toEqual([
+      "profile-other",
+    ]);
+    expect(
+      snapshot.devices
+        .filter((device) => device.id.startsWith("device-main"))
+        .map((device) => device.mappingProfileId),
+    ).toEqual([null, null]);
+    expect(await readCurrentStateRevision(database)).toBe(1);
   });
 
   it("blocks active-rule changes and preserves recovered alert history", async () => {

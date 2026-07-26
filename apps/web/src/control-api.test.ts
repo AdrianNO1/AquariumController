@@ -12,6 +12,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   createChannel,
   deleteChannel,
+  deleteMappingProfile,
   fetchOperationDetails,
   patchDeviceConfiguration,
   reconcileDeviceOperation,
@@ -19,6 +20,7 @@ import {
   replaceMappingProfile,
   replaceSchedule,
   updateThrottle,
+  updateChannel,
 } from "./api.js";
 
 const server = setupServer();
@@ -64,6 +66,7 @@ describe("control configuration API", () => {
       expectedRevision: 8,
       id: "light-main",
       name: "Main light",
+      color: "#13a4c7",
       typeKey: "light",
       throttleId: "throttle-light",
       displayOrder: 0,
@@ -72,6 +75,11 @@ describe("control configuration API", () => {
     await renameChannel("light-main", {
       expectedRevision: 8,
       name: "Main reef light",
+    });
+    await updateChannel("light-main", {
+      expectedRevision: 8,
+      name: "Main reef light",
+      color: "#3c66db",
     });
     await replaceSchedule("light-main", {
       expectedRevision: 8,
@@ -89,15 +97,18 @@ describe("control configuration API", () => {
       expectedRevision: 8,
       pwmFrequencyHz: 2_000,
     });
+    await deleteMappingProfile("profile-main", 8);
     await deleteChannel("light-main", 8);
 
     expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
       "POST /api/channels",
       "PATCH /api/channels/light-main",
+      "PATCH /api/channels/light-main",
       "PUT /api/channels/light-main/schedule",
       "PUT /api/throttles/light",
       "PUT /api/mapping-profiles/profile-main",
       "PATCH /api/devices/device-main/configuration",
+      "DELETE /api/mapping-profiles/profile-main",
       "DELETE /api/channels/light-main",
     ]);
     expect(requests.every(({ body }) => body.expectedRevision === 8)).toBe(

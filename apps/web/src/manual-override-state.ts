@@ -133,7 +133,7 @@ export function deriveManualOverrideView(
         ? "failed"
         : override.status;
   const remainingMs = Math.max(0, Date.parse(override.expiresAt) - nowMs);
-  const active = override.status === "active" && remainingMs > 0;
+  const active = override.status === "active";
   return {
     phase,
     operation,

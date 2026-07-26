@@ -94,6 +94,7 @@ export interface ThrottlesTable {
 export interface ChannelsTable {
   id: string;
   name: string;
+  color: InsertOptional<string>;
   kind: string;
   throttle_id: string;
   display_order: number;

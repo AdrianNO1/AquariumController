@@ -2,22 +2,88 @@ import { AxeBuilder } from "@axe-core/playwright";
 
 import { expect, test } from "./fixtures.js";
 
+const combinedScheduleChartName =
+  "All channel output percentages across a UTC day";
+
+const controlAreaRoutes = [
+  {
+    path: "/control/lights",
+    linkName: /^Lights\b/u,
+    heading: "Lights",
+  },
+  {
+    path: "/control/pumps",
+    linkName: /^Pumps\b/u,
+    heading: "Pumps",
+  },
+  {
+    path: "/control/testlights",
+    linkName: /^Test lights\b/u,
+    heading: "Test lights",
+  },
+  {
+    path: "/control/bad",
+    linkName: /^Bad\b/u,
+    heading: "Bad",
+  },
+  {
+    path: "/control/loft",
+    linkName: /^Loft\b/u,
+    heading: "Loft",
+  },
+  {
+    path: "/control/biljard",
+    linkName: /^Biljard\b/u,
+    heading: "Biljard",
+  },
+  {
+    path: "/control/frag",
+    linkName: /^Frag tank\b/u,
+    heading: "Frag",
+  },
+  {
+    path: "/control/qt1",
+    linkName: /^Quarantine 1\b/u,
+    heading: "QT1",
+  },
+  {
+    path: "/control/qt2",
+    linkName: /^Quarantine 2\b/u,
+    heading: "QT2",
+  },
+  {
+    path: "/control/qt3",
+    linkName: /^Quarantine 3\b/u,
+    heading: "QT3",
+  },
+  {
+    path: "/control/qt4",
+    linkName: /^Quarantine 4\b/u,
+    heading: "QT4",
+  },
+] as const;
+
 const retainedRoutes = [
-  ["/", "One controller, clear boundaries."],
-  ["/control/lights", "Lights"],
-  ["/control/pumps", "Pumps"],
-  ["/control/testlights", "Test lights"],
-  ["/control/bad", "Bad"],
-  ["/control/loft", "Loft"],
-  ["/control/biljard", "Biljard"],
-  ["/control/frag", "Frag"],
-  ["/control/qt1", "QT1"],
-  ["/control/qt2", "QT2"],
-  ["/control/qt3", "QT3"],
-  ["/control/qt4", "QT4"],
+  ["/", "Overview"],
+  ...controlAreaRoutes.map(({ path, heading }) => [path, heading] as const),
+  ["/operations", "Device operation outcomes"],
   ["/alerts", "Alerts"],
   ["/logs", "Logs"],
 ] as const;
+
+test("overview links to every maintained control area", async ({ page }) => {
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Overview" }),
+  ).toBeVisible();
+
+  for (const { path, linkName } of controlAreaRoutes) {
+    await expect(page.getByRole("link", { name: linkName })).toHaveAttribute(
+      "href",
+      path,
+    );
+  }
+});
 
 test("all retained direct routes are served by the production SPA and survive reload", async ({
   page,
@@ -57,9 +123,16 @@ test("invalid routes present a useful 404 and keyboard-accessible recovery", asy
 test("representative production pages pass automated accessibility checks", async ({
   page,
 }) => {
-  for (const path of ["/", "/control/lights", "/alerts", "/logs"]) {
+  for (const [path, heading] of [
+    ["/", "Overview"],
+    ["/control/lights", "Lights"],
+    ["/alerts", "Alerts"],
+    ["/logs", "Logs"],
+  ] as const) {
     await page.goto(path);
-    await expect(page.locator("main")).toBeVisible();
+    await expect(
+      page.getByRole("heading", { level: 1, name: heading }),
+    ).toBeVisible();
     const results = await new AxeBuilder({ page }).analyze();
     expect(results.violations, `${path} should have no axe violations`).toEqual(
       [],
@@ -80,6 +153,9 @@ test("phone, tablet, and desktop layouts avoid page-level horizontal overflow", 
     await expect(
       page.getByRole("heading", { level: 1, name: "Lights" }),
     ).toBeVisible();
+    await expect(
+      page.getByRole("img", { name: combinedScheduleChartName }),
+    ).toBeVisible();
     const dimensions = await page.evaluate(() => ({
       viewportWidth: document.documentElement.clientWidth,
       pageWidth: document.documentElement.scrollWidth,
@@ -91,19 +167,57 @@ test("phone, tablet, and desktop layouts avoid page-level horizontal overflow", 
   }
 });
 
-test("primary navigation and channel creation work from the keyboard", async ({
+test("area navigation and configuration dialogs work from the keyboard", async ({
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Lights", exact: true }).focus();
+  await page.getByRole("link", { name: /^Lights\b/u }).focus();
   await page.keyboard.press("Enter");
   await expect(
     page.getByRole("heading", { level: 1, name: "Lights" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("img", { name: combinedScheduleChartName }),
+  ).toBeVisible();
 
-  const createButton = page.getByRole("button", { name: "Create channel" });
-  await createButton.focus();
+  const manageChannelsButton = page.getByRole("button", {
+    name: "Manage channels",
+  });
+  await manageChannelsButton.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByLabel("Channel ID")).toBeVisible();
-  await expect(page.getByLabel("Channel name")).toBeVisible();
+  const channelDialog = page.getByRole("dialog", {
+    name: "Manage channels",
+  });
+  await expect(channelDialog).toBeVisible();
+
+  const closeChannelDialog = channelDialog.getByRole("button", {
+    name: "Close channel manager",
+  });
+  await closeChannelDialog.focus();
+  await page.keyboard.press("Enter");
+  await expect(channelDialog).toBeHidden();
+
+  const pinMappingsButton = page.getByRole("button", {
+    name: "Pin mappings",
+  });
+  await pinMappingsButton.focus();
+  await page.keyboard.press("Enter");
+  const mappingsDialog = page.getByRole("dialog", {
+    name: "Mapping profiles",
+  });
+  await expect(mappingsDialog).toBeVisible();
+  const closeMappingsDialog = mappingsDialog.getByRole("button", {
+    name: "Close mapping profiles",
+  });
+  await expect(closeMappingsDialog).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect
+    .poll(() =>
+      mappingsDialog.evaluate((dialog) =>
+        dialog.contains(document.activeElement),
+      ),
+    )
+    .toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(mappingsDialog).toBeHidden();
 });

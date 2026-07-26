@@ -14,6 +14,7 @@ export function createTestControlSnapshot(revision = 8): ControllerSnapshot {
       {
         id: "light-main",
         name: "Main light",
+        color: "#13a4c7",
         typeKey: "light",
         throttleId: "throttle-light",
         displayOrder: 0,
@@ -24,6 +25,7 @@ export function createTestControlSnapshot(revision = 8): ControllerSnapshot {
       {
         id: "pump-main",
         name: "Return pump",
+        color: "#5caf62",
         typeKey: "pump",
         throttleId: "throttle-pump",
         displayOrder: 0,

@@ -80,6 +80,18 @@ describe("manual override panel state", () => {
       canReconcile: false,
       blocksNewStart: true,
     });
+    expect(
+      deriveManualOverrideView(
+        override("active"),
+        [operation("succeeded")],
+        Date.parse("2026-07-13T10:04:00.000Z"),
+      ),
+    ).toMatchObject({
+      remainingMs: 0,
+      canExtend: true,
+      canCancel: true,
+      blocksNewStart: true,
+    });
 
     const outcomeUnknown = deriveManualOverrideView(
       override("active"),

@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"http://localhost/"}
 
-import {
-  operationDetailsResponseSchema,
-  type ControllerSnapshot,
+import type {
+  Channel,
+  ControllerSnapshot,
+  ScheduleGraph,
 } from "@aquarium/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -12,6 +13,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
@@ -58,7 +60,7 @@ afterAll(() => {
 });
 
 describe("control area routes", () => {
-  it("renders every retained direct route and a useful empty state", () => {
+  it("renders every retained route, useful empty states, and every known ESP", () => {
     const snapshot = createTestControlSnapshot();
     for (const area of snapshot.controlAreas) {
       const rendered = renderControlArea(
@@ -73,170 +75,303 @@ describe("control area routes", () => {
 
     renderControlArea("/control/qt4", controllerState(snapshot, vi.fn()));
     expect(
-      screen.getByText(
-        "No channels exist for this control area. Create one to provision its owned UTC schedule.",
-      ),
+      screen.getByText("No schedules are available for this control area."),
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "This control area has no throttle record, so output scaling cannot be changed.",
+        "Quarantine 4 has no multiplier record, so scaling cannot be changed.",
       ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("article", {
+        name: "ESP32 device device-main",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("article", {
+        name: "ESP32 device device-backup",
+      }),
     ).toBeTruthy();
   });
 
-  it(
-    "runs typed channel, schedule, throttle, mapping, and device workflows without optimistic outcomes",
-    { timeout: 10_000 },
-    async () => {
-      const requests: RecordedRequest[] = [];
-      const refresh = vi.fn();
-      installMutationHandlers(requests);
-      server.use(
-        http.get("http://localhost/api/operations/operation-success", () =>
-          HttpResponse.json(
-            operationDetailsResponseSchema.parse({
-              operation: {
-                id: "operation-success",
-                deviceId: "device-main",
-                kind: "schedule",
-                status: "succeeded",
-                requestedAt: "2026-07-13T10:00:00.000Z",
-                deadlineAt: "2026-07-13T10:00:05.000Z",
-                completedAt: "2026-07-13T10:00:01.000Z",
+  it("composes the combined editor, channel manager, global mappings, and device cards", async () => {
+    const snapshot = withAccentLight(createTestControlSnapshot());
+    const withFirmwareStates: ControllerSnapshot = {
+      ...snapshot,
+      devices: snapshot.devices.map((device) =>
+        device.id === "device-main"
+          ? {
+              ...device,
+              reported: { ...device.reported, firmwareVersion: "4.1.0" },
+              lastError: {
+                code: "firmware_outdated",
+                message: "Firmware 4.1.0 can be updated",
               },
-              request: { schemaVersion: 1, data: { kind: "schedule" } },
-              result: { schemaVersion: 1, data: { status: "succeeded" } },
-            }),
-          ),
-        ),
-      );
+            }
+          : {
+              ...device,
+              reported: { ...device.reported, firmwareVersion: "3.2.0" },
+            },
+      ),
+    };
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(withFirmwareStates, vi.fn()),
+    );
+
+    const graph = screen.getByRole("img", {
+      name: "All channel output percentages across a UTC day",
+    });
+    const channelList = screen.getByRole("list", {
+      name: "Schedule channels",
+    });
+    const mainChannel = within(channelList)
+      .getByText("Main light")
+      .closest("button");
+    const accentChannel = within(channelList)
+      .getByText("Accent light")
+      .closest("button");
+    if (mainChannel === null || accentChannel === null) {
+      throw new Error("Channel list controls are missing");
+    }
+    expect(mainChannel.getAttribute("aria-pressed")).toBe("true");
+
+    const accentLine = graph.querySelector('polyline[stroke="#a84aa7"]');
+    if (accentLine === null) throw new Error("Accent graph line is missing");
+    fireEvent.click(accentLine);
+    expect(mainChannel.getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(accentChannel);
+    expect(accentChannel.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Accent light" }),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Manage channels" }));
+    expect(
+      screen.getByRole("dialog", { name: "Manage channels" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("light-main")).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Close channel manager" }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Pin mappings" }));
+    expect(
+      screen.getByRole("dialog", { name: "Mapping profiles" }),
+    ).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Target for mapping 1" }),
+    );
+    await user.type(
+      screen.getByLabelText("Search all channel targets"),
+      "Return",
+    );
+    expect(
+      screen.getByRole("option", { name: /Pumps.*Return pump/u }),
+    ).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Close target picker" }),
+    );
+    expect(screen.getByRole("button", { name: "Delete profile" })).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: "Close mapping profiles" }),
+    );
+
+    expect(screen.getByText(/4\.1\.0.*update available/u)).toBeTruthy();
+    expect(screen.getByText(/3\.2\.0.*upgrade required/u)).toBeTruthy();
+    const mainDevice = screen.getByRole("article", {
+      name: "ESP32 device device-main",
+    });
+    expect(within(mainDevice).getByText("ID: DEVICE-MAIN")).toBeTruthy();
+    expect(
+      within(mainDevice).getByRole("button", {
+        name: "Exclude device-main from controller commands",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("saves an exact manually entered time and multiplier in revision order", async () => {
+    const requests: RecordedRequest[] = [];
+    installConfigurationSaveHandlers(requests);
+    const refresh = vi.fn();
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(createTestControlSnapshot(), refresh),
+    );
+
+    fireEvent.change(
+      screen.getByLabelText("Main light selected point UTC time"),
+      { target: { value: "00:07" } },
+    );
+    await user.click(screen.getByRole("button", { name: "Apply point" }));
+    fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
+      target: { value: "75" },
+    });
+
+    expect(screen.getAllByText("Unsaved")).toHaveLength(2);
+    await user.click(
+      screen.getByRole("button", { name: "Save configuration" }),
+    );
+
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests.map(({ path }) => path)).toEqual([
+      "/api/channels/light-main/schedule",
+      "/api/throttles/light",
+    ]);
+    expect(requests[0]?.body).toMatchObject({
+      expectedRevision: 8,
+      points: expect.arrayContaining([
+        expect.objectContaining({ minuteOfDay: 7 }),
+      ]),
+    });
+    expect(requests[1]?.body).toMatchObject({
+      expectedRevision: 9,
+      percentage: 75,
+    });
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("keeps revision-protected configuration saves available while live state is stale", async () => {
+    const snapshot = createTestControlSnapshot();
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(snapshot, vi.fn(), true),
+    );
+
+    fireEvent.change(
+      screen.getByLabelText("Main light selected point UTC time"),
+      { target: { value: "00:07" } },
+    );
+    await user.click(screen.getByRole("button", { name: "Apply point" }));
+
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Save configuration",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+    expect(
+      (
+        screen.getByRole("slider", {
+          name: "Main light temporary override",
+        }) as HTMLInputElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it("uses unsaved graph points as the scheduled baseline for test sliders", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-13T10:00:00.000Z"));
+    try {
+      const snapshot = createTestControlSnapshot();
       const user = renderControlArea(
         "/control/lights",
-        controllerState(createTestControlSnapshot(), refresh, true),
+        controllerState({ ...snapshot, overrides: [] }, vi.fn()),
       );
-
-      expect(
-        screen.getByRole("img", {
-          name: "Main light output percentage across a UTC day",
-        }),
-      ).toBeTruthy();
-      expect(screen.getByText("Controller state is stale.")).toBeTruthy();
-      expect(screen.getByText("offline")).toBeTruthy();
-      const startOverride = screen.getByRole("button", {
-        name: "Start manual override",
-      }) as HTMLButtonElement;
-      expect(startOverride.disabled).toBe(true);
-      expect(
-        screen.getByText(/selected target already has a pending, active/u),
-      ).toBeTruthy();
-      await user.selectOptions(
-        screen.getByLabelText("Channel or output"),
-        "output:output-moonlight",
-      );
-      expect(startOverride.disabled).toBe(false);
-
-      await user.click(screen.getByRole("button", { name: "Create channel" }));
-      await user.type(screen.getByLabelText("Channel ID"), "light-backup");
-      await user.type(screen.getByLabelText("Channel name"), "Backup light");
-      await user.click(
-        screen.getByRole("button", { name: "Create channel and schedule" }),
-      );
-
-      const renameInput = screen.getByLabelText("Rename channel");
-      await user.clear(renameInput);
-      await user.type(renameInput, "Reef light");
-      await user.click(screen.getByRole("button", { name: "Rename" }));
-
-      await user.type(screen.getByLabelText("New point ID"), "light-evening");
-      fireEvent.change(screen.getByLabelText("UTC time"), {
-        target: { value: "18:00" },
+      const overrideSlider = screen.getByRole("slider", {
+        name: "Main light temporary override",
       });
-      const newPercentage = screen.getByLabelText("Output percent");
-      await user.clear(newPercentage);
-      await user.type(newPercentage, "45");
-      await user.click(screen.getByRole("button", { name: "Add point" }));
-      expect(screen.getByText("light-evening")).toBeTruthy();
-      await user.click(screen.getByRole("button", { name: "Save schedule" }));
+      expect(overrideSlider).toHaveProperty("value", "40");
 
-      fireEvent.change(screen.getByLabelText("Throttle percentage"), {
-        target: { value: "75" },
-      });
-      await user.click(screen.getByRole("button", { name: "Save throttle" }));
-
-      fireEvent.change(screen.getByLabelText("Pin for mapping-light"), {
-        target: { value: "7" },
-      });
-      await user.click(
-        screen.getByRole("button", { name: "Save mapping profile" }),
+      fireEvent.change(
+        screen.getByLabelText("Main light selected point output"),
+        { target: { value: "100" } },
       );
+      await user.click(screen.getByRole("button", { name: "Apply point" }));
 
-      await user.click(
-        screen.getByRole("button", {
-          name: "Edit device-main configuration",
-        }),
-      );
-      fireEvent.change(screen.getByLabelText("PWM frequency (Hz)"), {
-        target: { value: "2000" },
-      });
-      await user.click(
-        screen.getByRole("button", { name: "Save configuration" }),
-      );
+      await waitFor(() => expect(overrideSlider).toHaveProperty("value", "53"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-      await user.click(
-        screen.getByRole("button", { name: "Inspect operation-success" }),
-      );
-      expect(await screen.findByText("Request payload")).toBeTruthy();
-      expect(screen.getByText(/"kind": "schedule"/u)).toBeTruthy();
-
-      await user.click(
-        screen.getByRole("button", { name: "Delete channel Main light" }),
-      );
-      await user.click(screen.getByRole("button", { name: "Confirm delete" }));
-
-      expect(requests.map(({ path }) => path)).toEqual([
-        "/api/channels",
-        "/api/channels/light-main",
-        "/api/channels/light-main/schedule",
-        "/api/throttles/light",
-        "/api/mapping-profiles/profile-main",
-        "/api/devices/device-main/configuration",
-        "/api/channels/light-main",
-      ]);
-      expect(requests[2]?.body).toMatchObject({
-        expectedRevision: 8,
-        points: expect.arrayContaining([
-          expect.objectContaining({
-            id: "light-evening",
-            minuteOfDay: 1_080,
-            percentage: 45,
-          }),
-        ]),
-      });
-      expect(requests[3]?.body).toMatchObject({ percentage: 75 });
-      expect(requests[4]?.body).toMatchObject({
-        mappings: expect.arrayContaining([
-          expect.objectContaining({ id: "mapping-light", pin: 7 }),
-        ]),
-      });
-      expect(requests[5]?.body).toMatchObject({ pwmFrequencyHz: 2_000 });
-      expect(refresh).toHaveBeenCalledTimes(7);
-    },
-  );
-
-  it("pins a dirty schedule revision and rebases it only after explicit acceptance", async () => {
+  it("preserves a multiplier draft and explicitly rebases after a revision conflict", async () => {
+    const revisions: number[] = [];
+    server.use(
+      http.put("http://localhost/api/throttles/light", async ({ request }) => {
+        const body = (await request.json()) as {
+          readonly expectedRevision: number;
+        };
+        revisions.push(body.expectedRevision);
+        if (revisions.length === 1) {
+          return HttpResponse.json(
+            {
+              code: "revision_conflict",
+              message: "State revision changed",
+              expectedRevision: body.expectedRevision,
+              currentRevision: 9,
+            },
+            { status: 409 },
+          );
+        }
+        return HttpResponse.json({
+          changed: true,
+          revision: 10,
+          event: null,
+        });
+      }),
+    );
+    const snapshot = createTestControlSnapshot();
     const refresh = vi.fn();
-    const requestBodies: object[] = [];
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(snapshot, refresh),
+    );
+
+    fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
+      target: { value: "73" },
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Save configuration" }),
+    );
+    expect(
+      await screen.findByText(
+        /Controller configuration advanced to revision 9/u,
+      ),
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Lights schedule multiplier")).toHaveProperty(
+      "value",
+      "73",
+    );
+
+    user.rerenderState(controllerState({ ...snapshot, revision: 9 }, refresh));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Keep local multiplier with refreshed revision",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save configuration" }),
+    );
+
+    await waitFor(() => expect(revisions).toEqual([8, 9]));
+  });
+
+  it("rebases a dirty multiplier with the accepted schedule conflict", async () => {
+    const requests: RecordedRequest[] = [];
+    let scheduleAttempts = 0;
     server.use(
       http.put(
         "http://localhost/api/channels/light-main/schedule",
         async ({ request }) => {
-          requestBodies.push((await request.json()) as object);
-          if (requestBodies.length === 1) {
+          const body = (await request.json()) as RecordedRequest["body"];
+          requests.push({
+            path: new URL(request.url).pathname,
+            body,
+          });
+          const expectedRevision = body.expectedRevision;
+          if (typeof expectedRevision !== "number") {
+            throw new Error("Schedule request omitted expectedRevision");
+          }
+          scheduleAttempts += 1;
+          if (scheduleAttempts === 1) {
             return HttpResponse.json(
               {
                 code: "revision_conflict",
                 message: "State revision changed",
-                expectedRevision: 8,
+                expectedRevision,
                 currentRevision: 9,
               },
               { status: 409 },
@@ -244,58 +379,27 @@ describe("control area routes", () => {
           }
           return HttpResponse.json({
             changed: false,
-            revision: 9,
+            revision: expectedRevision + 1,
             event: null,
           });
         },
       ),
-    );
-    const snapshot = createTestControlSnapshot();
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(snapshot, refresh),
-    );
-    await user.type(screen.getByLabelText("New point ID"), "conflict-point");
-    fireEvent.change(screen.getByLabelText("UTC time"), {
-      target: { value: "16:00" },
-    });
-    await user.click(screen.getByRole("button", { name: "Add point" }));
-    user.rerenderState(controllerState({ ...snapshot, revision: 9 }, refresh));
-    await user.click(screen.getByRole("button", { name: "Save schedule" }));
-
-    expect(
-      await screen.findByText(/This draft began before controller revision 9/u),
-    ).toBeTruthy();
-    expect(requestBodies[0]).toMatchObject({ expectedRevision: 8 });
-    expect(screen.getByText("conflict-point")).toBeTruthy();
-    expect(refresh).toHaveBeenCalledOnce();
-
-    await user.click(
-      screen.getByRole("button", {
-        name: "Keep draft with refreshed revision",
+      http.put("http://localhost/api/throttles/light", async ({ request }) => {
+        const body = (await request.json()) as RecordedRequest["body"];
+        requests.push({
+          path: new URL(request.url).pathname,
+          body,
+        });
+        const expectedRevision = body.expectedRevision;
+        if (typeof expectedRevision !== "number") {
+          throw new Error("Multiplier request omitted expectedRevision");
+        }
+        return HttpResponse.json({
+          changed: false,
+          revision: expectedRevision + 1,
+          event: null,
+        });
       }),
-    );
-    await user.click(screen.getByRole("button", { name: "Save schedule" }));
-
-    await waitFor(() => expect(requestBodies).toHaveLength(2));
-    expect(requestBodies[1]).toMatchObject({ expectedRevision: 9 });
-    expect(refresh).toHaveBeenCalledTimes(2);
-  });
-
-  it("pins a schedule point on its first edit before blur", async () => {
-    let requestBody: object | null = null;
-    server.use(
-      http.put(
-        "http://localhost/api/channels/light-main/schedule",
-        async ({ request }) => {
-          requestBody = (await request.json()) as object;
-          return HttpResponse.json({
-            changed: false,
-            revision: 9,
-            event: null,
-          });
-        },
-      ),
     );
     const snapshot = createTestControlSnapshot();
     const refresh = vi.fn();
@@ -303,19 +407,110 @@ describe("control area routes", () => {
       "/control/lights",
       controllerState(snapshot, refresh),
     );
-    const percentage = screen.getByDisplayValue("60");
 
-    fireEvent.change(percentage, { target: { value: "65" } });
-    user.rerenderState(controllerState({ ...snapshot, revision: 9 }, refresh));
-    fireEvent.blur(percentage);
-    await user.click(screen.getByRole("button", { name: "Save schedule" }));
-
-    await waitFor(() =>
-      expect(requestBody).toMatchObject({ expectedRevision: 8 }),
+    fireEvent.change(
+      screen.getByLabelText("Main light selected point output"),
+      { target: { value: "65" } },
     );
+    await user.click(screen.getByRole("button", { name: "Apply point" }));
+    fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
+      target: { value: "73" },
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Save configuration" }),
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Keep local draft with refreshed revision",
+      }),
+    ).toBeTruthy();
+
+    user.rerenderState(controllerState({ ...snapshot, revision: 9 }, refresh));
+    await user.click(
+      screen.getByRole("button", {
+        name: "Keep local draft with refreshed revision",
+      }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save configuration" }),
+    );
+
+    await waitFor(() => expect(requests).toHaveLength(3));
+    expect(requests.map(({ path }) => path)).toEqual([
+      "/api/channels/light-main/schedule",
+      "/api/channels/light-main/schedule",
+      "/api/throttles/light",
+    ]);
+    expect(requests.map(({ body }) => body.expectedRevision)).toEqual([
+      8, 9, 10,
+    ]);
   });
 
-  it("keeps the device and revision captured when its dialog opened", async () => {
+  it("preserves a dirty schedule when a newer graph arrives until explicit acceptance", async () => {
+    const requests: RecordedRequest[] = [];
+    installConfigurationSaveHandlers(requests);
+    const snapshot = createTestControlSnapshot();
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(snapshot, vi.fn()),
+    );
+
+    fireEvent.change(
+      screen.getByLabelText("Main light selected point output"),
+      { target: { value: "65" } },
+    );
+    await user.click(screen.getByRole("button", { name: "Apply point" }));
+
+    const advanced: ControllerSnapshot = {
+      ...snapshot,
+      revision: 9,
+      schedules: snapshot.schedules.map((schedule) =>
+        schedule.channelId === "light-main"
+          ? {
+              ...schedule,
+              graphRevision: schedule.graphRevision + 1,
+              updatedAt: "2026-07-13T10:01:00.000Z",
+              points: schedule.points.map((point) =>
+                point.minuteOfDay === 720
+                  ? { ...point, percentage: 70 }
+                  : point,
+              ),
+            }
+          : schedule,
+      ),
+    };
+    user.rerenderState(controllerState(advanced, vi.fn()));
+
+    expect(
+      await screen.findByText(
+        /This schedule changed at controller revision 9/u,
+      ),
+    ).toBeTruthy();
+    expect(
+      (
+        screen.getByLabelText(
+          "Main light selected point output",
+        ) as HTMLInputElement
+      ).value,
+    ).toBe("65");
+    await user.click(
+      screen.getByRole("button", {
+        name: "Keep local draft with refreshed revision",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/This schedule changed at controller revision 9/u),
+      ).toBeNull(),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save configuration" }),
+    );
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]?.body.expectedRevision).toBe(9);
+  });
+
+  it("keeps the device and revision captured when its editor opens", async () => {
     let requestBody: object | null = null;
     server.use(
       http.patch(
@@ -336,19 +531,16 @@ describe("control area routes", () => {
       "/control/lights",
       controllerState(snapshot, refresh),
     );
+    const device = screen.getByRole("article", {
+      name: "ESP32 device device-main",
+    });
 
-    await user.click(
-      screen.getByRole("button", {
-        name: "Edit device-main configuration",
-      }),
-    );
+    await user.click(within(device).getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByLabelText("PWM frequency (Hz)"), {
       target: { value: "2000" },
     });
     user.rerenderState(controllerState({ ...snapshot, revision: 9 }, refresh));
-    await user.click(
-      screen.getByRole("button", { name: "Save configuration" }),
-    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() =>
       expect(requestBody).toEqual({
@@ -357,370 +549,6 @@ describe("control area routes", () => {
       }),
     );
     expect(refresh).toHaveBeenCalledOnce();
-  });
-
-  it("pins channel deletion when confirmation begins", async () => {
-    let requestBody: object | null = null;
-    server.use(
-      http.delete(
-        "http://localhost/api/channels/light-main",
-        async ({ request }) => {
-          requestBody = (await request.json()) as object;
-          return HttpResponse.json({
-            changed: false,
-            revision: 9,
-            event: null,
-          });
-        },
-      ),
-    );
-    const snapshot = createTestControlSnapshot();
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(snapshot, vi.fn()),
-    );
-
-    await user.click(
-      screen.getByRole("button", { name: "Delete channel Main light" }),
-    );
-    user.rerenderState(controllerState({ ...snapshot, revision: 9 }, vi.fn()));
-    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
-
-    await waitFor(() => expect(requestBody).toEqual({ expectedRevision: 8 }));
-  });
-
-  it("pins channel creation when its form opens", async () => {
-    let requestBody: object | null = null;
-    server.use(
-      http.post("http://localhost/api/channels", async ({ request }) => {
-        requestBody = (await request.json()) as object;
-        return HttpResponse.json({
-          changed: false,
-          revision: 9,
-          event: null,
-        });
-      }),
-    );
-    const snapshot = createTestControlSnapshot();
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(snapshot, vi.fn()),
-    );
-
-    await user.click(screen.getByRole("button", { name: "Create channel" }));
-    user.rerenderState(controllerState({ ...snapshot, revision: 9 }, vi.fn()));
-    await user.type(screen.getByLabelText("Channel ID"), "light-secondary");
-    await user.type(screen.getByLabelText("Channel name"), "Secondary light");
-    await user.click(
-      screen.getByRole("button", { name: "Create channel and schedule" }),
-    );
-
-    await waitFor(() =>
-      expect(requestBody).toMatchObject({ expectedRevision: 8 }),
-    );
-  });
-
-  it("pins a new mapping profile when its draft begins", async () => {
-    let requestBody: object | null = null;
-    server.use(
-      http.put(
-        "http://localhost/api/mapping-profiles/profile-new",
-        async ({ request }) => {
-          requestBody = (await request.json()) as object;
-          return HttpResponse.json({
-            changed: false,
-            revision: 9,
-            event: null,
-          });
-        },
-      ),
-    );
-    const snapshot = createTestControlSnapshot();
-    const refresh = vi.fn();
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(snapshot, refresh),
-    );
-    await user.type(screen.getByLabelText("New profile ID"), "profile-new");
-    await user.click(
-      screen.getByRole("button", { name: "Create profile draft" }),
-    );
-
-    user.rerenderState(controllerState({ ...snapshot, revision: 9 }, refresh));
-    await user.click(
-      screen.getByRole("button", { name: "Save mapping profile" }),
-    );
-
-    await waitFor(() =>
-      expect(requestBody).toMatchObject({ expectedRevision: 8 }),
-    );
-  });
-
-  it("syncs untouched values but preserves first-edit revisions", async () => {
-    let renameBody: object | null = null;
-    let throttleBody: object | null = null;
-    let mappingBody: object | null = null;
-    server.use(
-      http.patch(
-        "http://localhost/api/channels/light-main",
-        async ({ request }) => {
-          renameBody = (await request.json()) as object;
-          return HttpResponse.json({
-            changed: false,
-            revision: 10,
-            event: null,
-          });
-        },
-      ),
-      http.put("http://localhost/api/throttles/light", async ({ request }) => {
-        throttleBody = (await request.json()) as object;
-        return HttpResponse.json({
-          changed: false,
-          revision: 10,
-          event: null,
-        });
-      }),
-      http.put(
-        "http://localhost/api/mapping-profiles/profile-main",
-        async ({ request }) => {
-          mappingBody = (await request.json()) as object;
-          return HttpResponse.json({
-            changed: false,
-            revision: 10,
-            event: null,
-          });
-        },
-      ),
-    );
-    const snapshot = createTestControlSnapshot();
-    const refresh = vi.fn();
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(snapshot, refresh),
-    );
-    const advanced: ControllerSnapshot = {
-      ...snapshot,
-      revision: 9,
-      channels: snapshot.channels.map((channel) =>
-        channel.id === "light-main"
-          ? {
-              ...channel,
-              name: "External light",
-              updatedAt: "2026-07-13T10:01:00.000Z",
-            }
-          : channel,
-      ),
-      throttles: snapshot.throttles.map((throttle) =>
-        throttle.typeKey === "light"
-          ? {
-              ...throttle,
-              percentage: 71,
-              updatedAt: "2026-07-13T10:01:00.000Z",
-            }
-          : throttle,
-      ),
-    };
-
-    user.rerenderState(controllerState(advanced, refresh));
-    await waitFor(() => {
-      expect(
-        (screen.getByLabelText("Rename channel") as HTMLInputElement).value,
-      ).toBe("External light");
-      expect(
-        (screen.getByLabelText("Throttle percentage") as HTMLInputElement)
-          .value,
-      ).toBe("71");
-    });
-
-    fireEvent.change(screen.getByLabelText("Rename channel"), {
-      target: { value: "Browser light" },
-    });
-    fireEvent.change(screen.getByLabelText("Throttle percentage"), {
-      target: { value: "75" },
-    });
-    fireEvent.change(screen.getByLabelText("Profile name"), {
-      target: { value: "Browser profile" },
-    });
-    const newer: ControllerSnapshot = {
-      ...advanced,
-      revision: 10,
-      channels: advanced.channels.map((channel) =>
-        channel.id === "light-main"
-          ? {
-              ...channel,
-              name: "Second external light",
-              updatedAt: "2026-07-13T10:02:00.000Z",
-            }
-          : channel,
-      ),
-      throttles: advanced.throttles.map((throttle) =>
-        throttle.typeKey === "light"
-          ? {
-              ...throttle,
-              percentage: 68,
-              updatedAt: "2026-07-13T10:02:00.000Z",
-            }
-          : throttle,
-      ),
-    };
-    user.rerenderState(controllerState(newer, refresh));
-
-    expect(
-      (screen.getByLabelText("Rename channel") as HTMLInputElement).value,
-    ).toBe("Browser light");
-    expect(
-      (screen.getByLabelText("Throttle percentage") as HTMLInputElement).value,
-    ).toBe("75");
-    await user.click(screen.getByRole("button", { name: "Rename" }));
-    await user.click(screen.getByRole("button", { name: "Save throttle" }));
-    await user.click(
-      screen.getByRole("button", { name: "Save mapping profile" }),
-    );
-
-    await waitFor(() => {
-      expect(renameBody).toMatchObject({ expectedRevision: 9 });
-      expect(throttleBody).toMatchObject({ expectedRevision: 9 });
-      expect(mappingBody).toMatchObject({ expectedRevision: 9 });
-    });
-  });
-
-  it("never carries a mapping draft between profiles with equal timestamps", async () => {
-    const snapshot = createTestControlSnapshot();
-    const primary = snapshot.mappingProfiles[0];
-    if (primary === undefined) throw new Error("Test snapshot has no profile");
-    const withSecondProfile: ControllerSnapshot = {
-      ...snapshot,
-      mappingProfiles: [
-        primary,
-        {
-          ...primary,
-          id: "profile-secondary",
-          name: "Secondary rack",
-          deviceNamePrefix: "secondary",
-          mappings: [],
-        },
-      ],
-    };
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(withSecondProfile, vi.fn()),
-    );
-
-    fireEvent.change(screen.getByLabelText("Profile name"), {
-      target: { value: "Dirty primary draft" },
-    });
-    await user.selectOptions(
-      screen.getByLabelText("Profile to edit"),
-      "profile-secondary",
-    );
-
-    expect(
-      (screen.getByLabelText("Profile name") as HTMLInputElement).value,
-    ).toBe("Secondary rack");
-    expect(
-      (screen.getByLabelText("Device name prefix") as HTMLInputElement).value,
-    ).toBe("secondary");
-  });
-
-  it("uses the controller revision for live schedule graph conflicts", async () => {
-    let requestBody: object | null = null;
-    server.use(
-      http.put(
-        "http://localhost/api/channels/light-main/schedule",
-        async ({ request }) => {
-          requestBody = (await request.json()) as object;
-          return HttpResponse.json({
-            changed: false,
-            revision: 9,
-            event: null,
-          });
-        },
-      ),
-    );
-    const snapshot = createTestControlSnapshot();
-    const refresh = vi.fn();
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(snapshot, refresh),
-    );
-    await user.type(screen.getByLabelText("New point ID"), "live-conflict");
-    fireEvent.change(screen.getByLabelText("UTC time"), {
-      target: { value: "16:00" },
-    });
-    await user.click(screen.getByRole("button", { name: "Add point" }));
-    const advanced: ControllerSnapshot = {
-      ...snapshot,
-      revision: 9,
-      schedules: snapshot.schedules.map((schedule) =>
-        schedule.channelId === "light-main"
-          ? {
-              ...schedule,
-              graphRevision: 77,
-              updatedAt: "2026-07-13T10:01:00.000Z",
-            }
-          : schedule,
-      ),
-    };
-
-    user.rerenderState(controllerState(advanced, refresh));
-
-    expect(
-      await screen.findByText(/This draft began before controller revision 9/u),
-    ).toBeTruthy();
-    expect(screen.queryByText(/controller revision 77/u)).toBeNull();
-    expect(screen.getByText("live-conflict")).toBeTruthy();
-    await user.click(
-      screen.getByRole("button", {
-        name: "Keep draft with refreshed revision",
-      }),
-    );
-    await user.click(screen.getByRole("button", { name: "Save schedule" }));
-
-    await waitFor(() =>
-      expect(requestBody).toMatchObject({ expectedRevision: 9 }),
-    );
-  });
-
-  it("refuses to start a new mapping draft with an existing profile ID", async () => {
-    const user = renderControlArea(
-      "/control/lights",
-      controllerState(createTestControlSnapshot(), vi.fn()),
-    );
-
-    await user.type(screen.getByLabelText("New profile ID"), "profile-main");
-    await user.click(
-      screen.getByRole("button", { name: "Create profile draft" }),
-    );
-
-    expect(
-      screen.getByText(
-        "Mapping profile profile-main already exists. Select it from the profile list instead.",
-      ),
-    ).toBeTruthy();
-  });
-
-  it("shows an actionable outdated-firmware error on the device card", () => {
-    const original = createTestControlSnapshot();
-    const snapshot: ControllerSnapshot = {
-      ...original,
-      devices: original.devices.map((device) => ({
-        ...device,
-        status: "error",
-        reported: { ...device.reported, firmwareVersion: "3.2w" },
-        lastError: {
-          code: "firmware_outdated",
-          message: "Firmware 3.2w is outdated; install 4.0.0",
-        },
-      })),
-    };
-
-    renderControlArea("/control/lights", controllerState(snapshot, vi.fn()));
-
-    expect(
-      screen.getAllByText(
-        "firmware_outdated: Firmware 3.2w is outdated; install 4.0.0",
-      ),
-    ).toHaveLength(2);
   });
 
   it("shows loading and retryable snapshot failures", async () => {
@@ -736,9 +564,7 @@ describe("control area routes", () => {
       retry: vi.fn(),
     });
     expect(
-      screen.getByText(
-        "Loading the authoritative snapshot and live revision stream…",
-      ),
+      screen.getByText(/Loading the authoritative snapshot/u),
     ).toBeTruthy();
     loading.unmount();
 
@@ -767,26 +593,67 @@ interface RecordedRequest {
   readonly body: Record<string, object | string | number | boolean | null>;
 }
 
-function installMutationHandlers(requests: RecordedRequest[]): void {
+function installConfigurationSaveHandlers(requests: RecordedRequest[]): void {
   const handler = async ({ request }: { readonly request: Request }) => {
+    const body = (await request.json()) as RecordedRequest["body"];
     requests.push({
       path: new URL(request.url).pathname,
-      body: (await request.json()) as RecordedRequest["body"],
+      body,
     });
-    return HttpResponse.json({ changed: false, revision: 8, event: null });
+    const expectedRevision = body.expectedRevision;
+    if (typeof expectedRevision !== "number") {
+      throw new Error("Configuration request omitted expectedRevision");
+    }
+    return HttpResponse.json({
+      changed: false,
+      revision: expectedRevision + 1,
+      event: null,
+    });
   };
   server.use(
-    http.post("http://localhost/api/channels", handler),
-    http.patch("http://localhost/api/channels/light-main", handler),
     http.put("http://localhost/api/channels/light-main/schedule", handler),
     http.put("http://localhost/api/throttles/light", handler),
-    http.put("http://localhost/api/mapping-profiles/profile-main", handler),
-    http.patch(
-      "http://localhost/api/devices/device-main/configuration",
-      handler,
-    ),
-    http.delete("http://localhost/api/channels/light-main", handler),
   );
+}
+
+function withAccentLight(snapshot: ControllerSnapshot): ControllerSnapshot {
+  const sourceChannel = required(
+    snapshot.channels.find((channel) => channel.id === "light-main"),
+    "main light channel",
+  );
+  const sourceSchedule = required(
+    snapshot.schedules.find(
+      (schedule) => schedule.channelId === sourceChannel.id,
+    ),
+    "main light schedule",
+  );
+  const channel: Channel = {
+    ...sourceChannel,
+    id: "light-accent",
+    name: "Accent light",
+    color: "#a84aa7",
+    displayOrder: 1,
+  };
+  const schedule: ScheduleGraph = {
+    ...sourceSchedule,
+    id: channel.id,
+    channelId: channel.id,
+    name: "Accent light UTC schedule",
+    points: sourceSchedule.points.map((point) => ({
+      ...point,
+      id: point.id.replace("light-main", "light-accent"),
+    })),
+  };
+  return {
+    ...snapshot,
+    channels: [...snapshot.channels, channel],
+    schedules: [...snapshot.schedules, schedule],
+  };
+}
+
+function required<T>(value: T | undefined, label: string): T {
+  if (value === undefined) throw new Error(`Missing ${label}`);
+  return value;
 }
 
 function controllerState(
