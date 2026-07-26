@@ -20,11 +20,18 @@ test("the open UI reconnects after controller restart and replays persisted chan
   page,
   stack,
 }) => {
+  const beforeRestart = await stack.fetchSnapshot();
+  const mainChannel = beforeRestart.channels.find(
+    (channel) => channel.id === "light-main",
+  );
+  if (mainChannel === undefined) {
+    throw new Error("The production E2E seed is missing light-main");
+  }
   await page.goto("/control/lights");
-  const mainCard = page
-    .locator("article.channel-card")
-    .filter({ hasText: "light-main" });
-  await expect(mainCard).toBeVisible();
+  const channelList = page.getByRole("list", { name: "Schedule channels" });
+  await expect(
+    channelList.getByRole("listitem").filter({ hasText: mainChannel.name }),
+  ).toBeVisible();
 
   audit.allowExpectedNetworkErrors();
   await stack.restartController();
@@ -40,10 +47,9 @@ test("the open UI reconnects after controller restart and replays persisted chan
   expect(response.status).toBe(200);
 
   await expect(
-    page
-      .locator("article.channel-card")
-      .filter({ hasText: "light-main" })
-      .getByRole("heading", { name: "Recovered after restart" }),
+    channelList
+      .getByRole("listitem")
+      .filter({ hasText: "Recovered after restart" }),
   ).toBeVisible({ timeout: 15_000 });
 });
 
@@ -53,16 +59,23 @@ test("an offline browser marks state stale, then reconnects and catches up witho
   page,
   stack,
 }) => {
+  const beforeDisconnect = await stack.fetchSnapshot();
+  const pumpChannel = beforeDisconnect.channels.find(
+    (channel) => channel.id === "pump-main",
+  );
+  if (pumpChannel === undefined) {
+    throw new Error("The production E2E seed is missing pump-main");
+  }
   await page.goto("/control/pumps");
-  const pumpCard = page
-    .locator("article.channel-card")
-    .filter({ hasText: "pump-main" });
-  await expect(pumpCard).toBeVisible();
+  const channelList = page.getByRole("list", { name: "Schedule channels" });
+  await expect(
+    channelList.getByRole("listitem").filter({ hasText: pumpChannel.name }),
+  ).toBeVisible();
 
   audit.allowExpectedNetworkErrors();
   await context.setOffline(true);
   await expect(page.locator(".stale-banner")).toContainText(
-    /Controller state is (?:error|reconnecting|stale).*This view may be stale/su,
+    /Controller state is (?:error|reconnecting|stale)\. This view may be stale;/u,
   );
 
   const snapshot = await stack.waitForSettled();
@@ -78,10 +91,9 @@ test("an offline browser marks state stale, then reconnects and catches up witho
 
   await context.setOffline(false);
   await expect(
-    page
-      .locator("article.channel-card")
-      .filter({ hasText: "pump-main" })
-      .getByRole("heading", { name: "Pump changed while disconnected" }),
+    channelList
+      .getByRole("listitem")
+      .filter({ hasText: "Pump changed while disconnected" }),
   ).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(".stale-banner")).toHaveCount(0);
 });
@@ -101,17 +113,24 @@ test("fake ESP persistent state survives actor restart", async ({
   const primaryDevice = page
     .locator("article.device-card")
     .filter({ hasText: "A1B2C3D4" });
-  await expect(primaryDevice).toContainText("online");
+  await expect(primaryDevice).toContainText("Online");
 
   await stack.restartFakeDevices();
   await expect(
     page.locator("article.device-card").filter({ hasText: "A1B2C3D4" }),
-  ).toContainText("online", { timeout: 10_000 });
-  if (primaryBefore.reported.name !== null) {
-    await expect(
-      page.locator("article.device-card").filter({ hasText: "A1B2C3D4" }),
-    ).toContainText(`Reported: ${primaryBefore.reported.name}`);
-  }
+  ).toContainText("Online", { timeout: 10_000 });
+  await expect
+    .poll(async () => {
+      const current = await stack.fetchSnapshot();
+      return current.devices.find(
+        (device) => device.hardwareId === primaryBefore.hardwareId,
+      )?.lastSeenAt;
+    })
+    .not.toBe(primaryBefore.lastSeenAt);
+  const primaryAfter = (await stack.fetchSnapshot()).devices.find(
+    (device) => device.hardwareId === primaryBefore.hardwareId,
+  );
+  expect(primaryAfter?.reported).toEqual(primaryBefore.reported);
 });
 
 test("controller and fake ESP clients recover after a real broker restart", async ({
@@ -131,13 +150,9 @@ test("controller and fake ESP clients recover after a real broker restart", asyn
   const deviceCard = page
     .locator("article.device-card")
     .filter({ hasText: "A1B2C3D4" });
-  await deviceCard
-    .getByRole("button", {
-      name: `Edit ${primary.desired.name} configuration`,
-    })
-    .click();
+  await deviceCard.getByRole("button", { name: "Edit", exact: true }).click();
   const dialog = page.getByRole("dialog", {
-    name: `Configure ${primary.desired.name}`,
+    name: `Edit ${primary.desired.name}`,
   });
   await dialog.getByLabel("PWM frequency (Hz)").fill("1400");
   const baselineOperationIds = new Set(
@@ -145,7 +160,7 @@ test("controller and fake ESP clients recover after a real broker restart", asyn
       (operation) => operation.id,
     ),
   );
-  await dialog.getByRole("button", { name: "Save configuration" }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect
     .poll(
@@ -185,13 +200,9 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
     const deviceCard = page
       .locator("article.device-card")
       .filter({ hasText: "A1B2C3D4" });
-    await deviceCard
-      .getByRole("button", {
-        name: `Edit ${primary.desired.name} configuration`,
-      })
-      .click();
+    await deviceCard.getByRole("button", { name: "Edit", exact: true }).click();
     const dialog = page.getByRole("dialog", {
-      name: `Configure ${primary.desired.name}`,
+      name: `Edit ${primary.desired.name}`,
     });
     await dialog.getByLabel("PWM frequency (Hz)").fill("1200");
     const preSaveSnapshot = await stack.fetchSnapshot();
@@ -206,7 +217,7 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
     stack.setFakeResponseFaults("main", {
       dropNextResponseForCommand: "e",
     });
-    await dialog.getByRole("button", { name: "Save configuration" }).click();
+    await dialog.getByRole("button", { name: "Save", exact: true }).click();
 
     const settled = await stack.waitForSettled();
     const preReconciliationOperationIds = new Set(
@@ -228,9 +239,13 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
       throw new Error("The unknown configuration operation is not terminal");
     }
 
-    await expect(page.locator(".control-page-heading")).toContainText(
-      `revision ${settled.revision}`,
-    );
+    await page.getByRole("link", { name: "Operations" }).click();
+    await expect(
+      page.getByRole("heading", {
+        level: 1,
+        name: "Device operation outcomes",
+      }),
+    ).toBeVisible();
     const operationItem = page
       .locator(".operation-list > li")
       .filter({ hasText: unknownOperation.id });
@@ -276,12 +291,7 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
       }
     });
     await reconcile.click();
-    await expect(
-      operationDetails.getByText(
-        /Reconciliation recorded at authoritative revision \d+\. The original device outcome remains unknown\./u,
-      ),
-    ).toBeVisible();
-    expect(reconciliationRequests).toBe(1);
+    await expect.poll(() => reconciliationRequests).toBe(1);
 
     const completedAtMs = Date.parse(unknownOperation.completedAt);
     await expect
@@ -308,6 +318,7 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
         );
       })
       .toBe(true);
+    await expect(operationItem).toHaveCount(0);
 
     await expect
       .poll(

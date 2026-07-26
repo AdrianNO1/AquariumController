@@ -72,17 +72,9 @@ export function projectControlArea(
       )
       .map((profile) => profile.id),
   );
-  const profilesById = new Map(
-    snapshot.mappingProfiles.map((profile) => [profile.id, profile]),
+  const devices = [...snapshot.devices].sort((left, right) =>
+    compareIdentifiers(left.id, right.id),
   );
-  const devices = snapshot.devices
-    .filter((device) => {
-      if (device.mappingProfileId === null) return true;
-      if (relevantProfileIds.has(device.mappingProfileId)) return true;
-      const profile = profilesById.get(device.mappingProfileId);
-      return profile === undefined || profile.mappings.length === 0;
-    })
-    .sort((left, right) => compareIdentifiers(left.id, right.id));
   const deviceIds = new Set(devices.map((device) => device.id));
   const overrides = snapshot.overrides.filter((override) =>
     targetKeys.has(`${override.targetType}:${override.targetId}`),

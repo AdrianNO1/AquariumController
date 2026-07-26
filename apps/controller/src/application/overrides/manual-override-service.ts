@@ -191,6 +191,7 @@ export class ManualOverrideService implements ManualOverrideCommandService {
     this.#assertAccepting();
     const parsed = startManualOverrideRequestSchema.parse(request);
     const requestedAtMs = this.#readNowMs();
+    const durationMs = parsed.durationSeconds * 1_000;
     const prepared = await this.#repository.createStart({
       overrideId: this.#idGenerator("override"),
       operationId: this.#idGenerator("operation"),
@@ -198,7 +199,7 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       target: parsed.target,
       valuePercentage: parsed.valuePercentage,
       requestedAtMs,
-      expiresAtMs: safeAdd(requestedAtMs, MANUAL_OVERRIDE_DURATION_MS),
+      expiresAtMs: safeAdd(requestedAtMs, durationMs),
       deadlineAtMs: safeAdd(requestedAtMs, this.#operationTimeoutMs),
     });
     this.#startBackgroundAttempt(prepared);
@@ -212,14 +213,42 @@ export class ManualOverrideService implements ManualOverrideCommandService {
     this.#assertAccepting();
     const parsed = extendManualOverrideRequestSchema.parse(request);
     const atMs = this.#readNowMs();
+    const durationMs = await this.#readOriginalDurationMs(overrideId);
     const result = await this.#repository.extend({
       overrideId,
       expectedRevision: parsed.expectedRevision,
       atMs,
-      expiresAtMs: safeAdd(atMs, MANUAL_OVERRIDE_DURATION_MS),
+      expiresAtMs: safeAdd(atMs, durationMs),
     });
     await this.#rearmTimer();
     return stateResponse(result);
+  }
+
+  async #readOriginalDurationMs(overrideId: string): Promise<number> {
+    const override = await this.#repository.getOverride(overrideId);
+    if (override.operationId === null) {
+      throw new InvalidManualOverrideTransitionError(
+        `Override ${overrideId} has no start operation`,
+      );
+    }
+    const operation = await this.#repository.getManualOperation(
+      override.operationId,
+    );
+    if (
+      operation.request.kind !== "manual_override_start" ||
+      operation.request.overrideId !== override.id
+    ) {
+      throw new InvalidManualOverrideTransitionError(
+        `Override ${overrideId} no longer references its start operation`,
+      );
+    }
+    const durationMs = operation.request.expiresAtMs - operation.requestedAtMs;
+    if (!Number.isSafeInteger(durationMs) || durationMs <= 0) {
+      throw new RangeError(
+        `Override ${overrideId} has an invalid original duration`,
+      );
+    }
+    return durationMs;
   }
 
   async cancelOverride(

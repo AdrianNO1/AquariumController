@@ -224,6 +224,7 @@ async function insertImportPlan(
         plan.channels.map((channel) => ({
           id: requiredMapValue(channelIds, channel.name),
           name: channel.name,
+          color: channel.color,
           kind: channel.kind,
           throttle_id: requiredMapValue(throttleIds, channel.kind),
           display_order: channel.displayOrder,

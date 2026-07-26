@@ -32,6 +32,7 @@ describe("manual override HTTP routes", () => {
         expectedRevision: 0,
         target: { targetType: "channel", targetId: "channel-blue" },
         valuePercentage: 101,
+        durationSeconds: 120,
       },
     });
     expect(invalid.statusCode).toBe(400);
@@ -44,6 +45,7 @@ describe("manual override HTTP routes", () => {
         expectedRevision: 0,
         target: { targetType: "channel", targetId: "channel-blue" },
         valuePercentage: 50,
+        durationSeconds: 120,
       },
     });
     expect(unavailable.statusCode).toBe(503);
@@ -66,6 +68,7 @@ describe("manual override HTTP routes", () => {
         expectedRevision: 4,
         target: { targetType: "channel", targetId: "channel-blue" },
         valuePercentage: 50,
+        durationSeconds: 300,
       },
     });
     expect(start.statusCode).toBe(200);
@@ -73,6 +76,7 @@ describe("manual override HTTP routes", () => {
       expectedRevision: 4,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 50,
+      durationSeconds: 300,
     });
 
     for (const action of ["extend", "cancel", "reconcile"] as const) {

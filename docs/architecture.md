@@ -196,7 +196,7 @@ the application:
 Firmware 4.1 accepts
 `request:<requestId>|<semicolon-separated commands>` and echoes the request ID
 in its structured response. The transport therefore maintains one FIFO lane
-per ESP, permits one response-waiting operation per ESP, and runs at most four
+per ESP, permits one response-waiting operation per ESP, and runs at most sixteen
 device lanes concurrently by default. Interactive configuration and override
 work is selected before queued background schedule, refresh, and time-sync
 work. Responses are routed by request ID and then checked against the expected

@@ -111,6 +111,7 @@ describe("manual override API", () => {
         expectedRevision: 8,
         target: { targetType: "output", targetId: "moonlight" },
         valuePercentage: 42.5,
+        durationSeconds: 600,
       }),
     ).resolves.toEqual(startResponse);
     await expect(
@@ -130,6 +131,7 @@ describe("manual override API", () => {
           expectedRevision: 8,
           target: { targetType: "output", targetId: "moonlight" },
           valuePercentage: 42.5,
+          durationSeconds: 600,
         },
       },
       {
@@ -169,6 +171,7 @@ describe("manual override API", () => {
         expectedRevision: 8,
         target: { targetType: "channel", targetId: "light-main" },
         valuePercentage: 50,
+        durationSeconds: 120,
       }),
     ).rejects.toMatchObject({
       status: 409,

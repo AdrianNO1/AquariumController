@@ -514,12 +514,14 @@ async function seedState(paths: E2ePaths): Promise<void> {
       {
         id: "light-main",
         name: "Main light",
+        color: "#6f5bd5",
         typeKey: "light",
         throttleId: "throttle-light",
       },
       {
         id: "pump-main",
         name: "Return pump",
+        color: "#13a4c7",
         typeKey: "pump",
         throttleId: "throttle-pump",
       },

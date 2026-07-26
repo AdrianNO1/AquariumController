@@ -20,6 +20,7 @@ import {
   replaceScheduleRequestSchema,
   setDeviceEnabledRequestSchema,
   throttleParamsSchema,
+  updateChannelRequestSchema,
   updateThrottleRequestSchema,
 } from "@aquarium/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -206,11 +207,16 @@ export function registerConfigurationRoutes(
     "/api/channels/:channelId",
     safeRoute(app, async (request, reply) => {
       const { channelId } = parseRequest(channelParamsSchema, request.params);
-      const body = parseRequest(renameChannelRequestSchema, request.body);
-      const result = await configurationService(dependencies).renameChannel(
-        channelId,
-        body,
-      );
+      const update = updateChannelRequestSchema.safeParse(request.body);
+      const result = update.success
+        ? await configurationService(dependencies).updateChannel(
+            channelId,
+            update.data,
+          )
+        : await configurationService(dependencies).renameChannel(
+            channelId,
+            parseRequest(renameChannelRequestSchema, request.body),
+          );
       return reply.code(200).send(mutationResultSchema.parse(result));
     }),
   );
@@ -271,6 +277,24 @@ export function registerConfigurationRoutes(
       const result = await configurationService(
         dependencies,
       ).replaceMappingProfile(profileId, body);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.delete(
+    "/api/mapping-profiles/:profileId",
+    safeRoute(app, async (request, reply) => {
+      const { profileId } = parseRequest(
+        mappingProfileParamsSchema,
+        request.params,
+      );
+      const { expectedRevision } = parseRequest(
+        expectedRevisionSchema,
+        request.body,
+      );
+      const result = await configurationService(
+        dependencies,
+      ).deleteMappingProfile(profileId, expectedRevision);
       return reply.code(200).send(mutationResultSchema.parse(result));
     }),
   );

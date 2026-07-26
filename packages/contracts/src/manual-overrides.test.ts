@@ -12,11 +12,13 @@ describe("manual override contracts", () => {
         expectedRevision: 7,
         target: { targetType: "channel", targetId: "channel-blue" },
         valuePercentage: 62.5,
+        durationSeconds: 300,
       }),
     ).toEqual({
       expectedRevision: 7,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 62.5,
+      durationSeconds: 300,
     });
 
     expect(
@@ -24,9 +26,33 @@ describe("manual override contracts", () => {
         expectedRevision: 7,
         target: { targetType: "channel", targetId: "channel-blue" },
         valuePercentage: 62.5,
+        durationSeconds: 300,
         expiresAt: "2026-07-13T12:00:00.000Z",
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts only safe override durations from one through ten minutes", () => {
+    for (const durationSeconds of [60, 120, 300, 600]) {
+      expect(
+        startManualOverrideRequestSchema.safeParse({
+          expectedRevision: 7,
+          target: { targetType: "channel", targetId: "channel-blue" },
+          valuePercentage: 62.5,
+          durationSeconds,
+        }).success,
+      ).toBe(true);
+    }
+    for (const durationSeconds of [59, 600.5, 601]) {
+      expect(
+        startManualOverrideRequestSchema.safeParse({
+          expectedRevision: 7,
+          target: { targetType: "channel", targetId: "channel-blue" },
+          valuePercentage: 62.5,
+          durationSeconds,
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it("requires the returned override to reference its coordinator operation", () => {

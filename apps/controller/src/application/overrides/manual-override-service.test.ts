@@ -30,12 +30,13 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 80,
+      durationSeconds: 300,
     });
     expect(started).toMatchObject({
       override: {
         id: "override-1",
         status: "pending",
-        expiresAt: new Date(130_000).toISOString(),
+        expiresAt: new Date(310_000).toISOString(),
       },
       operation: {
         id: "operation-2",
@@ -61,7 +62,7 @@ describe("manual override service", () => {
     expect(extended).toMatchObject({
       override: {
         status: "active",
-        expiresAt: new Date(180_000).toISOString(),
+        expiresAt: new Date(360_000).toISOString(),
       },
       mutation: { changed: true, revision: 4 },
     });
@@ -97,6 +98,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "output", targetId: "output-standalone" },
       valuePercentage: 100,
+      durationSeconds: 120,
     });
     await waitForOverrideStatus(context.repository, "override-1", "active");
 
@@ -138,6 +140,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 70,
+      durationSeconds: 120,
     });
     await waitForOperationStatus(
       context.repository,
@@ -184,6 +187,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 70,
+      durationSeconds: 120,
     });
     await waitForOperationStatus(
       context.repository,
@@ -228,6 +232,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 70,
+      durationSeconds: 120,
     });
     await waitForOperationStatus(
       context.repository,
@@ -265,6 +270,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 70,
+      durationSeconds: 120,
     });
     await waitForOperationStatus(
       context.repository,
@@ -328,6 +334,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 70,
+      durationSeconds: 120,
     });
     await waitForOperationStatus(
       context.repository,
@@ -377,6 +384,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 70,
+      durationSeconds: 120,
     });
     await vi.waitFor(() =>
       expect(context.commands.calls.map(({ deviceId }) => deviceId)).toEqual([
@@ -408,6 +416,7 @@ describe("manual override service", () => {
       expectedRevision: 0,
       target: { targetType: "channel", targetId: "channel-blue" },
       valuePercentage: 40,
+      durationSeconds: 120,
     });
     await waitForOverrideStatus(context.repository, "override-1", "active");
     expect(context.commands.calls).toHaveLength(1);

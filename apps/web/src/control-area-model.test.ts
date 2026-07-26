@@ -21,9 +21,13 @@ describe("projectControlArea", () => {
     expect(model.throttle?.id).toBe("throttle-light");
     expect(model.mappingProfiles).toHaveLength(2);
     expect([...model.relevantProfileIds]).toEqual(["profile-main"]);
-    expect(model.devices.map((device) => device.id)).toEqual(["device-main"]);
+    expect(model.devices.map((device) => device.id)).toEqual([
+      "device-main",
+      "device-pump",
+    ]);
     expect(model.operations.map((operation) => operation.id)).toEqual([
       "operation-main",
+      "operation-pump",
       "operation-override",
     ]);
     expect(model.overrides.map((override) => override.id)).toEqual([
@@ -36,11 +40,14 @@ describe("projectControlArea", () => {
     expect(model).toMatchObject({
       area: { slug: "qt4", typeKey: "qt4" },
       channels: [],
-      devices: [],
     });
+    expect(model?.devices.map(({ id }) => id)).toEqual([
+      "device-main",
+      "device-pump",
+    ]);
   });
 
-  it("keeps an unmapped device visible so it can be excluded or recovered", () => {
+  it("shows every known device, including unrelated and unmapped devices", () => {
     const snapshot = controlSnapshot();
     const model = projectControlArea(
       controllerSnapshotSchema.parse({
@@ -52,6 +59,7 @@ describe("projectControlArea", () => {
 
     expect(model?.devices.map(({ id }) => id)).toEqual([
       "device-main",
+      "device-pump",
       "device-unassigned",
     ]);
   });
@@ -151,6 +159,7 @@ function channel(
   return {
     id,
     name,
+    color: typeKey === "light" ? "#13a4c7" : "#5caf62",
     typeKey,
     throttleId,
     displayOrder,

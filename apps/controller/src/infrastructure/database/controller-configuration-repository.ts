@@ -17,6 +17,7 @@ import {
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   setDeviceEnabledRequestSchema,
+  updateChannelRequestSchema,
   updateThrottleRequestSchema,
   controlTypeKeySchema,
   type AlertRule,
@@ -32,6 +33,7 @@ import {
   type ReplaceScheduleRequest,
   type SchedulePoint,
   type SetDeviceEnabledRequest,
+  type UpdateChannelRequest,
   type UpdateThrottleRequest,
 } from "@aquarium/contracts";
 import {
@@ -375,6 +377,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
         if (existing !== undefined) {
           if (
             existing.name === request.name &&
+            existing.color === request.color &&
             existing.kind === request.typeKey &&
             existing.throttle_id === request.throttleId &&
             existing.display_order === request.displayOrder &&
@@ -412,6 +415,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
           .values({
             id: request.id,
             name: request.name,
+            color: request.color,
             kind: request.typeKey,
             throttle_id: request.throttleId,
             display_order: request.displayOrder,
@@ -484,12 +488,32 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
   ): Promise<MutationResult> {
     const channelId = identifierSchema.parse(rawChannelId);
     const request = renameChannelRequestSchema.parse(rawRequest);
+    return this.commitChannelUpdate(channelId, request);
+  }
+
+  async updateChannel(
+    rawChannelId: string,
+    rawRequest: UpdateChannelRequest,
+  ): Promise<MutationResult> {
+    const channelId = identifierSchema.parse(rawChannelId);
+    const request = updateChannelRequestSchema.parse(rawRequest);
+    return this.commitChannelUpdate(channelId, request);
+  }
+
+  private commitChannelUpdate(
+    channelId: string,
+    request: {
+      readonly expectedRevision: number;
+      readonly name: string;
+      readonly color?: string;
+    },
+  ): Promise<MutationResult> {
     return this.commitMutation(
       "channel",
       channelId,
       "updated",
       request.expectedRevision,
-      `Rename channel ${channelId}`,
+      `Update channel ${channelId}`,
       async (transaction) => {
         const channel = await transaction
           .selectFrom("channels")
@@ -499,17 +523,34 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
         if (channel === undefined) {
           throw new ConfigurationNotFoundError("channel", channelId);
         }
-        if (channel.name === request.name) return false;
-        await this.assertChannelNameAvailable(
-          transaction,
-          request.name,
-          channelId,
-        );
+        const nameChanged = channel.name !== request.name;
+        const colorChanged =
+          request.color !== undefined && channel.color !== request.color;
+        if (!nameChanged && !colorChanged) return false;
+        if (nameChanged) {
+          await this.assertChannelNameAvailable(
+            transaction,
+            request.name,
+            channelId,
+          );
+        }
+        const nowMs = assertTime(this.#nowMs());
         await transaction
           .updateTable("channels")
-          .set({ name: request.name, updated_at_ms: assertTime(this.#nowMs()) })
+          .set({
+            name: request.name,
+            ...(request.color === undefined ? {} : { color: request.color }),
+            updated_at_ms: nowMs,
+          })
           .where("id", "=", channelId)
           .executeTakeFirstOrThrow();
+        if (nameChanged) {
+          await transaction
+            .updateTable("schedules")
+            .set({ name: request.name, updated_at_ms: nowMs })
+            .where("channel_id", "=", channelId)
+            .executeTakeFirstOrThrow();
+        }
         return true;
       },
     );
@@ -875,6 +916,45 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
             )
             .execute();
         }
+        return true;
+      },
+    );
+  }
+
+  async deleteMappingProfile(
+    rawProfileId: string,
+    rawExpectedRevision: number,
+  ): Promise<MutationResult> {
+    const profileId =
+      mappingProfileParamsSchema.shape.profileId.parse(rawProfileId);
+    const { expectedRevision } = expectedRevisionSchema.parse({
+      expectedRevision: rawExpectedRevision,
+    });
+    return this.commitMutation(
+      "mapping_profile",
+      profileId,
+      "deleted",
+      expectedRevision,
+      `Delete mapping profile ${profileId}`,
+      async (transaction) => {
+        const profile = await transaction
+          .selectFrom("mapping_profiles")
+          .select("id")
+          .where("id", "=", profileId)
+          .executeTakeFirst();
+        if (profile === undefined) {
+          throw new ConfigurationNotFoundError("mapping_profile", profileId);
+        }
+        const nowMs = assertTime(this.#nowMs());
+        await transaction
+          .updateTable("devices")
+          .set({ mapping_profile_id: null, updated_at_ms: nowMs })
+          .where("mapping_profile_id", "=", profileId)
+          .execute();
+        await transaction
+          .deleteFrom("mapping_profiles")
+          .where("id", "=", profileId)
+          .executeTakeFirstOrThrow();
         return true;
       },
     );

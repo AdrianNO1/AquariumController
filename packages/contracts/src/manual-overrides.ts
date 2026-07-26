@@ -26,10 +26,17 @@ export const manualOverrideParamsSchema = z.strictObject({
   overrideId: identifierSchema,
 });
 
+export const manualOverrideDurationSecondsSchema = z
+  .number()
+  .int()
+  .min(60)
+  .max(600);
+
 export const startManualOverrideRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
   target: manualOverrideTargetSchema,
   valuePercentage: percentageSchema,
+  durationSeconds: manualOverrideDurationSecondsSchema,
 });
 
 export const extendManualOverrideRequestSchema = z.strictObject({

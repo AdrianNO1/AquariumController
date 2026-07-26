@@ -15,6 +15,7 @@ import {
   openEventsDatabase,
   openStateDatabase,
   parseStoredStateOutboxEnvelope,
+  STATE_CHANNEL_COLOR_MIGRATION_NAME,
   STATE_INITIAL_MIGRATION_NAME,
   STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
   STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
@@ -85,6 +86,7 @@ describe("runtime migrations", () => {
       STATE_RUNTIME_MIGRATION_NAME,
       STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
       STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
+      STATE_CHANNEL_COLOR_MIGRATION_NAME,
     ]);
     expect(eventsResults.map((result) => result.migrationName)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -97,6 +99,7 @@ describe("runtime migrations", () => {
       STATE_RUNTIME_MIGRATION_NAME,
       STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
       STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
+      STATE_CHANNEL_COLOR_MIGRATION_NAME,
     ]);
     expect(await readMigrationNames(events)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -179,6 +182,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -186,6 +194,99 @@ describe("runtime migrations", () => {
         .selectAll()
         .executeTakeFirstOrThrow(),
     ).resolves.toEqual({ singleton_key: 1, last_operator_revision: 2 });
+  });
+
+  it("backfills deterministic channel colors and enforces canonical values", async () => {
+    const state = await createStateDatabase();
+    await migrateStateDatabaseTo(
+      state,
+      STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
+    );
+    await state
+      .insertInto("throttles")
+      .values({
+        id: "throttle-light",
+        type_key: "light",
+        percentage: 100,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    await state
+      .insertInto("channels")
+      .values([
+        {
+          id: "channel-b",
+          name: "B",
+          kind: "light",
+          throttle_id: "throttle-light",
+          display_order: 1,
+          created_at_ms: 0,
+          updated_at_ms: 0,
+        },
+        {
+          id: "channel-a",
+          name: "A",
+          kind: "light",
+          throttle_id: "throttle-light",
+          display_order: 0,
+          created_at_ms: 0,
+          updated_at_ms: 0,
+        },
+        {
+          id: "channel-c",
+          name: "C",
+          kind: "light",
+          throttle_id: "throttle-light",
+          display_order: 1,
+          created_at_ms: 0,
+          updated_at_ms: 0,
+        },
+      ])
+      .execute();
+
+    await expect(migrateStateDatabase(state)).resolves.toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+    ]);
+    await expect(
+      state
+        .selectFrom("channels")
+        .select(["id", "color"])
+        .orderBy("display_order")
+        .orderBy("id")
+        .execute(),
+    ).resolves.toEqual([
+      { id: "channel-a", color: "#6f5bd5" },
+      { id: "channel-b", color: "#a747a9" },
+      { id: "channel-c", color: "#3c66db" },
+    ]);
+    await expect(
+      state
+        .updateTable("channels")
+        .set({ color: "#13A4C7" })
+        .where("id", "=", "channel-a")
+        .executeTakeFirstOrThrow(),
+    ).rejects.toThrow(/CHECK constraint/i);
+
+    await expect(
+      migrateStateDatabaseTo(state, STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME),
+    ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
+    ]);
+    const columns = await sql<{ name: string }>`
+      SELECT name
+      FROM pragma_table_info('channels')
+      ORDER BY cid
+    `.execute(state);
+    expect(columns.rows.map(({ name }) => name)).not.toContain("color");
   });
 
   it("upgrades existing terminal deliveries as pending audit work", async () => {
@@ -267,6 +368,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -288,6 +394,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_RUNTIME_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
         direction: "Down",
@@ -445,6 +556,11 @@ describe("runtime migrations", () => {
       EVENTS_INITIAL_MIGRATION_NAME,
     );
     expect(stateDown).toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
         direction: "Down",

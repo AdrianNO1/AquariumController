@@ -61,6 +61,7 @@ describe("configuration HTTP routes", () => {
         expectedRevision: 0,
         id: "channel-blue",
         name: "Blue",
+        color: "#13a4c7",
         typeKey: "light",
         throttleId: "throttle-light",
         displayOrder: 0,
@@ -130,6 +131,7 @@ describe("configuration HTTP routes", () => {
       expectedRevision: 0,
       id: "channel-blue",
       name: "Blue",
+      color: "#13a4c7",
       typeKey: "light",
       throttleId: "throttle-light",
       displayOrder: 0,
@@ -164,6 +166,18 @@ describe("configuration HTTP routes", () => {
       id: "channel-missing",
     });
 
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/channels/channel-blue",
+      payload: {
+        expectedRevision: 1,
+        name: "Ocean blue",
+        color: "#3c66db",
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json()).toMatchObject({ changed: true, revision: 2 });
+
     const stale = await app.inject({
       method: "PATCH",
       url: "/api/channels/channel-blue",
@@ -173,7 +187,89 @@ describe("configuration HTTP routes", () => {
     expect(stale.json()).toMatchObject({
       code: "revision_conflict",
       expectedRevision: 0,
+      currentRevision: 2,
+    });
+  });
+
+  it("deletes mapping profiles through the revision-checked route", async () => {
+    const { database, repository } = await createRepository();
+    await database
+      .insertInto("mapping_profiles")
+      .values({
+        id: "profile-main",
+        name: "Main",
+        device_name_prefix: "Main",
+        output_gain: 0.7,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("devices")
+      .values({
+        id: "device-main",
+        hardware_id: "hardware-main",
+        name: "Main",
+        mapping_profile_id: "profile-main",
+        desired_pwm_frequency_hz: 1_000,
+        desired_pwm_resolution_bits: 8,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    const app = trackApp(buildApp({ configurationService: repository }));
+
+    const invalid = await app.inject({
+      method: "DELETE",
+      url: "/api/mapping-profiles/profile-main",
+      payload: { expectedRevision: 0, cascade: true },
+    });
+    expect(invalid.statusCode).toBe(400);
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/api/mapping-profiles/profile-main",
+      payload: { expectedRevision: 0 },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toMatchObject({
+      changed: true,
+      revision: 1,
+      event: {
+        type: "mapping_profile.deleted",
+        entity: { type: "mapping_profile", id: "profile-main" },
+      },
+    });
+    await expect(
+      database
+        .selectFrom("devices")
+        .select("mapping_profile_id")
+        .where("id", "=", "device-main")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ mapping_profile_id: null });
+
+    const stale = await app.inject({
+      method: "DELETE",
+      url: "/api/mapping-profiles/profile-main",
+      payload: { expectedRevision: 0 },
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json()).toMatchObject({
+      code: "revision_conflict",
+      expectedRevision: 0,
       currentRevision: 1,
+    });
+
+    const missing = await app.inject({
+      method: "DELETE",
+      url: "/api/mapping-profiles/profile-missing",
+      payload: { expectedRevision: 1 },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({
+      code: "not_found",
+      resource: "mapping_profile",
+      id: "profile-missing",
     });
   });
 

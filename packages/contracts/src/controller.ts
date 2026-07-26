@@ -4,6 +4,7 @@ import {
   alertSeveritySchema,
   alertStateSchema,
   boundedTextSchema,
+  canonicalHexColorSchema,
   canonicalUint32HashSchema,
   controlAreaSlugSchema,
   controlTypeKeySchema,
@@ -53,6 +54,7 @@ export const controlAreaSchema = z
 export const channelSchema = z.strictObject({
   id: identifierSchema,
   name: boundedTextSchema,
+  color: canonicalHexColorSchema,
   typeKey: controlTypeKeySchema,
   throttleId: identifierSchema,
   displayOrder: nonnegativeSafeIntegerSchema,
@@ -1253,6 +1255,7 @@ export const createChannelRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
   id: identifierSchema,
   name: boundedTextSchema,
+  color: canonicalHexColorSchema,
   typeKey: controlTypeKeySchema,
   throttleId: identifierSchema,
   displayOrder: nonnegativeSafeIntegerSchema,
@@ -1262,6 +1265,12 @@ export const createChannelRequestSchema = z.strictObject({
 export const renameChannelRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
   name: boundedTextSchema,
+});
+
+export const updateChannelRequestSchema = z.strictObject({
+  expectedRevision: nonnegativeSafeIntegerSchema,
+  name: boundedTextSchema,
+  color: canonicalHexColorSchema,
 });
 
 export const replaceScheduleRequestSchema = z.strictObject({
@@ -1657,6 +1666,7 @@ export type MutationResult = z.infer<typeof mutationResultSchema>;
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
 export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
 export type RenameChannelRequest = z.infer<typeof renameChannelRequestSchema>;
+export type UpdateChannelRequest = z.infer<typeof updateChannelRequestSchema>;
 export type ReplaceScheduleRequest = z.infer<
   typeof replaceScheduleRequestSchema
 >;

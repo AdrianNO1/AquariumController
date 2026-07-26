@@ -28,6 +28,7 @@ import {
   setDeviceEnabledRequestSchema,
   startManualOverrideRequestSchema,
   throttleParamsSchema,
+  updateChannelRequestSchema,
   updateThrottleRequestSchema,
   cancelManualOverrideRequestSchema,
   extendManualOverrideRequestSchema,
@@ -52,6 +53,7 @@ import {
   type ReplaceScheduleRequest,
   type SetDeviceEnabledRequest,
   type StartManualOverrideRequest,
+  type UpdateChannelRequest,
   type UpdateThrottleRequest,
   type CancelManualOverrideRequest,
   type ExtendManualOverrideRequest,
@@ -192,6 +194,18 @@ export function renameChannel(
   );
 }
 
+export function updateChannel(
+  channelId: string,
+  request: UpdateChannelRequest,
+): Promise<MutationResult> {
+  const params = channelParamsSchema.parse({ channelId });
+  return requestConfigurationMutation(
+    `/api/channels/${encodeURIComponent(params.channelId)}`,
+    "PATCH",
+    updateChannelRequestSchema.parse(request),
+  );
+}
+
 export function deleteChannel(
   channelId: string,
   expectedRevision: number,
@@ -238,6 +252,19 @@ export function replaceMappingProfile(
     `/api/mapping-profiles/${encodeURIComponent(params.profileId)}`,
     "PUT",
     replaceMappingProfileRequestSchema.parse(request),
+  );
+}
+
+export function deleteMappingProfile(
+  profileId: string,
+  expectedRevision: number,
+): Promise<MutationResult> {
+  const params = mappingProfileParamsSchema.parse({ profileId });
+  const body = expectedRevisionSchema.parse({ expectedRevision });
+  return requestConfigurationMutation(
+    `/api/mapping-profiles/${encodeURIComponent(params.profileId)}`,
+    "DELETE",
+    body,
   );
 }
 

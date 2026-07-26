@@ -174,6 +174,7 @@ describe.sequential(
         expectedRevision: revision,
         target: { targetType: "channel", targetId: CHANNEL_ID },
         valuePercentage: 80,
+        durationSeconds: 120,
       });
       await waitUntil(
         () =>

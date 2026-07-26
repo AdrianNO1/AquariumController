@@ -8,12 +8,14 @@ import {
   alertStateEventPayloadV1Schema,
   apiErrorResponseSchema,
   committedStateEventSchema,
+  channelSchema,
   controllerSnapshotSchema,
   controlAreaSchema,
   deviceSchema,
   expectedRevisionSchema,
   isSupportedEsp32PwmConfiguration,
   createAlertRuleRequestSchema,
+  createChannelRequestSchema,
   mappingProfileSchema,
   mutationResultSchema,
   notificationDeliverySchema,
@@ -25,6 +27,7 @@ import {
   scheduleGraphSchema,
   setDeviceEnabledRequestSchema,
   unresolvedDeviceOperationsSchema,
+  updateChannelRequestSchema,
 } from "./index.js";
 
 const now = "2026-07-13T08:00:00.000Z";
@@ -43,6 +46,53 @@ const controlAreas = [
   { slug: "qt3", typeKey: "qt3", label: "QT3" },
   { slug: "qt4", typeKey: "qt4", label: "QT4" },
 ] as const;
+
+describe("channel colors", () => {
+  const channel = {
+    id: "channel_blue",
+    name: "Blue",
+    color: "#13a4c7",
+    typeKey: "light",
+    throttleId: "throttle-light",
+    displayOrder: 0,
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  } as const;
+
+  it("requires canonical lowercase six-digit colors in snapshots and mutations", () => {
+    expect(channelSchema.parse(channel).color).toBe("#13a4c7");
+    expect(
+      createChannelRequestSchema.parse({
+        expectedRevision: 0,
+        id: channel.id,
+        name: channel.name,
+        color: channel.color,
+        typeKey: channel.typeKey,
+        throttleId: channel.throttleId,
+        displayOrder: channel.displayOrder,
+        enabled: channel.enabled,
+      }).color,
+    ).toBe(channel.color);
+    expect(
+      updateChannelRequestSchema.parse({
+        expectedRevision: 1,
+        name: "Ocean blue",
+        color: "#3c66db",
+      }),
+    ).toEqual({
+      expectedRevision: 1,
+      name: "Ocean blue",
+      color: "#3c66db",
+    });
+
+    for (const color of ["#13A4C7", "13a4c7", "#13a4c", "#13a4c70"]) {
+      expect(channelSchema.safeParse({ ...channel, color }).success).toBe(
+        false,
+      );
+    }
+  });
+});
 
 const validEvent = {
   revision: 9,

@@ -112,6 +112,7 @@ describe("controller snapshot repository", () => {
     expect(snapshot.channels).toEqual([
       expect.objectContaining({
         id: "channel-blue",
+        color: "#6f5bd5",
         typeKey: "light",
         throttleId: "throttle-light",
       }),

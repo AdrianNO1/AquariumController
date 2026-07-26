@@ -670,6 +670,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         channels: channelRows.map((channel) => ({
           id: channel.id,
           name: channel.name,
+          color: channel.color,
           typeKey: channel.kind,
           throttleId: channel.throttle_id,
           displayOrder: channel.display_order,

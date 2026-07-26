@@ -1,17 +1,14 @@
 import type {
   Channel,
-  ManualOverrideCommandResponse,
-  ManualOverrideStateResponse,
   OperationSummary,
-  Output,
   Override,
+  ScheduleGraph,
 } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   cancelManualOverride,
-  extendManualOverride,
   reconcileManualOverride,
   startManualOverride,
 } from "./api.js";
@@ -19,513 +16,445 @@ import {
   configurationErrorMessage,
   currentRevisionFromError,
 } from "./configuration-ui.js";
-import {
-  createManualOverridePanelState,
-  deriveManualOverrideView,
-  formatOverrideRemainingTime,
-  manualOverridePanelReducer,
-  manualOverrideTargetKey,
-  parseManualOverrideTargetKey,
-  type ManualOverrideCommandKind,
-} from "./manual-override-state.js";
+import { scheduleValueAt } from "./combined-schedule-state.js";
+import { deriveManualOverrideView } from "./manual-override-state.js";
 import { useDraftRevision } from "./use-draft-revision.js";
 
+export interface OverrideChannel {
+  readonly channel: Channel;
+  readonly schedule: ScheduleGraph | null;
+}
+
 export interface ManualOverridePanelProps {
-  readonly channels: readonly Channel[];
-  readonly outputs: readonly Output[];
+  readonly channels: readonly OverrideChannel[];
+  readonly multiplierPercentage: number;
   readonly overrides: readonly Override[];
   readonly operations: readonly OperationSummary[];
   readonly expectedRevision: number;
   readonly refresh: () => void;
   readonly nowMs?: () => number;
+  readonly disabled?: boolean;
 }
 
-interface OverrideTargetOption {
-  readonly key: string;
-  readonly label: string;
+type OverrideBatchKind = "apply" | "release";
+
+interface OverrideBatchRequest {
+  readonly kind: OverrideBatchKind;
+  readonly expectedRevision: number;
+  readonly overrides: readonly Override[];
+  readonly releaseOverrideIds: readonly string[];
+  readonly operations: readonly OperationSummary[];
+  readonly nowMs: number;
+  readonly channels: readonly Channel[];
+  readonly valuesByChannel: ReadonlyMap<string, number>;
+  readonly durationSeconds: number;
 }
+
+interface OverrideBatchResult {
+  readonly kind: OverrideBatchKind;
+  readonly accepted: number;
+  readonly revision: number;
+  readonly blockedChannelNames: readonly string[];
+  readonly releasedOverrideIds: readonly string[];
+}
+
+const durationChoices = [
+  { seconds: 60, label: "1 minute" },
+  { seconds: 120, label: "2 minutes" },
+  { seconds: 300, label: "5 minutes" },
+  { seconds: 600, label: "10 minutes" },
+] as const;
 
 export function ManualOverridePanel({
   channels,
-  outputs,
+  multiplierPercentage,
   overrides,
   operations,
   expectedRevision,
   refresh,
-  nowMs = systemNowMs,
+  nowMs = Date.now,
+  disabled = false,
 }: ManualOverridePanelProps): React.JSX.Element {
-  const targets = useMemo<readonly OverrideTargetOption[]>(
-    () => [
-      ...channels
-        .filter((channel) => channel.enabled)
-        .map((channel) => ({
-          key: manualOverrideTargetKey({
-            targetType: "channel",
-            targetId: channel.id,
-          }),
-          label: `Channel · ${channel.name}`,
-        })),
-      ...outputs
-        .filter((output) => output.enabled)
-        .map((output) => ({
-          key: manualOverrideTargetKey({
-            targetType: "output",
-            targetId: output.id,
-          }),
-          label: `Output · ${output.name}`,
-        })),
-    ],
-    [channels, outputs],
+  const [durationSeconds, setDurationSeconds] = useState(120);
+  const [draftValues, setDraftValues] = useState<ReadonlyMap<string, number>>(
+    () => new Map(),
   );
-  const [state, dispatch] = useReducer(
-    manualOverridePanelReducer,
-    targets[0]?.key ?? "",
-    createManualOverridePanelState,
-  );
-  const startRevision = useDraftRevision(expectedRevision);
+  const [releasedOverrideIds, setReleasedOverrideIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const draftRevision = useDraftRevision(expectedRevision);
   const currentTimeMs = useCurrentTime(nowMs);
-  const effectiveTargetKey = targets.some(
-    (target) => target.key === state.targetKey,
-  )
-    ? state.targetKey
-    : (targets[0]?.key ?? "");
-  const blockedTargetKeys = new Set(
-    overrides.flatMap((override) =>
-      deriveManualOverrideView(override, operations, currentTimeMs)
-        .blocksNewStart
-        ? [
-            manualOverrideTargetKey({
-              targetType: override.targetType,
-              targetId: override.targetId,
-            }),
-          ]
-        : [],
-    ),
+  const currentMinute = utcMinuteOfDay(currentTimeMs);
+  const scheduledValues = useMemo(
+    () =>
+      new Map(
+        channels.map(({ channel, schedule }) => [
+          channel.id,
+          Math.round(
+            scheduleValueAt(schedule?.points ?? [], currentMinute) *
+              (multiplierPercentage / 100),
+          ),
+        ]),
+      ),
+    [channels, currentMinute, multiplierPercentage],
   );
-  const percentage = Number(state.percentageText);
-  const validPercentage =
-    Number.isFinite(percentage) && percentage >= 0 && percentage <= 100;
-  const start = useMutation({
+  const liveOverrideByChannel = new Map(
+    overrides
+      .filter(
+        (override) =>
+          !releasedOverrideIds.has(override.id) &&
+          override.targetType === "channel" &&
+          (override.status === "pending" || override.status === "active"),
+      )
+      .map((override) => [override.targetId, override]),
+  );
+  const batch = useMutation({
     retry: false,
-    mutationFn: () =>
-      startManualOverride({
-        expectedRevision: startRevision.revision,
-        target: parseManualOverrideTargetKey(effectiveTargetKey),
-        valuePercentage: percentage,
-      }),
-    onSuccess: (response) => {
-      startRevision.reset();
-      dispatch({
-        type: "command_accepted",
-        notice: {
-          kind: "start",
-          overrideId: response.override.id,
-          status: response.override.status,
-          revision: response.mutation.revision,
-        },
-      });
+    mutationFn: async (
+      request: OverrideBatchRequest,
+    ): Promise<OverrideBatchResult> => {
+      let revision = request.expectedRevision;
+      let accepted = 0;
+      const blockedChannelNames: string[] = [];
+      const releasedIds: string[] = [];
+
+      if (request.kind === "release") {
+        for (const overrideId of request.releaseOverrideIds) {
+          const response = await runRevisionedCommand(
+            revision,
+            (nextRevision) =>
+              cancelManualOverride(overrideId, {
+                expectedRevision: nextRevision,
+              }),
+          );
+          revision = response.mutation.revision;
+          accepted += 1;
+          releasedIds.push(overrideId);
+        }
+        return {
+          kind: request.kind,
+          accepted,
+          revision,
+          blockedChannelNames,
+          releasedOverrideIds: releasedIds,
+        };
+      }
+
+      for (const channel of request.channels) {
+        const targetOverrides = request.overrides.filter(
+          (override) =>
+            override.targetType === "channel" &&
+            override.targetId === channel.id,
+        );
+        let blocked = false;
+        for (const override of targetOverrides) {
+          const view = deriveManualOverrideView(
+            override,
+            request.operations,
+            request.nowMs,
+          );
+          if (!view.blocksNewStart) continue;
+          blocked = true;
+          break;
+        }
+        if (blocked) {
+          blockedChannelNames.push(channel.name);
+          continue;
+        }
+        const response = await runRevisionedCommand(revision, (nextRevision) =>
+          startManualOverride({
+            expectedRevision: nextRevision,
+            target: { targetType: "channel", targetId: channel.id },
+            valuePercentage: request.valuesByChannel.get(channel.id) ?? 0,
+            durationSeconds: request.durationSeconds,
+          }),
+        );
+        revision = response.mutation.revision;
+        accepted += 1;
+      }
+      return {
+        kind: request.kind,
+        accepted,
+        revision,
+        blockedChannelNames,
+        releasedOverrideIds: releasedIds,
+      };
+    },
+    onSuccess: (result) => {
+      draftRevision.reset();
+      if (result.kind === "release") {
+        setDraftValues(new Map());
+        setReleasedOverrideIds(
+          (current) => new Set([...current, ...result.releasedOverrideIds]),
+        );
+      }
       refresh();
     },
-    onError: (error) => handleConflict(error, refresh, dispatch),
+    onError: (error) => {
+      if (currentRevisionFromError(error) !== null) refresh();
+    },
   });
-  const waitingForStartSnapshot =
-    start.data !== undefined && expectedRevision < start.data.mutation.revision;
-  const selectedBlocked = blockedTargetKeys.has(effectiveTargetKey);
+  const releaseOverrideIds = overrides
+    .filter(
+      (override) =>
+        !releasedOverrideIds.has(override.id) && override.status === "active",
+    )
+    .map((override) => override.id);
+  const activeCount = releaseOverrideIds.length;
+
+  function batchRequest(kind: OverrideBatchKind): OverrideBatchRequest {
+    return {
+      kind,
+      expectedRevision: draftRevision.revision,
+      overrides,
+      releaseOverrideIds,
+      operations,
+      nowMs: currentTimeMs,
+      channels: channels.map(({ channel }) => channel),
+      valuesByChannel: new Map(
+        channels.map(({ channel }) => [
+          channel.id,
+          draftValues.get(channel.id) ??
+            liveOverrideByChannel.get(channel.id)?.valuePercentage ??
+            scheduledValues.get(channel.id) ??
+            0,
+        ]),
+      ),
+      durationSeconds,
+    };
+  }
 
   return (
-    <section className="control-panel" aria-labelledby="override-heading">
-      <div className="section-heading">
+    <section
+      className="temporary-overrides"
+      aria-labelledby="temporary-overrides-heading"
+    >
+      <div className="override-heading">
         <div>
-          <p className="eyebrow">Server-authoritative safety window</p>
-          <h2 id="override-heading">Manual overrides</h2>
+          <p className="eyebrow">Live testing</p>
+          <h2 id="temporary-overrides-heading">Temporary overrides</h2>
         </div>
-        <span className="section-count">{overrides.length} recorded</span>
-      </div>
-
-      <form
-        className="override-start-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          start.mutate();
-        }}
-      >
-        <fieldset
-          disabled={start.isPending || waitingForStartSnapshot}
-          onFocusCapture={startRevision.pin}
-        >
-          <legend>Start a temporary override</legend>
+        <div className="override-heading-meta">
           <label>
-            Channel or output
+            Duration
             <select
-              value={effectiveTargetKey}
+              value={durationSeconds}
+              disabled={batch.isPending || disabled}
               onChange={(event) => {
-                startRevision.pin();
-                dispatch({
-                  type: "select_target",
-                  targetKey: event.currentTarget.value,
-                });
+                draftRevision.pin();
+                setDurationSeconds(Number(event.currentTarget.value));
               }}
-              required
             >
-              {targets.map((target) => (
-                <option key={target.key} value={target.key}>
-                  {target.label}
+              {durationChoices.map((choice) => (
+                <option key={choice.seconds} value={choice.seconds}>
+                  {choice.label}
                 </option>
               ))}
             </select>
           </label>
-          <label htmlFor="manual-override-percentage">
-            Override percentage
-            <span className="percentage-input">
-              <input
-                id="manual-override-percentage"
-                type="number"
-                min="0"
-                max="100"
-                step="0.1"
-                value={state.percentageText}
-                onChange={(event) => {
-                  startRevision.pin();
-                  dispatch({
-                    type: "set_percentage",
-                    value: event.currentTarget.value,
-                  });
-                }}
-                required
-              />
-              <span aria-hidden="true">%</span>
-            </span>
-          </label>
-          <button
-            className="primary-button"
-            type="submit"
-            disabled={
-              targets.length === 0 ||
-              selectedBlocked ||
-              !validPercentage ||
-              start.isPending ||
-              waitingForStartSnapshot
-            }
-          >
-            {start.isPending ? "Recording override…" : "Start manual override"}
-          </button>
-        </fieldset>
-      </form>
-      {targets.length === 0 ? (
-        <p className="empty-panel">
-          This area has no channel or output that can receive an override.
-        </p>
-      ) : null}
-      {selectedBlocked ? (
-        <p className="information-banner">
-          The selected target already has a pending, active, or unknown
-          override. Resolve that state before starting another.
-        </p>
-      ) : null}
-      {start.error === null || state.conflictRevision !== null ? null : (
-        <p className="field-error" role="alert">
-          {configurationErrorMessage(start.error)}
-        </p>
-      )}
-      {state.conflictRevision === null ? null : (
-        <div className="conflict-banner" role="alert">
-          <span>
-            Controller state advanced to revision {state.conflictRevision}. The
-            override was not started; review the refreshed state before rebasing
-            this draft.
-          </span>
-          <button
-            className="text-button"
-            type="button"
-            disabled={expectedRevision < state.conflictRevision}
-            onClick={() => {
-              startRevision.rebase();
-              dispatch({ type: "accept_conflict" });
-            }}
-          >
-            Keep override draft with refreshed revision
-          </button>
         </div>
-      )}
-      {state.notice === null ? null : (
-        <div className="override-command-notice" role="status">
-          <span>
-            {commandLabel(state.notice.kind)} for {state.notice.overrideId} was
-            recorded as {state.notice.status} at revision{" "}
-            {state.notice.revision}. Device state will be shown only from
-            authoritative updates.
-          </span>
-          <button
-            className="text-button"
-            type="button"
-            onClick={() => dispatch({ type: "dismiss_notice" })}
-          >
-            Dismiss
-          </button>
+      </div>
+
+      {channels.length === 0 ? (
+        <p className="empty-panel">This area has no channels to test.</p>
+      ) : (
+        <div className="override-bank">
+          {channels.map(({ channel }) => {
+            const activeOverride = liveOverrideByChannel.get(channel.id);
+            const scheduled = scheduledValues.get(channel.id) ?? 0;
+            const value =
+              draftValues.get(channel.id) ??
+              activeOverride?.valuePercentage ??
+              scheduled;
+            return (
+              <label className="override-slider" key={channel.id}>
+                <span
+                  className="override-channel-color"
+                  style={{ backgroundColor: channel.color }}
+                  aria-hidden="true"
+                />
+                <strong>{channel.name}</strong>
+                <output>{Math.round(value)}%</output>
+                <input
+                  aria-label={`${channel.name} temporary override`}
+                  className="vertical-range"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={value}
+                  disabled={batch.isPending || disabled}
+                  onChange={(event) => {
+                    const next = new Map(draftValues);
+                    next.set(channel.id, event.currentTarget.valueAsNumber);
+                    draftRevision.pin();
+                    setDraftValues(next);
+                  }}
+                />
+                <small>
+                  {activeOverride === undefined
+                    ? `Scheduled ${scheduled}%`
+                    : activeOverride.status}
+                </small>
+              </label>
+            );
+          })}
         </div>
       )}
 
-      {overrides.length === 0 ? (
-        <p className="muted-copy">No override records for this area.</p>
-      ) : (
-        <div className="override-card-list">
-          {overrides.map((override) => (
-            <ManualOverrideCard
-              key={override.id}
-              override={override}
-              operations={operations}
-              expectedRevision={expectedRevision}
-              nowMs={currentTimeMs}
-              refresh={refresh}
-              onAccepted={(kind, acceptedOverride, revision) =>
-                dispatch({
-                  type: "command_accepted",
-                  notice: {
-                    kind,
-                    overrideId: acceptedOverride.id,
-                    status: acceptedOverride.status,
-                    revision,
-                  },
-                })
-              }
-              onConflict={(currentRevision) =>
-                dispatch({ type: "revision_conflict", currentRevision })
-              }
-            />
-          ))}
-        </div>
+      <div className="override-actions">
+        <button
+          className="secondary-button"
+          type="button"
+          disabled={activeCount === 0 || batch.isPending || disabled}
+          onClick={() => batch.mutate(batchRequest("release"))}
+        >
+          {batch.isPending && batch.variables.kind === "release"
+            ? "Releasing…"
+            : "Release all"}
+        </button>
+        <button
+          className="primary-button"
+          type="button"
+          disabled={channels.length === 0 || batch.isPending || disabled}
+          onClick={() => {
+            draftRevision.pin();
+            batch.mutate(batchRequest("apply"));
+          }}
+        >
+          {batch.isPending && batch.variables.kind === "apply"
+            ? "Applying…"
+            : "Apply test levels"}
+        </button>
+      </div>
+
+      {batch.error === null ? null : (
+        <p className="field-error" role="alert">
+          {configurationErrorMessage(batch.error)} Some earlier commands in this
+          batch may already have been accepted; refresh and review the
+          authoritative override state.
+        </p>
       )}
-      <p className="information-banner">
-        A recorded request is not an actuator success. Pending and unknown
-        outcomes remain explicit, and commands are never retried automatically.
-      </p>
+      {batch.data === undefined ? null : (
+        <p className="override-command-notice" role="status">
+          {batch.data.accepted}{" "}
+          {batch.data.accepted === 1 ? "request was" : "requests were"} accepted
+          at revision {batch.data.revision}. This records controller intent; it
+          does not claim actuator success.
+          {batch.data.blockedChannelNames.length === 0
+            ? ""
+            : ` Unresolved override state blocked: ${batch.data.blockedChannelNames.join(", ")}.`}
+        </p>
+      )}
+
+      <UnresolvedOverrides
+        overrides={overrides}
+        operations={operations}
+        expectedRevision={expectedRevision}
+        nowMs={currentTimeMs}
+        disabled={disabled}
+        refresh={refresh}
+      />
     </section>
   );
 }
 
-type OverrideActionResult = {
-  readonly kind: Exclude<ManualOverrideCommandKind, "start">;
-  readonly override: Override;
-  readonly revision: number;
-};
-
-interface ManualOverrideCardProps {
-  readonly override: Override;
-  readonly operations: readonly OperationSummary[];
-  readonly expectedRevision: number;
-  readonly nowMs: number;
-  readonly refresh: () => void;
-  readonly onAccepted: (
-    kind: Exclude<ManualOverrideCommandKind, "start">,
-    override: Override,
-    revision: number,
-  ) => void;
-  readonly onConflict: (currentRevision: number) => void;
-}
-
-function ManualOverrideCard({
-  override,
+function UnresolvedOverrides({
+  overrides,
   operations,
   expectedRevision,
   nowMs,
+  disabled,
   refresh,
-  onAccepted,
-  onConflict,
-}: ManualOverrideCardProps): React.JSX.Element {
-  const action = useMutation({
+}: {
+  readonly overrides: readonly Override[];
+  readonly operations: readonly OperationSummary[];
+  readonly expectedRevision: number;
+  readonly nowMs: number;
+  readonly disabled: boolean;
+  readonly refresh: () => void;
+}): React.JSX.Element | null {
+  const unresolved = overrides
+    .map((override) => ({
+      override,
+      view: deriveManualOverrideView(override, operations, nowMs),
+    }))
+    .filter(({ view }) => view.phase === "outcome_unknown");
+  const reconcile = useMutation({
     retry: false,
-    mutationFn: async (
-      kind: Exclude<ManualOverrideCommandKind, "start">,
-    ): Promise<OverrideActionResult> => {
-      const response = await executeOverrideAction(
-        kind,
-        override.id,
-        expectedRevision,
-      );
-      return {
-        kind,
-        override: response.override,
-        revision: response.mutation.revision,
-      };
-    },
-    onSuccess: (result) => {
-      onAccepted(result.kind, result.override, result.revision);
-      refresh();
-    },
+    mutationFn: (overrideId: string) =>
+      reconcileManualOverride(overrideId, { expectedRevision }),
+    onSuccess: refresh,
     onError: (error) => {
-      const currentRevision = currentRevisionFromError(error);
-      if (currentRevision !== null) {
-        onConflict(currentRevision);
-        refresh();
-      }
+      if (currentRevisionFromError(error) !== null) refresh();
     },
   });
-  const accepted = action.data;
-  const waitingForSnapshot =
-    accepted !== undefined && expectedRevision < accepted.revision;
-  const effectiveOverride = waitingForSnapshot ? accepted.override : override;
-  const view = deriveManualOverrideView(effectiveOverride, operations, nowMs);
-
+  if (unresolved.length === 0) return null;
   return (
-    <article className={`override-card override-${view.phase}`}>
-      <div className="override-card-heading">
-        <div>
-          <strong>{effectiveOverride.targetId}</strong>
+    <div className="unresolved-overrides" role="alert">
+      <strong>Unknown override outcome</strong>
+      {unresolved.map(({ override, view }) => (
+        <div key={override.id}>
           <span>
-            {effectiveOverride.targetType} · {effectiveOverride.valuePercentage}
-            %
+            {override.targetId}: the controller cannot safely claim the current
+            actuator state.
           </span>
+          {view.canReconcile ? (
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={reconcile.isPending || disabled}
+              onClick={() => reconcile.mutate(override.id)}
+            >
+              Reconcile
+            </button>
+          ) : null}
         </div>
-        <span className={`status-pill override-status-${view.phase}`}>
-          {view.phase.replaceAll("_", " ")}
-        </span>
-      </div>
-      <p>{overridePhaseMessage(view.phase)}</p>
-      {view.phase === "pending" ||
-      view.phase === "active" ||
-      view.phase === "outcome_unknown" ? (
-        <div className="override-deadline">
-          <span>Server expiry</span>
-          <strong>{formatOverrideRemainingTime(view.remainingMs)}</strong>
-          <time dateTime={effectiveOverride.expiresAt}>
-            {formatUtc(effectiveOverride.expiresAt)}
-          </time>
-        </div>
-      ) : null}
-      {view.operation === null ? null : (
-        <p className="override-operation-reference">
-          Operation {view.operation.id}: {view.operation.status}
+      ))}
+      {reconcile.error === null ? null : (
+        <p className="field-error">
+          {configurationErrorMessage(reconcile.error)}
         </p>
       )}
-      <div className="button-row">
-        {view.canExtend ? (
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={action.isPending || waitingForSnapshot}
-            onClick={() => action.mutate("extend")}
-          >
-            Extend {effectiveOverride.targetId}
-          </button>
-        ) : null}
-        {view.canCancel ? (
-          <button
-            className="danger-button"
-            type="button"
-            disabled={action.isPending || waitingForSnapshot}
-            onClick={() => action.mutate("cancel")}
-          >
-            Cancel {effectiveOverride.targetId}
-          </button>
-        ) : null}
-        {view.canReconcile ? (
-          <button
-            className="secondary-button"
-            type="button"
-            disabled={action.isPending || waitingForSnapshot}
-            onClick={() => action.mutate("reconcile")}
-          >
-            Reconcile unknown outcome
-          </button>
-        ) : null}
-      </div>
-      {action.isPending ? (
-        <p className="muted-copy" role="status">
-          Recording {action.variables} request…
-        </p>
-      ) : null}
-      {waitingForSnapshot ? (
-        <p className="muted-copy" role="status">
-          Waiting for authoritative revision {accepted.revision} before another
-          command.
-        </p>
-      ) : null}
-      {action.error === null ||
-      currentRevisionFromError(action.error) !== null ? null : (
-        <p className="field-error" role="alert">
-          {configurationErrorMessage(action.error)}
-        </p>
-      )}
-    </article>
+    </div>
   );
 }
 
-async function executeOverrideAction(
-  kind: Exclude<ManualOverrideCommandKind, "start">,
-  overrideId: string,
-  expectedRevision: number,
-): Promise<ManualOverrideCommandResponse | ManualOverrideStateResponse> {
-  switch (kind) {
-    case "extend":
-      return extendManualOverride(overrideId, { expectedRevision });
-    case "cancel":
-      return cancelManualOverride(overrideId, { expectedRevision });
-    case "reconcile":
-      return reconcileManualOverride(overrideId, { expectedRevision });
+function utcMinuteOfDay(epochMs: number): number {
+  const date = new Date(epochMs);
+  return date.getUTCHours() * 60 + date.getUTCMinutes();
+}
+
+async function runRevisionedCommand<
+  Response extends { readonly mutation: { readonly revision: number } },
+>(
+  initialRevision: number,
+  command: (expectedRevision: number) => Promise<Response>,
+): Promise<Response> {
+  let revision = initialRevision;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      return await command(revision);
+    } catch (error) {
+      const currentRevision =
+        error instanceof Error ? currentRevisionFromError(error) : null;
+      if (currentRevision === null || currentRevision <= revision) throw error;
+      // A revision conflict guarantees that this command was rejected before
+      // dispatch. Rebasing that unaccepted member keeps a best-effort batch
+      // moving while never retrying an ambiguous actuator outcome.
+      revision = currentRevision;
+    }
   }
+  throw new Error(
+    "Controller state kept changing while the override batch was being recorded.",
+  );
 }
 
 function useCurrentTime(readNowMs: () => number): number {
   const [nowMs, setNowMs] = useState(readNowMs);
   useEffect(() => {
-    const interval = window.setInterval(() => setNowMs(readNowMs()), 1_000);
+    const interval = window.setInterval(() => setNowMs(readNowMs()), 30_000);
     return () => window.clearInterval(interval);
   }, [readNowMs]);
   return nowMs;
-}
-
-function handleConflict(
-  error: Error,
-  refresh: () => void,
-  dispatch: React.Dispatch<Parameters<typeof manualOverridePanelReducer>[1]>,
-): void {
-  const currentRevision = currentRevisionFromError(error);
-  if (currentRevision !== null) {
-    dispatch({ type: "revision_conflict", currentRevision });
-    refresh();
-  }
-}
-
-function commandLabel(kind: ManualOverrideCommandKind): string {
-  switch (kind) {
-    case "start":
-      return "Start request";
-    case "extend":
-      return "Extension";
-    case "cancel":
-      return "Cancellation";
-    case "reconcile":
-      return "Reconciliation";
-  }
-}
-
-function overridePhaseMessage(
-  phase: ReturnType<typeof deriveManualOverrideView>["phase"],
-): string {
-  switch (phase) {
-    case "pending":
-      return "Pending: the controller recorded a command, but no actuator success is claimed yet.";
-    case "active":
-      return "Active: the controller has an authoritative successful start outcome.";
-    case "outcome_unknown":
-      return "Outcome unknown: actuator state is not claimed. Reconcile only after the server safety window permits it.";
-    case "failed":
-      return "Failed: the controller did not establish a successful override.";
-    case "expired":
-      return "Expired: the server safety deadline ended this override.";
-    case "cancelled":
-      return "Cancelled: the controller recorded a successful release.";
-  }
-}
-
-function formatUtc(value: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "medium",
-    timeZone: "UTC",
-  }).format(new Date(value));
-}
-
-function systemNowMs(): number {
-  return Date.now();
 }

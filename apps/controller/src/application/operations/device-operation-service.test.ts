@@ -778,6 +778,42 @@ describe("persistent device operation service", () => {
     expect(Number(operationCount.count)).toBe(0);
   });
 
+  it("reapplies an actual configuration mismatch when another device warning masks its error code", async () => {
+    const context = await setup();
+    await context.databases.state
+      .updateTable("devices")
+      .set({
+        name: "Desired",
+        last_error_code: "firmware_outdated",
+        last_error_message: "Firmware update available",
+      })
+      .where("id", "=", "A1")
+      .executeTakeFirstOrThrow();
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 e Desired 5000 8",
+      targetId: "A1",
+      status: "succeeded",
+      response: "Desired 5000 8",
+      analogValue: null,
+    });
+
+    await expect(
+      context.service.patchDeviceConfiguration("A1", {
+        expectedRevision: 1,
+        name: "Desired",
+        pwmFrequencyHz: 5_000,
+        pwmResolutionBits: 8,
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 2 });
+    await context.service.drain();
+
+    expect(context.executor.calls).toHaveLength(1);
+    expect(context.executor.calls[0]?.[0]).toMatchObject({
+      command: "A1 e Desired 5000 8",
+    });
+  });
+
   it("rejects a partial PATCH whose resolved PWM pair is unsupported", async () => {
     const context = await setup();
 

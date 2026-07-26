@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { CHANNEL_COLOR_PALETTE } from "@aquarium/contracts";
 import { z } from "zod";
 
 import {
@@ -94,6 +95,7 @@ export interface LegacyThrottlePlan {
 
 export interface LegacyChannelPlan {
   readonly name: string;
+  readonly color: (typeof CHANNEL_COLOR_PALETTE)[number];
   readonly kind: LegacyTypeKey;
   readonly displayOrder: number;
   readonly points: readonly LegacySchedulePoint[];
@@ -488,8 +490,14 @@ function parseLinks(
       issues,
     );
     if (kind !== null) {
+      const color =
+        CHANNEL_COLOR_PALETTE[displayOrder % CHANNEL_COLOR_PALETTE.length];
+      if (color === undefined) {
+        throw new Error("The channel color palette cannot be empty.");
+      }
       channels.push({
         name: channelName,
+        color,
         kind,
         displayOrder,
         points: [

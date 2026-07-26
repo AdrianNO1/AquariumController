@@ -3,14 +3,21 @@
 
 import {
   manualOverrideCommandResponseSchema,
-  manualOverrideStateResponseSchema,
+  type Channel,
   type ManualOverrideCommandResponse,
-  type ManualOverrideStateResponse,
   type OperationSummary,
   type Override,
+  type ScheduleGraph,
+  type StartManualOverrideRequest,
 } from "@aquarium/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
@@ -25,11 +32,59 @@ import {
   vi,
 } from "vitest";
 
-import { ManualOverridePanel } from "./ManualOverridePanel.js";
+import {
+  ManualOverridePanel,
+  type ManualOverridePanelProps,
+} from "./ManualOverridePanel.js";
+import { scheduleValueAt as schedulePointsValueAt } from "./combined-schedule-state.js";
 import { createTestControlSnapshot } from "./test-control-snapshot.js";
 
 const server = setupServer();
 const nativeFetch = globalThis.fetch;
+const now = Date.parse("2026-07-13T10:00:00.000Z");
+const snapshot = createTestControlSnapshot();
+const mainChannel = requireItem(
+  snapshot.channels.find((channel) => channel.id === "light-main"),
+  "main test channel",
+);
+const mainSchedule = requireItem(
+  snapshot.schedules.find((schedule) => schedule.channelId === mainChannel.id),
+  "main test schedule",
+);
+const accentChannel: Channel = {
+  ...mainChannel,
+  id: "light-accent",
+  name: "Accent",
+  color: "#a84aa7",
+  displayOrder: 1,
+};
+const accentSchedule: ScheduleGraph = {
+  ...mainSchedule,
+  id: "light-accent",
+  channelId: accentChannel.id,
+  points: [
+    {
+      id: "accent-midnight",
+      position: 0,
+      minuteOfDay: 0,
+      percentage: 25,
+      editorX: null,
+      editorY: null,
+    },
+    {
+      id: "accent-morning",
+      position: 1,
+      minuteOfDay: 600,
+      percentage: 25,
+      editorX: null,
+      editorY: null,
+    },
+  ],
+};
+const channels: ManualOverridePanelProps["channels"] = [
+  { channel: mainChannel, schedule: mainSchedule },
+  { channel: accentChannel, schedule: accentSchedule },
+];
 
 beforeAll(() => {
   globalThis.fetch = (input, init) => {
@@ -51,336 +106,326 @@ afterAll(() => {
 });
 
 describe("ManualOverridePanel", () => {
-  it("records an output start without presenting the request as actuator success", async () => {
-    let requestBody: object | null = null;
-    const refresh = vi.fn();
+  it("uses vertical channel sliders and applies the selected duration with sequential revisions", async () => {
+    const requests: StartManualOverrideRequest[] = [];
     server.use(
       http.post("http://localhost/api/overrides", async ({ request }) => {
-        requestBody = (await request.json()) as object;
-        return HttpResponse.json(commandResponse());
-      }),
-    );
-    const user = renderPanel({ overrides: [], operations: [], refresh });
-
-    await user.selectOptions(
-      screen.getByLabelText("Channel or output"),
-      "output:output-moonlight",
-    );
-    const percentage = screen.getByRole("spinbutton", {
-      name: /Override percentage/u,
-    });
-    await user.clear(percentage);
-    await user.type(percentage, "42.5");
-    await user.click(
-      screen.getByRole("button", { name: "Start manual override" }),
-    );
-
-    expect(
-      await screen.findByText(/recorded as pending at revision 9/u),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(
-        /Device state will be shown only from authoritative updates/u,
-      ),
-    ).toBeTruthy();
-    await waitFor(() =>
-      expect(requestBody).toEqual({
-        expectedRevision: 8,
-        target: { targetType: "output", targetId: "output-moonlight" },
-        valuePercentage: 42.5,
-      }),
-    );
-    expect(refresh).toHaveBeenCalledOnce();
-  });
-
-  it("shows a server-derived countdown and only active-state actions", async () => {
-    const refresh = vi.fn();
-    server.use(
-      http.post("http://localhost/api/overrides/override-light/extend", () =>
-        HttpResponse.json(
-          stateResponse({
-            ...activeOverride(),
-            expiresAt: "2026-07-13T10:05:00.000Z",
+        const body = (await request.json()) as StartManualOverrideRequest;
+        requests.push(body);
+        return HttpResponse.json(
+          commandResponse({
+            overrideId: `override-${body.target.targetId}`,
+            operationId: `operation-${requests.length}`,
+            targetId: body.target.targetId,
+            valuePercentage: body.valuePercentage,
+            durationSeconds: body.durationSeconds,
+            revision: body.expectedRevision + 1,
+            kind: "manual_override_start",
           }),
-        ),
-      ),
+        );
+      }),
     );
-    const user = renderPanel({
-      overrides: [activeOverride()],
-      operations: [operation("succeeded")],
-      refresh,
+    const refresh = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({ overrides: [], operations: [], refresh });
+
+    const mainSlider = screen.getByRole("slider", {
+      name: "Main light temporary override",
     });
+    const accentSlider = screen.getByRole("slider", {
+      name: "Accent temporary override",
+    });
+    expect(mainSlider.classList.contains("vertical-range")).toBe(true);
+    expect(accentSlider.classList.contains("vertical-range")).toBe(true);
+    expect((mainSlider as HTMLInputElement).value).toBe("40");
+    expect((accentSlider as HTMLInputElement).value).toBe("20");
 
-    expect(screen.getByText("2m 0s")).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Extend light-main" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Cancel light-main" }),
-    ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Reconcile unknown outcome" }),
-    ).toBeNull();
+    fireEvent.change(mainSlider, { target: { value: "72" } });
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Duration" }),
+      "300",
+    );
+    await user.click(screen.getByRole("button", { name: "Apply test levels" }));
 
-    await user.click(screen.getByRole("button", { name: "Extend light-main" }));
-    expect(await screen.findByText("4m 0s")).toBeTruthy();
+    await waitFor(() => expect(requests).toHaveLength(2));
+    expect(requests).toEqual([
+      {
+        expectedRevision: 8,
+        target: { targetType: "channel", targetId: "light-main" },
+        valuePercentage: 72,
+        durationSeconds: 300,
+      },
+      {
+        expectedRevision: 9,
+        target: { targetType: "channel", targetId: "light-accent" },
+        valuePercentage: 20,
+        durationSeconds: 300,
+      },
+    ]);
     expect(
-      screen.getByText(/Extension for override-light was recorded as active/u),
-    ).toBeTruthy();
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Extend light-main",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-    expect(
-      screen.getByText(/Waiting for authoritative revision 9/u),
+      await screen.findByText(/2 requests were accepted at revision 10/u),
     ).toBeTruthy();
     expect(refresh).toHaveBeenCalledOnce();
   });
 
-  it("keeps an unresolved active override controllable while offering reconciliation", async () => {
-    const unknownOverride = activeOverride();
+  it("releases active overrides in revision order and immediately restores scheduled slider values", async () => {
+    const cancelRequests: Array<{
+      readonly overrideId: string;
+      readonly expectedRevision: number;
+    }> = [];
+    const activeOverrides = [
+      activeOverride("override-main", "light-main", 85, "operation-main"),
+      activeOverride("override-accent", "light-accent", 65, "operation-accent"),
+    ];
     server.use(
-      http.post("http://localhost/api/overrides/override-light/reconcile", () =>
-        HttpResponse.json(stateResponse(unknownOverride)),
-      ),
-    );
-    const refresh = vi.fn();
-    const user = renderPanel({
-      overrides: [unknownOverride],
-      operations: [operation("outcome_unknown")],
-      refresh,
-    });
-
-    expect(
-      screen.getByText(/Outcome unknown: actuator state is not claimed/u),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Extend light-main" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Cancel light-main" }),
-    ).toBeTruthy();
-
-    await user.click(
-      screen.getByRole("button", { name: "Reconcile unknown outcome" }),
-    );
-    expect(
-      await screen.findByText(
-        /Reconciliation for override-light was recorded as active/u,
-      ),
-    ).toBeTruthy();
-    expect(refresh).toHaveBeenCalledOnce();
-  });
-
-  it("pins unchanged defaults on first focus and explicitly rebases after a conflict", async () => {
-    const refresh = vi.fn();
-    const requestBodies: object[] = [];
-    server.use(
-      http.post("http://localhost/api/overrides", async ({ request }) => {
-        requestBodies.push((await request.json()) as object);
-        if (requestBodies.length === 1) {
-          return HttpResponse.json(
-            {
-              code: "revision_conflict",
-              message: "State revision changed",
-              expectedRevision: 8,
-              currentRevision: 9,
-            },
-            { status: 409 },
+      http.post(
+        "http://localhost/api/overrides/:overrideId/cancel",
+        async ({ params, request }) => {
+          const body = (await request.json()) as {
+            readonly expectedRevision: number;
+          };
+          const overrideId = String(params.overrideId);
+          cancelRequests.push({
+            overrideId,
+            expectedRevision: body.expectedRevision,
+          });
+          const original = requireItem(
+            activeOverrides.find((override) => override.id === overrideId),
+            `override ${overrideId}`,
           );
-        }
-        return HttpResponse.json(commandResponse());
-      }),
+          return HttpResponse.json(
+            commandResponse({
+              overrideId,
+              operationId: `operation-cancel-${cancelRequests.length}`,
+              targetId: original.targetId,
+              valuePercentage: original.valuePercentage,
+              durationSeconds: 120,
+              revision: body.expectedRevision + 1,
+              kind: "manual_override_cancel",
+            }),
+          );
+        },
+      ),
     );
-    const user = renderPanel({ overrides: [], operations: [], refresh });
-    const percentage = screen.getByRole("spinbutton", {
-      name: /Override percentage/u,
+    const refresh = vi.fn();
+    const user = userEvent.setup();
+    renderPanel({
+      overrides: activeOverrides,
+      operations: [operation("operation-main"), operation("operation-accent")],
+      refresh,
     });
-    await user.click(percentage);
-    user.rerenderRevision(9);
-    await user.click(
-      screen.getByRole("button", { name: "Start manual override" }),
-    );
+    const mainSlider = screen.getByRole("slider", {
+      name: "Main light temporary override",
+    }) as HTMLInputElement;
+    const accentSlider = screen.getByRole("slider", {
+      name: "Accent temporary override",
+    }) as HTMLInputElement;
+    expect(mainSlider.value).toBe("85");
+    expect(accentSlider.value).toBe("65");
 
-    expect(
-      await screen.findByText(/Controller state advanced to revision 9/u),
-    ).toBeTruthy();
-    expect(requestBodies[0]).toMatchObject({ expectedRevision: 8 });
-    expect((percentage as HTMLInputElement).value).toBe("50");
+    await user.click(screen.getByRole("button", { name: "Release all" }));
+
+    await waitFor(() => expect(cancelRequests).toHaveLength(2));
+    expect(cancelRequests).toEqual([
+      { overrideId: "override-main", expectedRevision: 8 },
+      { overrideId: "override-accent", expectedRevision: 9 },
+    ]);
+    await waitFor(() => expect(mainSlider.value).toBe("40"));
+    expect(accentSlider.value).toBe("20");
     expect(refresh).toHaveBeenCalledOnce();
-
-    await user.click(
-      screen.getByRole("button", {
-        name: "Keep override draft with refreshed revision",
-      }),
-    );
-    await user.click(
-      screen.getByRole("button", { name: "Start manual override" }),
-    );
-
-    await waitFor(() => expect(requestBodies).toHaveLength(2));
-    expect(requestBodies[1]).toMatchObject({ expectedRevision: 9 });
-    expect(refresh).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the first-interaction revision for keyboard submission", async () => {
-    let requestBody: object | null = null;
-    server.use(
-      http.post("http://localhost/api/overrides", async ({ request }) => {
-        requestBody = (await request.json()) as object;
-        return HttpResponse.json(commandResponse());
-      }),
+  it("releases active overrides without attempting to cancel pending starts", async () => {
+    const cancelledOverrideIds: string[] = [];
+    const active = activeOverride(
+      "override-main",
+      "light-main",
+      85,
+      "operation-main",
     );
-    const user = renderPanel({
-      overrides: [],
-      operations: [],
+    const pending: Override = {
+      ...activeOverride(
+        "override-accent",
+        "light-accent",
+        65,
+        "operation-accent",
+      ),
+      status: "pending",
+      startsAt: null,
+    };
+    server.use(
+      http.post(
+        "http://localhost/api/overrides/:overrideId/cancel",
+        async ({ params, request }) => {
+          const body = (await request.json()) as {
+            readonly expectedRevision: number;
+          };
+          const overrideId = String(params.overrideId);
+          cancelledOverrideIds.push(overrideId);
+          return HttpResponse.json(
+            commandResponse({
+              overrideId,
+              operationId: "operation-cancel-main",
+              targetId: active.targetId,
+              valuePercentage: active.valuePercentage,
+              durationSeconds: 120,
+              revision: body.expectedRevision + 1,
+              kind: "manual_override_cancel",
+            }),
+          );
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderPanel({
+      overrides: [pending, active],
+      operations: [operation("operation-accent"), operation("operation-main")],
       refresh: vi.fn(),
     });
-    await user.click(
-      screen.getByRole("spinbutton", { name: /Override percentage/u }),
-    );
-    user.rerenderRevision(9);
 
-    await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", { name: "Release all" }));
 
     await waitFor(() =>
-      expect(requestBody).toMatchObject({ expectedRevision: 8 }),
+      expect(cancelledOverrideIds).toEqual(["override-main"]),
     );
   });
+
+  it("interpolates cyclic schedules across midnight", () => {
+    expect(schedulePointsValueAt(mainSchedule?.points ?? [], 600)).toBe(50);
+    expect(schedulePointsValueAt(accentSchedule?.points ?? [], 1_439)).toBe(25);
+  });
 });
-
-interface RenderPanelOptions {
-  readonly overrides: readonly Override[];
-  readonly operations: readonly OperationSummary[];
-  readonly refresh: () => void;
-}
-
-type RenderedPanel = ReturnType<typeof userEvent.setup> & {
-  readonly rerenderRevision: (revision: number) => void;
-};
 
 function renderPanel({
   overrides,
   operations,
   refresh,
-}: RenderPanelOptions): RenderedPanel {
-  const snapshot = createTestControlSnapshot();
+}: {
+  readonly overrides: readonly Override[];
+  readonly operations: readonly OperationSummary[];
+  readonly refresh: () => void;
+}): void {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
-  const renderTree = (revision: number) =>
-    createElement(QueryClientProvider, {
-      client: queryClient,
-      children: createElement(ManualOverridePanel, {
-        channels: snapshot.channels.filter(
-          (channel) => channel.typeKey === "light",
-        ),
-        outputs: snapshot.outputs,
+  render(
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(ManualOverridePanel, {
+        channels,
+        multiplierPercentage: 80,
         overrides,
         operations,
-        expectedRevision: revision,
+        expectedRevision: 8,
         refresh,
-        nowMs: fixedNow,
+        nowMs: () => now,
       }),
-    });
-  const rendered = render(renderTree(8));
-  return Object.assign(userEvent.setup(), {
-    rerenderRevision: (revision: number) =>
-      rendered.rerender(renderTree(revision)),
-  });
-}
-
-function commandResponse(): ManualOverrideCommandResponse {
-  return manualOverrideCommandResponseSchema.parse({
-    override: {
-      ...activeOverride(),
-      id: "override-output",
-      targetType: "output",
-      targetId: "output-moonlight",
-      status: "pending",
-      startsAt: null,
-    },
-    operation: {
-      id: "operation-start",
-      deviceId: null,
-      kind: "manual_override_start",
-      status: "pending",
-      requestedAt: "2026-07-13T10:01:00.000Z",
-      deadlineAt: "2026-07-13T10:01:30.000Z",
-      completedAt: null,
-    },
-    mutation: mutation("override-output", "operation-start", 9),
-  });
-}
-
-function stateResponse(override: Override): ManualOverrideStateResponse {
-  return manualOverrideStateResponseSchema.parse({
-    override,
-    mutation: mutation(
-      override.id,
-      override.operationId ?? "operation-start",
-      9,
     ),
-  });
+  );
 }
 
-function activeOverride(): Override {
+function activeOverride(
+  id: string,
+  targetId: string,
+  valuePercentage: number,
+  operationId: string,
+): Override {
   return {
-    id: "override-light",
+    id,
     targetType: "channel",
-    targetId: "light-main",
-    valuePercentage: 55,
+    targetId,
+    valuePercentage,
     status: "active",
-    requestedAt: "2026-07-13T10:00:00.000Z",
-    startsAt: "2026-07-13T10:00:01.000Z",
+    requestedAt: "2026-07-13T09:58:00.000Z",
+    startsAt: "2026-07-13T09:58:01.000Z",
     expiresAt: "2026-07-13T10:03:00.000Z",
     completedAt: null,
-    operationId: "operation-start",
+    operationId,
   };
 }
 
-function operation(status: OperationSummary["status"]): OperationSummary {
+function operation(id: string): OperationSummary {
   return {
-    id: "operation-start",
+    id,
     deviceId: null,
     kind: "manual_override_start",
-    status,
-    requestedAt: "2026-07-13T10:00:00.000Z",
-    deadlineAt: "2026-07-13T10:00:30.000Z",
-    completedAt:
-      status === "pending" || status === "in_flight"
-        ? null
-        : "2026-07-13T10:00:31.000Z",
+    status: "succeeded",
+    requestedAt: "2026-07-13T09:58:00.000Z",
+    deadlineAt: "2026-07-13T09:58:30.000Z",
+    completedAt: "2026-07-13T09:58:01.000Z",
   };
 }
 
-function mutation(overrideId: string, operationId: string, revision: number) {
-  return {
-    changed: true as const,
-    revision,
-    event: {
-      revision,
-      type: "override.pending",
-      occurredAt: "2026-07-13T10:01:00.000Z",
-      entity: { type: "override" as const, id: overrideId },
-      schemaVersion: 1 as const,
-      data: {
-        invalidations: [
-          { resource: "override" as const, id: overrideId },
-          { resource: "operation" as const, id: operationId },
-        ],
-      },
-      retentionClass: "audit" as const,
+function commandResponse({
+  overrideId,
+  operationId,
+  targetId,
+  valuePercentage,
+  durationSeconds,
+  revision,
+  kind,
+}: {
+  readonly overrideId: string;
+  readonly operationId: string;
+  readonly targetId: string;
+  readonly valuePercentage: number;
+  readonly durationSeconds: number;
+  readonly revision: number;
+  readonly kind: "manual_override_start" | "manual_override_cancel";
+}): ManualOverrideCommandResponse {
+  const requestedAtMs = Date.parse("2026-07-13T10:00:00.000Z");
+  return manualOverrideCommandResponseSchema.parse({
+    override: {
+      id: overrideId,
+      targetType: "channel",
+      targetId,
+      valuePercentage,
+      status: "pending",
+      requestedAt: new Date(requestedAtMs).toISOString(),
+      startsAt: null,
+      expiresAt: new Date(
+        requestedAtMs + durationSeconds * 1_000,
+      ).toISOString(),
+      completedAt: null,
+      operationId,
     },
-  };
+    operation: {
+      id: operationId,
+      deviceId: null,
+      kind,
+      status: "pending",
+      requestedAt: new Date(requestedAtMs).toISOString(),
+      deadlineAt: new Date(requestedAtMs + 30_000).toISOString(),
+      completedAt: null,
+    },
+    mutation: {
+      changed: true,
+      revision,
+      event: {
+        revision,
+        type: "override.pending",
+        occurredAt: new Date(requestedAtMs).toISOString(),
+        entity: { type: "override", id: overrideId },
+        schemaVersion: 1,
+        data: {
+          invalidations: [
+            { resource: "override", id: overrideId },
+            { resource: "operation", id: operationId },
+          ],
+        },
+        retentionClass: "audit",
+      },
+    },
+  });
 }
 
-function fixedNow(): number {
-  return Date.parse("2026-07-13T10:01:00.000Z");
+function requireItem<Value>(value: Value | undefined, label: string): Value {
+  if (value === undefined) {
+    throw new Error(`Missing ${label}`);
+  }
+  return value;
 }
