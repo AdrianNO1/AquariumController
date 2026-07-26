@@ -14,3 +14,4 @@ test-results/
 *.log
 *.tsbuildinfo
 .DS_Store
+TODO.txt
