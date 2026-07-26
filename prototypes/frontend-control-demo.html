@@ -1,0 +1,3119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aquarium Controller — Compact control prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        color: #18202a;
+        background: #eef1f4;
+        font-synthesis: none;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background: #eef1f4;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .topbar {
+        position: sticky;
+        z-index: 20;
+        top: 0;
+        display: flex;
+        min-height: 52px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 0 24px;
+        border-bottom: 1px solid #d7dce1;
+        background: rgba(255, 255, 255, 0.96);
+        backdrop-filter: blur(12px);
+      }
+
+      .brand-line,
+      .topbar-actions,
+      .page-heading,
+      .heading-actions,
+      .toolbar,
+      .inline-fields,
+      .save-state {
+        display: flex;
+        align-items: center;
+      }
+
+      .brand-line {
+        gap: 12px;
+      }
+
+      .brand {
+        font-size: 0.84rem;
+        font-weight: 760;
+        letter-spacing: -0.01em;
+      }
+
+      .area-select {
+        min-width: 170px;
+        height: 34px;
+        padding: 0 34px 0 10px;
+        border: 1px solid #c8ced5;
+        border-radius: 6px;
+        color: #17202a;
+        background: white;
+        font-weight: 650;
+      }
+
+      .topbar-actions {
+        gap: 14px;
+        color: #56616d;
+        font-size: 0.78rem;
+      }
+
+      .save-state {
+        gap: 6px;
+      }
+
+      .connection-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #27a36c;
+        box-shadow: 0 0 0 3px #dff3e9;
+      }
+
+      .app {
+        width: min(1580px, calc(100vw - 32px));
+        margin: 0 auto;
+        padding: 18px 0 42px;
+      }
+
+      .page-heading {
+        min-height: 44px;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 12px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 2px;
+        font-size: clamp(1.35rem, 2vw, 1.8rem);
+        letter-spacing: -0.035em;
+      }
+
+      .heading-actions,
+      .toolbar,
+      .inline-fields {
+        gap: 8px;
+      }
+
+      .button {
+        min-height: 34px;
+        padding: 7px 12px;
+        border: 1px solid #bdc5cd;
+        border-radius: 6px;
+        color: #26313c;
+        background: #fff;
+        font-weight: 680;
+        line-height: 1;
+      }
+
+      .button:hover {
+        border-color: #8d98a3;
+        background: #f8fafb;
+      }
+
+      .button.primary {
+        border-color: #176b87;
+        color: white;
+        background: #176b87;
+      }
+
+      .button.primary:hover {
+        border-color: #12566d;
+        background: #12566d;
+      }
+
+      .button.danger {
+        border-color: #e4b5b2;
+        color: #9e302d;
+        background: #fff8f7;
+      }
+
+      .button.small {
+        min-height: 28px;
+        padding: 5px 9px;
+        font-size: 0.76rem;
+      }
+
+      .control-surface {
+        overflow: hidden;
+        border: 1px solid #cfd5db;
+        border-radius: 9px;
+        background: white;
+        box-shadow: 0 1px 3px rgba(18, 31, 42, 0.05);
+      }
+
+      .schedule-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 250px;
+        min-height: 390px;
+      }
+
+      .chart-region {
+        min-width: 0;
+        padding: 14px 12px 8px 14px;
+      }
+
+      .chart-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 0 5px 8px 7px;
+      }
+
+      .chart-title {
+        margin: 0;
+        font-size: 0.82rem;
+        font-weight: 760;
+      }
+
+      #scheduleChart {
+        display: block;
+        width: 100%;
+        height: 342px;
+        border-radius: 6px;
+        background: #f8fafb;
+        touch-action: none;
+        user-select: none;
+      }
+
+      #scheduleChart.add-mode {
+        cursor: crosshair;
+      }
+
+      .channel-panel {
+        min-width: 0;
+        border-left: 1px solid #d9dee3;
+        background: #fafbfc;
+      }
+
+      .channel-panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 42px;
+        padding: 9px 11px 8px 13px;
+        border-bottom: 1px solid #dfe3e7;
+        color: #68737e;
+        font-size: 0.69rem;
+        font-weight: 760;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .channel-list {
+        display: grid;
+      }
+
+      .channel-row {
+        display: grid;
+        grid-template-columns: 12px minmax(0, 1fr) auto;
+        min-height: 49px;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 7px 13px;
+        border: 0;
+        border-bottom: 1px solid #e4e7ea;
+        color: #27313b;
+        background: transparent;
+        text-align: left;
+      }
+
+      .channel-row:hover {
+        background: #f0f3f5;
+      }
+
+      .channel-row.selected {
+        color: #10161d;
+        background: #e8eef2;
+        box-shadow: inset 3px 0 0 var(--channel-color);
+      }
+
+      .channel-swatch {
+        width: 10px;
+        height: 10px;
+        border: 2px solid white;
+        border-radius: 50%;
+        background: var(--channel-color);
+        box-shadow: 0 0 0 1px color-mix(in srgb, var(--channel-color), #000 16%);
+      }
+
+      .channel-name {
+        overflow: hidden;
+        font-size: 0.82rem;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .channel-now {
+        color: #66717c;
+        font-size: 0.72rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .point-editor {
+        display: grid;
+        grid-template-columns:
+          auto minmax(190px, 0.8fr) minmax(240px, 1.8fr)
+          auto;
+        align-items: center;
+        gap: 12px;
+        min-height: 76px;
+        padding: 10px 14px;
+        border-top: 1px solid #d9dee3;
+        background: #fcfdfd;
+      }
+
+      .point-actions {
+        display: flex;
+        gap: 6px;
+      }
+
+      .field {
+        display: grid;
+        gap: 3px;
+      }
+
+      .field > span {
+        color: #69747f;
+        font-size: 0.66rem;
+        font-weight: 720;
+        letter-spacing: 0.045em;
+        text-transform: uppercase;
+      }
+
+      .field input,
+      .field select {
+        width: 100%;
+        height: 32px;
+        padding: 5px 8px;
+        border: 1px solid #c7ced5;
+        border-radius: 5px;
+        color: #202a34;
+        background: #fff;
+      }
+
+      .field.compact {
+        grid-template-columns: auto minmax(72px, 110px);
+        align-items: center;
+        gap: 6px;
+      }
+
+      .point-list {
+        display: flex;
+        overflow-x: auto;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 0 4px;
+        scrollbar-width: thin;
+      }
+
+      .point-pill {
+        flex: 0 0 auto;
+        min-height: 29px;
+        padding: 5px 8px;
+        border: 1px solid #cbd2d9;
+        border-radius: 5px;
+        color: #44505b;
+        background: white;
+        font-size: 0.71rem;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .point-pill.selected {
+        border-color: #176b87;
+        color: white;
+        background: #176b87;
+      }
+
+      .editor-message {
+        min-width: 145px;
+        color: #69747f;
+        font-size: 0.7rem;
+        text-align: right;
+      }
+
+      .test-controls {
+        display: grid;
+        grid-template-columns: 230px minmax(0, 1fr);
+        margin-top: 12px;
+        border: 1px solid #cfd5db;
+        border-radius: 9px;
+        background: white;
+        box-shadow: 0 1px 3px rgba(18, 31, 42, 0.04);
+      }
+
+      .throttle-panel {
+        padding: 14px 16px;
+        border-right: 1px solid #d9dee3;
+      }
+
+      .section-kicker {
+        margin: 0 0 3px;
+        color: #707b86;
+        font-size: 0.66rem;
+        font-weight: 760;
+        letter-spacing: 0.075em;
+        text-transform: uppercase;
+      }
+
+      .compact-heading {
+        margin: 0 0 12px;
+        font-size: 0.96rem;
+      }
+
+      .throttle-value {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+
+      .throttle-value output {
+        font-size: 1.9rem;
+        font-weight: 760;
+        letter-spacing: -0.04em;
+      }
+
+      .throttle-value span {
+        color: #6a7580;
+        font-size: 0.76rem;
+      }
+
+      input[type="range"] {
+        accent-color: #176b87;
+      }
+
+      .throttle-range {
+        width: 100%;
+      }
+
+      .override-panel {
+        min-width: 0;
+        padding: 12px 14px 10px;
+      }
+
+      .override-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        min-height: 32px;
+        margin-bottom: 6px;
+      }
+
+      .override-heading h2 {
+        margin: 0;
+        font-size: 0.96rem;
+      }
+
+      .override-heading-meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #6c7782;
+        font-size: 0.72rem;
+      }
+
+      .duration-select {
+        height: 29px;
+        border: 1px solid #c7ced5;
+        border-radius: 5px;
+        background: white;
+      }
+
+      .override-bank {
+        display: flex;
+        min-height: 190px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .override-channel {
+        display: grid;
+        grid-template-rows: auto auto 152px;
+        flex: 0 0 104px;
+        justify-items: center;
+        width: 104px;
+        padding: 4px 8px 2px;
+        border-left: 1px solid #e0e4e7;
+      }
+
+      .override-channel:first-child {
+        border-left: 0;
+      }
+
+      .override-label {
+        overflow: hidden;
+        width: 100%;
+        color: #37434e;
+        font-size: 0.73rem;
+        font-weight: 720;
+        text-align: center;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .override-value {
+        margin: 2px 0 1px;
+        color: var(--channel-color);
+        font-size: 0.92rem;
+        font-weight: 780;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .override-slider {
+        width: 24px;
+        height: 142px;
+        margin: 4px 0 0;
+        direction: rtl;
+        writing-mode: vertical-lr;
+      }
+
+      .override-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 7px;
+        margin-top: 8px;
+      }
+
+      .devices-section {
+        margin-top: 16px;
+        padding-top: 2px;
+      }
+
+      .devices-heading {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 7px;
+      }
+
+      .devices-heading h2 {
+        margin-bottom: 2px;
+        font-size: 1.1rem;
+      }
+
+      .device-grid {
+        display: flex;
+        align-items: stretch;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .device-card {
+        display: grid;
+        flex: 0 0 244px;
+        gap: 9px;
+        padding: 12px;
+        border: 1px solid #cfd5db;
+        border-radius: 8px;
+        background: white;
+        box-shadow: 0 1px 3px rgba(18, 31, 42, 0.04);
+      }
+
+      .device-card.online {
+        border-color: #a9d9b7;
+        background: #e8f7e9;
+      }
+
+      .device-card.stale {
+        border-color: #e5c87e;
+        background: #fff3d2;
+      }
+
+      .device-card.offline {
+        border-color: #e3aaa6;
+        background: #fbe5e3;
+      }
+
+      .device-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .device-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .device-exclude {
+        width: 30px;
+        min-height: 30px;
+        padding: 0;
+        border-color: #d39a95;
+        color: #a54339;
+        font-size: 1rem;
+        line-height: 1;
+      }
+
+      .device-exclude:hover {
+        border-color: #b75d55;
+        color: #87352f;
+        background: #fff5f4;
+      }
+
+      .device-card h3 {
+        overflow: hidden;
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 730;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .device-id {
+        color: #52606c;
+        font-family:
+          ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+        font-size: 0.78rem;
+      }
+
+      .device-facts {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 5px 10px;
+        margin: 0;
+        font-size: 0.74rem;
+      }
+
+      .device-facts dt {
+        color: #737e88;
+      }
+
+      .device-facts dd {
+        min-width: 0;
+        margin: 0;
+        color: #35414c;
+        text-align: right;
+        overflow-wrap: anywhere;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: #43505c;
+      }
+
+      .status::before {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #8a949e;
+        content: "";
+      }
+
+      .status.online::before {
+        background: #26a16a;
+      }
+
+      .status.stale::before {
+        background: #d18c18;
+      }
+
+      .status.offline::before {
+        background: #c94d48;
+      }
+
+      .firmware-warning {
+        color: #a36812;
+        font-weight: 700;
+      }
+
+      .firmware-required {
+        color: #a54339;
+        font-weight: 700;
+      }
+
+      dialog {
+        width: min(700px, calc(100vw - 28px));
+        max-height: calc(100vh - 36px);
+        padding: 0;
+        border: 1px solid #aeb7c0;
+        border-radius: 10px;
+        color: #1f2933;
+        background: white;
+        box-shadow: 0 22px 70px rgba(16, 29, 41, 0.22);
+      }
+
+      dialog.wide {
+        width: min(920px, calc(100vw - 28px));
+      }
+
+      dialog::backdrop {
+        background: rgba(23, 32, 40, 0.38);
+        backdrop-filter: blur(2px);
+      }
+
+      .dialog-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 16px;
+        border-bottom: 1px solid #dce1e5;
+      }
+
+      .dialog-header h2 {
+        margin: 0;
+        font-size: 1.08rem;
+      }
+
+      .icon-button {
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 0;
+        border-radius: 5px;
+        color: #53606c;
+        background: transparent;
+        font-size: 1.25rem;
+      }
+
+      .icon-button:hover {
+        background: #eef1f3;
+      }
+
+      .dialog-body {
+        overflow-y: auto;
+        max-height: calc(100vh - 165px);
+        padding: 14px 16px 18px;
+      }
+
+      .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 11px 16px;
+        border-top: 1px solid #dce1e5;
+        background: #fafbfc;
+      }
+
+      .channel-management-list,
+      .mapping-list {
+        display: grid;
+        gap: 7px;
+      }
+
+      .channel-management-row {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .channel-management-row input[type="color"],
+      .add-channel-row > input[type="color"] {
+        width: 38px;
+        height: 34px;
+        padding: 2px;
+        border: 1px solid #c7ced5;
+        border-radius: 5px;
+        background: white;
+      }
+
+      .channel-management-row input[type="text"] {
+        height: 34px;
+        padding: 5px 8px;
+        border: 1px solid #c7ced5;
+        border-radius: 5px;
+      }
+
+      .add-channel-row {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr) auto;
+        align-items: end;
+        gap: 8px;
+        margin-top: 13px;
+        padding-top: 13px;
+        border-top: 1px solid #e0e4e7;
+      }
+
+      .device-form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px 12px;
+      }
+
+      .mapping-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin: 18px 0 7px;
+      }
+
+      .mapping-heading h3 {
+        margin: 0;
+        font-size: 0.9rem;
+      }
+
+      .mapping-row {
+        display: grid;
+        grid-template-columns: 74px 82px 130px minmax(0, 1fr) auto;
+        align-items: end;
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid #e2e6e9;
+      }
+
+      .mapping-row:last-child {
+        border-bottom: 0;
+      }
+
+      .target-picker {
+        position: relative;
+      }
+
+      .target-picker-button {
+        display: flex;
+        width: 100%;
+        min-height: 32px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 6px 9px;
+        border: 1px solid #b9c2ca;
+        border-radius: 5px;
+        color: #26323d;
+        background: white;
+        font: inherit;
+        text-align: left;
+      }
+
+      .target-picker-button:hover,
+      .target-picker.open .target-picker-button {
+        border-color: #297991;
+      }
+
+      .target-picker-button::after {
+        color: #68747f;
+        content: "▾";
+        font-size: 0.75rem;
+      }
+
+      .target-picker-popover {
+        position: absolute;
+        z-index: 20;
+        top: calc(100% + 4px);
+        right: 0;
+        left: 0;
+        min-width: 270px;
+        padding: 7px;
+        border: 1px solid #aeb8c1;
+        border-radius: 7px;
+        background: white;
+        box-shadow: 0 10px 28px rgba(19, 35, 48, 0.18);
+      }
+
+      .target-picker-popover[hidden] {
+        display: none;
+      }
+
+      .target-picker-search {
+        width: 100%;
+        margin-bottom: 6px;
+      }
+
+      .target-picker-options {
+        display: grid;
+        overflow-y: auto;
+        max-height: 220px;
+        gap: 2px;
+      }
+
+      .target-picker-option {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 7px 8px;
+        border: 0;
+        border-radius: 4px;
+        color: #26323d;
+        background: transparent;
+        font: inherit;
+        text-align: left;
+      }
+
+      .target-picker-option:hover,
+      .target-picker-option:focus-visible {
+        background: #edf5f7;
+        outline: 0;
+      }
+
+      .target-picker-option[aria-selected="true"] {
+        color: #155d73;
+        background: #e3f1f4;
+        font-weight: 700;
+      }
+
+      .target-picker-area {
+        color: #6b7782;
+        font-size: 0.7rem;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+
+      .target-picker-empty {
+        margin: 0;
+        padding: 12px 8px;
+        color: #6b7782;
+        font-size: 0.74rem;
+        text-align: center;
+      }
+
+      .checkbox-field {
+        display: flex;
+        min-height: 32px;
+        align-items: center;
+        gap: 5px;
+        color: #52606c;
+        font-size: 0.73rem;
+      }
+
+      .dialog-note {
+        margin: 7px 0 0;
+        color: #6c7782;
+        font-size: 0.7rem;
+        line-height: 1.45;
+      }
+
+      .mapping-profile-field {
+        min-width: min(360px, 100%);
+      }
+
+      .mapping-profile-toolbar {
+        display: flex;
+        align-items: end;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .mapping-profile-fields {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px 12px;
+        padding: 11px;
+        border: 1px solid #dce1e5;
+        border-radius: 7px;
+        background: #f8fafb;
+      }
+
+      .toast {
+        position: fixed;
+        z-index: 100;
+        right: 20px;
+        bottom: 20px;
+        max-width: min(420px, calc(100vw - 40px));
+        padding: 10px 13px;
+        border: 1px solid #9ab1bd;
+        border-radius: 7px;
+        color: #f7fbfd;
+        background: #263d49;
+        box-shadow: 0 8px 30px rgba(18, 31, 42, 0.2);
+        font-size: 0.78rem;
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(8px);
+        transition:
+          opacity 150ms ease,
+          transform 150ms ease;
+      }
+
+      .toast.visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      .visually-hidden {
+        position: absolute;
+        overflow: hidden;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        border: 0;
+        margin: -1px;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+      }
+
+      @media (max-width: 1050px) {
+        .schedule-layout {
+          grid-template-columns: minmax(0, 1fr) 210px;
+        }
+
+        .point-editor {
+          grid-template-columns: auto minmax(180px, 1fr) minmax(180px, 1fr);
+        }
+
+        .editor-message {
+          display: none;
+        }
+
+        .test-controls {
+          grid-template-columns: 190px minmax(0, 1fr);
+        }
+      }
+
+      @media (max-width: 780px) {
+        .topbar {
+          position: static;
+          align-items: stretch;
+          flex-direction: column;
+          padding: 10px 14px;
+        }
+
+        .brand-line {
+          justify-content: space-between;
+        }
+
+        .topbar-actions {
+          justify-content: space-between;
+        }
+
+        .app {
+          width: min(100% - 20px, 1580px);
+          padding-top: 12px;
+        }
+
+        .page-heading {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .heading-actions {
+          flex-wrap: wrap;
+        }
+
+        .schedule-layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .channel-panel {
+          border-top: 1px solid #d9dee3;
+          border-left: 0;
+        }
+
+        .channel-list {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .point-editor {
+          grid-template-columns: 1fr;
+        }
+
+        .test-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .throttle-panel {
+          border-right: 0;
+          border-bottom: 1px solid #d9dee3;
+        }
+
+        .override-heading {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .device-form-grid,
+        .mapping-row,
+        .mapping-profile-fields {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .mapping-profile-toolbar {
+          align-items: stretch;
+          flex-direction: column;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-line">
+        <span class="brand">Aquarium</span>
+        <label>
+          <span class="visually-hidden">Control area</span>
+          <select class="area-select" id="areaSelect">
+            <option selected>Lights</option>
+            <option>Pumps</option>
+            <option>Test lights</option>
+            <option>Bad</option>
+            <option>Loft</option>
+            <option>Biljard</option>
+            <option>Frag</option>
+            <option>Quarantine 1</option>
+            <option>Quarantine 2</option>
+            <option>Quarantine 3</option>
+            <option>Quarantine 4</option>
+          </select>
+        </label>
+      </div>
+      <div class="topbar-actions">
+        <span class="save-state" id="saveState">Demo data · unsaved</span>
+        <span class="save-state">
+          <span class="connection-dot"></span>
+          Controller connected
+        </span>
+        <span>12:22 UTC</span>
+      </div>
+    </header>
+
+    <main class="app">
+      <div class="page-heading">
+        <div>
+          <h1 id="pageTitle">Lights</h1>
+        </div>
+        <div class="heading-actions">
+          <button class="button" id="manageMappingsButton" type="button">
+            Pin mappings
+          </button>
+          <button class="button" id="manageChannelsButton" type="button">
+            Manage channels
+          </button>
+          <button
+            class="button primary"
+            id="saveConfigurationButton"
+            type="button"
+          >
+            Save configuration
+          </button>
+        </div>
+      </div>
+
+      <section class="control-surface" aria-label="Schedule editor">
+        <div class="schedule-layout">
+          <div class="chart-region">
+            <div class="chart-toolbar">
+              <h2 class="chart-title">
+                Daily schedule · <span id="selectedChannelTitle">UV</span>
+              </h2>
+            </div>
+            <svg
+              id="scheduleChart"
+              viewBox="0 0 1000 360"
+              role="img"
+              aria-label="Combined daily channel schedule"
+            ></svg>
+          </div>
+          <aside class="channel-panel" aria-label="Channel selector">
+            <div class="channel-panel-header">
+              <span>Channels</span>
+              <span>Now</span>
+            </div>
+            <div class="channel-list" id="channelList"></div>
+          </aside>
+        </div>
+
+        <div class="point-editor">
+          <div class="point-actions">
+            <button class="button small" id="newPointButton" type="button">
+              New point
+            </button>
+            <button
+              class="button danger small"
+              id="deletePointButton"
+              type="button"
+            >
+              Delete
+            </button>
+          </div>
+          <div class="inline-fields">
+            <label class="field compact">
+              <span>Time</span>
+              <input id="pointTimeInput" type="time" step="60" />
+            </label>
+            <label class="field compact">
+              <span>Output</span>
+              <input
+                id="pointValueInput"
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+              />
+            </label>
+            <button class="button small" id="applyPointButton" type="button">
+              Apply
+            </button>
+          </div>
+          <div
+            class="point-list"
+            id="pointList"
+            aria-label="Schedule points"
+          ></div>
+          <span class="editor-message" id="editorMessage"></span>
+        </div>
+      </section>
+
+      <section
+        class="test-controls"
+        aria-label="Schedule multiplier and manual overrides"
+      >
+        <div class="throttle-panel">
+          <p class="section-kicker">Area control</p>
+          <h2 class="compact-heading">Schedule multiplier</h2>
+          <div class="throttle-value">
+            <output id="throttleOutput">100%</output>
+            <span>all light channels</span>
+          </div>
+          <label>
+            <span class="visually-hidden">Lights schedule multiplier</span>
+            <input
+              class="throttle-range"
+              id="throttleInput"
+              type="range"
+              min="0"
+              max="100"
+              value="100"
+            />
+          </label>
+          <p class="dialog-note">
+            Multiplies scheduled output without changing any graph points.
+          </p>
+        </div>
+
+        <div class="override-panel">
+          <div class="override-heading">
+            <div>
+              <p class="section-kicker">Live testing</p>
+              <h2>Temporary overrides</h2>
+            </div>
+            <div class="override-heading-meta">
+              <span>Duration</span>
+              <select class="duration-select" id="overrideDuration">
+                <option value="60">1 minute</option>
+                <option value="120" selected>2 minutes</option>
+                <option value="300">5 minutes</option>
+                <option value="600">10 minutes</option>
+              </select>
+            </div>
+          </div>
+          <div class="override-bank" id="overrideBank"></div>
+          <div class="override-actions">
+            <button
+              class="button small"
+              id="releaseOverridesButton"
+              type="button"
+            >
+              Release all
+            </button>
+            <button
+              class="button primary small"
+              id="applyOverridesButton"
+              type="button"
+            >
+              Apply test levels
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="devices-section" aria-labelledby="devicesHeading">
+        <div class="devices-heading">
+          <h2 id="devicesHeading">ESP32 devices</h2>
+          <button class="button small" id="refreshDevicesButton" type="button">
+            Refresh
+          </button>
+        </div>
+        <div class="device-grid" id="deviceList"></div>
+      </section>
+    </main>
+
+    <dialog id="channelDialog">
+      <div class="dialog-header">
+        <div>
+          <p class="section-kicker">Lights</p>
+          <h2>Manage channels</h2>
+        </div>
+        <button
+          class="icon-button"
+          data-close-dialog="channelDialog"
+          type="button"
+        >
+          ×
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="channel-management-list" id="channelManagementList"></div>
+        <div class="add-channel-row">
+          <input
+            id="newChannelColor"
+            type="color"
+            value="#16a3a8"
+            aria-label="New channel color"
+          />
+          <label class="field">
+            <span>New channel</span>
+            <input
+              id="newChannelName"
+              type="text"
+              maxlength="40"
+              placeholder="Channel name"
+            />
+          </label>
+          <button class="button" id="addChannelButton" type="button">
+            Add
+          </button>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="button" data-close-dialog="channelDialog" type="button">
+          Done
+        </button>
+      </div>
+    </dialog>
+
+    <dialog id="deviceDialog">
+      <div class="dialog-header">
+        <div>
+          <p class="section-kicker">ESP32 configuration</p>
+          <h2 id="deviceDialogTitle">Edit device</h2>
+        </div>
+        <button
+          class="icon-button"
+          data-close-dialog="deviceDialog"
+          type="button"
+        >
+          ×
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="device-form-grid">
+          <label class="field">
+            <span>ESP name</span>
+            <input id="deviceNameInput" type="text" />
+          </label>
+          <label class="field">
+            <span>PWM frequency</span>
+            <input
+              id="deviceFrequencyInput"
+              type="number"
+              min="1"
+              max="40000"
+            />
+          </label>
+          <label class="field">
+            <span>PWM resolution</span>
+            <select id="deviceResolutionInput">
+              <option value="8">8 bit</option>
+              <option value="10">10 bit</option>
+              <option value="12">12 bit</option>
+              <option value="14">14 bit</option>
+              <option value="16">16 bit</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="button" data-close-dialog="deviceDialog" type="button">
+          Cancel
+        </button>
+        <button class="button primary" id="saveDeviceButton" type="button">
+          Save device
+        </button>
+      </div>
+    </dialog>
+
+    <dialog class="wide" id="mappingDialog">
+      <div class="dialog-header">
+        <div>
+          <p class="section-kicker">Configuration</p>
+          <h2>Pin mappings</h2>
+        </div>
+        <button
+          class="icon-button"
+          data-close-dialog="mappingDialog"
+          type="button"
+        >
+          ×
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="mapping-profile-toolbar">
+          <label class="field mapping-profile-field">
+            <span>Mapping profile</span>
+            <select id="mappingProfileSelect"></select>
+          </label>
+          <button class="button" id="newMappingProfileButton" type="button">
+            New profile
+          </button>
+        </div>
+        <div class="mapping-profile-fields">
+          <label class="field">
+            <span>Profile name</span>
+            <input id="mappingProfileNameInput" type="text" maxlength="40" />
+          </label>
+          <label class="field">
+            <span>ESP name prefix</span>
+            <input id="mappingProfilePrefixInput" type="text" maxlength="40" />
+          </label>
+          <label class="field">
+            <span>Output multiplier</span>
+            <input
+              id="mappingProfileMultiplierInput"
+              type="number"
+              min="0"
+              max="1"
+              step="0.01"
+            />
+          </label>
+        </div>
+        <div class="mapping-heading">
+          <h3 id="mappingProfileHeading">Mappings</h3>
+          <button class="button small" id="addMappingButton" type="button">
+            Add mapping
+          </button>
+        </div>
+        <div class="mapping-list" id="mappingList"></div>
+      </div>
+      <div class="dialog-actions">
+        <button class="button" data-close-dialog="mappingDialog" type="button">
+          Done
+        </button>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const svgNamespace = "http://www.w3.org/2000/svg";
+        const chartBounds = Object.freeze({
+          left: 60,
+          right: 975,
+          top: 20,
+          bottom: 320,
+        });
+        const currentMinute = 12 * 60 + 22;
+        let nextSequence = 100;
+        let dragState = null;
+        let addPointMode = false;
+        let addPointHoverMinute = null;
+        let editingDeviceId = null;
+        let editingMappingProfileId = "profile-lys";
+        let toastTimer = null;
+        const deviceHardwareIds = Object.freeze({
+          "main-lights": "7C9EBD34",
+          qt3: "3CE2E93B",
+          bad: "58B55856",
+          loft: "4FCB45ED",
+          pump: "E6410140",
+          frag: "A0B76521",
+          lys: "215FCD3B",
+          "test-bench": "D8A01C44",
+          "legacy-sump": "C43A35F2",
+        });
+
+        const state = {
+          selectedChannelId: "uv",
+          selectedPointId: "uv-3",
+          throttle: 100,
+          outputs: [
+            {
+              id: "refugium-aux",
+              area: "Frag",
+              name: "Refugium auxiliary",
+            },
+            {
+              id: "moonlight-relay",
+              area: "Lights",
+              name: "Moonlight relay",
+            },
+            {
+              id: "return-pump-relay",
+              area: "Pumps",
+              name: "Return pump relay",
+            },
+          ],
+          otherAreaChannels: [
+            { id: "pumps-return", area: "Pumps", name: "Return pump" },
+            { id: "pumps-wave", area: "Pumps", name: "Wave pumps" },
+            { id: "frag-blue", area: "Frag", name: "Blue" },
+            { id: "frag-white", area: "Frag", name: "White" },
+            { id: "qt3-blue", area: "Quarantine 3", name: "Blue" },
+            { id: "qt3-white", area: "Quarantine 3", name: "White" },
+            { id: "loft-light", area: "Loft", name: "Main light" },
+          ],
+          channels: [
+            {
+              id: "uv",
+              name: "UV",
+              color: "#7357d9",
+              override: 37,
+              points: [
+                point("uv-1", 0, 0),
+                point("uv-2", 7 * 60 + 30, 0),
+                point("uv-3", 9 * 60 + 15, 14),
+                point("uv-4", 12 * 60, 100),
+                point("uv-5", 19 * 60, 100),
+                point("uv-6", 22 * 60 + 30, 14),
+                point("uv-7", 24 * 60, 0),
+              ],
+            },
+            {
+              id: "violet",
+              name: "Violet",
+              color: "#9b43a8",
+              override: 100,
+              points: [
+                point("violet-1", 0, 0),
+                point("violet-2", 7 * 60 + 30, 0),
+                point("violet-3", 11 * 60, 20),
+                point("violet-4", 15 * 60, 90),
+                point("violet-5", 17 * 60, 90),
+                point("violet-6", 20 * 60 + 30, 22),
+                point("violet-7", 24 * 60, 0),
+              ],
+            },
+            {
+              id: "royal-blue",
+              name: "Royal Blue",
+              color: "#3157dc",
+              override: 80,
+              points: [
+                point("royal-1", 0, 0),
+                point("royal-2", 8 * 60, 0),
+                point("royal-3", 10 * 60, 8),
+                point("royal-4", 13 * 60, 100),
+                point("royal-5", 19 * 60, 100),
+                point("royal-6", 22 * 60, 8),
+                point("royal-7", 24 * 60, 0),
+              ],
+            },
+            {
+              id: "blue",
+              name: "Blue",
+              color: "#00a8d7",
+              override: 81,
+              points: [
+                point("blue-1", 0, 0),
+                point("blue-2", 8 * 60 + 30, 0),
+                point("blue-3", 13 * 60 + 10, 100),
+                point("blue-4", 19 * 60 + 20, 100),
+                point("blue-5", 23 * 60, 0),
+                point("blue-6", 24 * 60, 0),
+              ],
+            },
+            {
+              id: "white",
+              name: "White",
+              color: "#73818d",
+              override: 38,
+              points: [
+                point("white-1", 0, 0),
+                point("white-2", 8 * 60, 0),
+                point("white-3", 11 * 60, 6),
+                point("white-4", 15 * 60, 100),
+                point("white-5", 17 * 60, 100),
+                point("white-6", 21 * 60, 8),
+                point("white-7", 24 * 60, 0),
+              ],
+            },
+            {
+              id: "red",
+              name: "Red",
+              color: "#e14f45",
+              override: 17,
+              points: [
+                point("red-1", 0, 0),
+                point("red-2", 8 * 60, 0),
+                point("red-3", 11 * 60, 8),
+                point("red-4", 15 * 60, 30),
+                point("red-5", 17 * 60, 30),
+                point("red-6", 21 * 60, 8),
+                point("red-7", 24 * 60, 0),
+              ],
+            },
+          ],
+          mappingProfiles: [
+            mappingProfile("profile-lys", "Main lights", "Lys", 0.7, [
+              mapping(13, "uv"),
+              mapping(12, "violet"),
+              mapping(14, "royal-blue"),
+              mapping(27, "blue"),
+              mapping(26, "white"),
+              mapping(25, "red"),
+            ]),
+            mappingProfile("profile-qt3", "Quarantine 3", "Qt3", 1, [
+              mapping(12, "royal-blue"),
+              mapping(13, "white"),
+            ]),
+            mappingProfile("profile-bad", "Bad lights", "Bad", 1, [
+              mapping(25, "blue"),
+            ]),
+            mappingProfile("profile-loft", "Loft lights", "Loft", 1, [
+              mapping(14, "white"),
+            ]),
+            mappingProfile("profile-pump", "Pumps", "Pump", 1, [
+              mapping(26, "blue"),
+            ]),
+            mappingProfile("profile-frag", "Frag rack", "Frag", 0.85, [
+              mapping(12, "uv"),
+              mapping(13, "royal-blue"),
+            ]),
+            mappingProfile("profile-test", "Test lights", "Test", 1, [
+              mapping(25, "red"),
+            ]),
+            mappingProfile("profile-xpump", "Extra pumps", "Xpump", 1, [
+              mapping(27, "blue"),
+            ]),
+          ],
+          devices: [
+            device(
+              "main-lights",
+              "Lys",
+              "online",
+              "4.1.0",
+              "now",
+              "profile-lys",
+            ),
+            device("qt3", "Qt3", "online", "4.1.0", "2 sec ago", "profile-qt3"),
+            device("bad", "Bad", "online", "4.1.0", "now", "profile-bad"),
+            device(
+              "loft",
+              "Loft",
+              "stale",
+              "4.1.0",
+              "2 min ago",
+              "profile-loft",
+            ),
+            device(
+              "pump",
+              "Pump",
+              "online",
+              "4.1.0",
+              "1 sec ago",
+              "profile-pump",
+            ),
+            device(
+              "frag",
+              "Frag",
+              "offline",
+              "4.1.0",
+              "6 min ago",
+              "profile-frag",
+            ),
+            device(
+              "lys",
+              "LysBackup",
+              "online",
+              "4.0.0",
+              "3 sec ago",
+              "profile-lys",
+            ),
+            device(
+              "test-bench",
+              "Test",
+              "offline",
+              "4.1.0",
+              "2 hours ago",
+              "profile-test",
+            ),
+            device(
+              "legacy-sump",
+              "PumpLegacy",
+              "online",
+              "3.8.2",
+              "4 sec ago",
+              "profile-pump",
+            ),
+          ],
+        };
+
+        const elements = {
+          scheduleChart: document.querySelector("#scheduleChart"),
+          channelList: document.querySelector("#channelList"),
+          selectedChannelTitle: document.querySelector("#selectedChannelTitle"),
+          pointList: document.querySelector("#pointList"),
+          pointTimeInput: document.querySelector("#pointTimeInput"),
+          pointValueInput: document.querySelector("#pointValueInput"),
+          newPointButton: document.querySelector("#newPointButton"),
+          deletePointButton: document.querySelector("#deletePointButton"),
+          applyPointButton: document.querySelector("#applyPointButton"),
+          editorMessage: document.querySelector("#editorMessage"),
+          throttleInput: document.querySelector("#throttleInput"),
+          throttleOutput: document.querySelector("#throttleOutput"),
+          overrideBank: document.querySelector("#overrideBank"),
+          channelDialog: document.querySelector("#channelDialog"),
+          channelManagementList: document.querySelector(
+            "#channelManagementList",
+          ),
+          newChannelName: document.querySelector("#newChannelName"),
+          newChannelColor: document.querySelector("#newChannelColor"),
+          deviceList: document.querySelector("#deviceList"),
+          deviceDialog: document.querySelector("#deviceDialog"),
+          deviceDialogTitle: document.querySelector("#deviceDialogTitle"),
+          deviceNameInput: document.querySelector("#deviceNameInput"),
+          deviceFrequencyInput: document.querySelector("#deviceFrequencyInput"),
+          deviceResolutionInput: document.querySelector(
+            "#deviceResolutionInput",
+          ),
+          mappingDialog: document.querySelector("#mappingDialog"),
+          mappingProfileSelect: document.querySelector("#mappingProfileSelect"),
+          mappingProfileNameInput: document.querySelector(
+            "#mappingProfileNameInput",
+          ),
+          mappingProfilePrefixInput: document.querySelector(
+            "#mappingProfilePrefixInput",
+          ),
+          mappingProfileMultiplierInput: document.querySelector(
+            "#mappingProfileMultiplierInput",
+          ),
+          mappingProfileHeading: document.querySelector(
+            "#mappingProfileHeading",
+          ),
+          mappingList: document.querySelector("#mappingList"),
+          saveState: document.querySelector("#saveState"),
+          toast: document.querySelector("#toast"),
+          areaSelect: document.querySelector("#areaSelect"),
+          pageTitle: document.querySelector("#pageTitle"),
+        };
+
+        function point(id, minute, value) {
+          return { id, minute, value };
+        }
+
+        function mapping(
+          pin,
+          targetId,
+          enabled = true,
+          targetKind = "channel",
+        ) {
+          return {
+            id: `mapping-${nextSequence++}`,
+            pin,
+            targetKind,
+            targetId,
+            enabled,
+          };
+        }
+
+        function mappingProfile(
+          id,
+          name,
+          deviceNamePrefix,
+          outputMultiplier,
+          mappings,
+        ) {
+          return {
+            id,
+            name,
+            deviceNamePrefix,
+            outputMultiplier,
+            mappings,
+          };
+        }
+
+        function device(
+          id,
+          name,
+          status,
+          firmware,
+          lastResponse,
+          mappingProfileId,
+        ) {
+          return {
+            id,
+            hardwareId: deviceHardwareIds[id] ?? "UNKNOWN",
+            name,
+            status,
+            firmware,
+            lastResponse,
+            frequency: 1000,
+            resolution: 8,
+            mappingProfileId,
+          };
+        }
+
+        function selectedChannel() {
+          return (
+            state.channels.find(
+              (channel) => channel.id === state.selectedChannelId,
+            ) ?? state.channels[0]
+          );
+        }
+
+        function selectedPoint() {
+          const channel = selectedChannel();
+          return (
+            channel?.points.find(
+              (schedulePoint) => schedulePoint.id === state.selectedPointId,
+            ) ?? null
+          );
+        }
+
+        function markDirty() {
+          elements.saveState.textContent = "Demo data · unsaved changes";
+        }
+
+        function saveDemo() {
+          elements.saveState.textContent = "Demo data · saved just now";
+          showToast("Configuration saved in this demo session only.");
+        }
+
+        function showToast(message) {
+          elements.toast.textContent = message;
+          elements.toast.classList.add("visible");
+          window.clearTimeout(toastTimer);
+          toastTimer = window.setTimeout(() => {
+            elements.toast.classList.remove("visible");
+          }, 2600);
+        }
+
+        function createSvgElement(name, attributes = {}) {
+          const element = document.createElementNS(svgNamespace, name);
+          for (const [key, value] of Object.entries(attributes)) {
+            element.setAttribute(key, String(value));
+          }
+          return element;
+        }
+
+        function minuteToX(minute) {
+          return (
+            chartBounds.left +
+            (minute / 1440) * (chartBounds.right - chartBounds.left)
+          );
+        }
+
+        function valueToY(value) {
+          return (
+            chartBounds.bottom -
+            (value / 100) * (chartBounds.bottom - chartBounds.top)
+          );
+        }
+
+        function graphPositionFromEvent(event) {
+          const screenMatrix = elements.scheduleChart.getScreenCTM();
+          if (screenMatrix === null) {
+            throw new Error("The schedule chart is not attached to the page.");
+          }
+          const pointer = elements.scheduleChart.createSVGPoint();
+          pointer.x = event.clientX;
+          pointer.y = event.clientY;
+          const graphPoint = pointer.matrixTransform(screenMatrix.inverse());
+          const rawMinute = clamp(
+            ((graphPoint.x - chartBounds.left) /
+              (chartBounds.right - chartBounds.left)) *
+              1440,
+            0,
+            1440,
+          );
+          const minute = clamp(Math.round(rawMinute / 5) * 5, 0, 1440);
+          const rawValue = clamp(
+            ((chartBounds.bottom - graphPoint.y) /
+              (chartBounds.bottom - chartBounds.top)) *
+              100,
+            0,
+            100,
+          );
+          const value = Math.round(rawValue);
+          return { minute, value, rawMinute, rawValue };
+        }
+
+        function clamp(value, minimum, maximum) {
+          return Math.min(Math.max(value, minimum), maximum);
+        }
+
+        function formatTime(minute) {
+          const boundedMinute = clamp(minute, 0, 1440);
+          const hours = Math.floor(boundedMinute / 60);
+          const minutes = boundedMinute % 60;
+          return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(
+            2,
+            "0",
+          )}`;
+        }
+
+        function parseTime(value) {
+          const [hourText, minuteText] = value.split(":");
+          const hours = Number(hourText);
+          const minutes = Number(minuteText);
+          if (
+            !Number.isInteger(hours) ||
+            !Number.isInteger(minutes) ||
+            hours < 0 ||
+            hours > 24 ||
+            minutes < 0 ||
+            minutes > 59
+          ) {
+            return null;
+          }
+          return clamp(hours * 60 + minutes, 0, 1440);
+        }
+
+        function scheduleValueAt(channel, minute) {
+          const points = [...channel.points].sort(
+            (left, right) => left.minute - right.minute,
+          );
+          if (points.length === 0) return 0;
+          if (points.length === 1) return points[0].value;
+          for (let index = 1; index < points.length; index += 1) {
+            const target = points[index];
+            const source = points[index - 1];
+            if (minute >= source.minute && minute <= target.minute) {
+              const duration = target.minute - source.minute;
+              if (duration === 0) return target.value;
+              const progress = (minute - source.minute) / duration;
+              return Math.round(
+                source.value + (target.value - source.value) * progress,
+              );
+            }
+          }
+          const first = points[0];
+          const last = points.at(-1);
+          const beforeFirst = minute < first.minute;
+          const sourceMinute = beforeFirst ? last.minute - 1440 : last.minute;
+          const targetMinute = beforeFirst ? first.minute : first.minute + 1440;
+          const duration = targetMinute - sourceMinute;
+          if (duration === 0) return first.value;
+          const progress = (minute - sourceMinute) / duration;
+          return Math.round(last.value + (first.value - last.value) * progress);
+        }
+
+        function selectChannel(channelId, preferredPointId = null) {
+          const channel = state.channels.find((item) => item.id === channelId);
+          if (channel === undefined) return;
+          state.selectedChannelId = channel.id;
+          state.selectedPointId =
+            preferredPointId ??
+            channel.points.find(
+              (schedulePoint) => schedulePoint.minute >= currentMinute,
+            )?.id ??
+            channel.points.at(-1)?.id ??
+            null;
+          addPointMode = false;
+          addPointHoverMinute = null;
+          renderAll();
+        }
+
+        function selectPoint(pointId) {
+          state.selectedPointId = pointId;
+          addPointMode = false;
+          addPointHoverMinute = null;
+          renderAll();
+        }
+
+        function renderAll() {
+          renderGraph();
+          renderChannelList();
+          renderPointEditor();
+          renderOverrides();
+          renderDevices();
+        }
+
+        function renderGraph() {
+          const svg = elements.scheduleChart;
+          svg.replaceChildren();
+          svg.classList.toggle("add-mode", addPointMode);
+
+          const background = createSvgElement("rect", {
+            x: 0,
+            y: 0,
+            width: 1000,
+            height: 360,
+            fill: "#f8fafb",
+            rx: 6,
+          });
+          svg.append(background);
+
+          for (const value of [0, 25, 50, 75, 100]) {
+            const y = valueToY(value);
+            svg.append(
+              createSvgElement("line", {
+                x1: chartBounds.left,
+                x2: chartBounds.right,
+                y1: y,
+                y2: y,
+                stroke: value === 0 ? "#98a3ad" : "#d8dde2",
+                "stroke-width": value === 0 ? 1.3 : 1,
+              }),
+            );
+            const label = createSvgElement("text", {
+              x: chartBounds.left - 11,
+              y: y + 4,
+              fill: "#6e7984",
+              "font-size": 12,
+              "text-anchor": "end",
+            });
+            label.textContent = `${value}%`;
+            svg.append(label);
+          }
+
+          for (let hour = 0; hour <= 24; hour += 1) {
+            const x = minuteToX(hour * 60);
+            svg.append(
+              createSvgElement("line", {
+                x1: x,
+                x2: x,
+                y1: chartBounds.top,
+                y2: chartBounds.bottom,
+                stroke: hour % 3 === 0 ? "#d8dde2" : "#edf0f2",
+                "stroke-width": 1,
+              }),
+            );
+            if (hour % 3 === 0) {
+              const label = createSvgElement("text", {
+                x,
+                y: chartBounds.bottom + 24,
+                fill: "#6e7984",
+                "font-size": 12,
+                "text-anchor":
+                  hour === 0 ? "start" : hour === 24 ? "end" : "middle",
+              });
+              label.textContent = `${String(hour).padStart(2, "0")}:00`;
+              svg.append(label);
+            }
+          }
+
+          const nowX = minuteToX(currentMinute);
+          svg.append(
+            createSvgElement("line", {
+              x1: nowX,
+              x2: nowX,
+              y1: chartBounds.top,
+              y2: chartBounds.bottom,
+              stroke: "#2c3c48",
+              "stroke-width": 1.4,
+              "stroke-dasharray": "4 4",
+              opacity: 0.55,
+            }),
+          );
+
+          if (addPointMode && addPointHoverMinute !== null) {
+            const hoverX = minuteToX(addPointHoverMinute);
+            svg.append(
+              createSvgElement("line", {
+                x1: hoverX,
+                x2: hoverX,
+                y1: chartBounds.top,
+                y2: chartBounds.bottom,
+                stroke: selectedChannel().color,
+                "stroke-width": 2,
+                "stroke-dasharray": "5 4",
+                opacity: 0.9,
+                "pointer-events": "none",
+              }),
+            );
+          }
+
+          const orderedChannels = [
+            ...state.channels.filter(
+              (channel) => channel.id !== state.selectedChannelId,
+            ),
+            selectedChannel(),
+          ].filter(Boolean);
+
+          for (const channel of orderedChannels) {
+            const selected = channel.id === state.selectedChannelId;
+            const points = [...channel.points].sort(
+              (left, right) => left.minute - right.minute,
+            );
+            const graphPoints = [...points];
+            const firstPoint = points[0];
+            const lastPoint = points.at(-1);
+            if (firstPoint !== undefined && firstPoint.minute > 0) {
+              graphPoints.unshift(
+                point("wrap-start", 0, scheduleValueAt(channel, 0)),
+              );
+            }
+            if (lastPoint !== undefined && lastPoint.minute < 1440) {
+              graphPoints.push(
+                point("wrap-end", 1440, scheduleValueAt(channel, 1440)),
+              );
+            }
+            const polyline = createSvgElement("polyline", {
+              points: graphPoints
+                .map(
+                  (schedulePoint) =>
+                    `${minuteToX(schedulePoint.minute)},${valueToY(
+                      schedulePoint.value,
+                    )}`,
+                )
+                .join(" "),
+              fill: "none",
+              stroke: channel.color,
+              "stroke-width": selected ? 4.5 : 2.2,
+              "stroke-linecap": "round",
+              "stroke-linejoin": "round",
+              opacity: selected ? 1 : 0.5,
+              "data-channel-id": channel.id,
+              "pointer-events": "none",
+            });
+            svg.append(polyline);
+
+            for (const schedulePoint of points) {
+              const pointSelected =
+                selected && schedulePoint.id === state.selectedPointId;
+              const circle = createSvgElement("circle", {
+                cx: minuteToX(schedulePoint.minute),
+                cy: valueToY(schedulePoint.value),
+                r: pointSelected ? 11 : selected ? 7.5 : 3.5,
+                fill: channel.color,
+                stroke: "none",
+                "stroke-width": 0,
+                opacity: selected ? 1 : 0.78,
+                "data-channel-id": channel.id,
+                "data-point-id": schedulePoint.id,
+                "pointer-events": selected ? "all" : "none",
+                style: selected ? "cursor:grab" : "",
+                tabindex: selected ? "0" : "-1",
+                role: "button",
+                "aria-label": `${channel.name} ${formatTime(
+                  schedulePoint.minute,
+                )} ${schedulePoint.value}%`,
+              });
+              svg.append(circle);
+            }
+          }
+        }
+
+        function renderChannelList() {
+          elements.channelList.replaceChildren();
+          for (const channel of state.channels) {
+            const button = document.createElement("button");
+            button.className = "channel-row";
+            if (channel.id === state.selectedChannelId) {
+              button.classList.add("selected");
+            }
+            button.type = "button";
+            button.style.setProperty("--channel-color", channel.color);
+            button.dataset.channelId = channel.id;
+            const swatch = document.createElement("span");
+            swatch.className = "channel-swatch";
+            const name = document.createElement("span");
+            name.className = "channel-name";
+            name.textContent = channel.name;
+            const now = document.createElement("span");
+            now.className = "channel-now";
+            now.textContent = `${scheduleValueAt(channel, currentMinute)}%`;
+            button.append(swatch, name, now);
+            button.addEventListener("click", () => selectChannel(channel.id));
+            elements.channelList.append(button);
+          }
+        }
+
+        function renderPointEditor() {
+          const channel = selectedChannel();
+          const schedulePoint = selectedPoint();
+          elements.selectedChannelTitle.textContent = channel?.name ?? "None";
+          elements.pointList.replaceChildren();
+
+          for (const candidate of channel?.points ?? []) {
+            const button = document.createElement("button");
+            button.className = "point-pill";
+            if (candidate.id === state.selectedPointId) {
+              button.classList.add("selected");
+            }
+            button.type = "button";
+            button.textContent = `${formatTime(candidate.minute)} · ${
+              candidate.value
+            }%`;
+            button.addEventListener("click", () => selectPoint(candidate.id));
+            elements.pointList.append(button);
+          }
+
+          elements.pointTimeInput.value =
+            schedulePoint === null ? "" : formatTime(schedulePoint.minute);
+          elements.pointValueInput.value =
+            schedulePoint === null ? "" : String(schedulePoint.value);
+          elements.pointTimeInput.disabled = schedulePoint === null;
+          elements.pointValueInput.disabled = schedulePoint === null;
+          elements.applyPointButton.disabled = schedulePoint === null;
+          elements.deletePointButton.disabled =
+            schedulePoint === null || (channel?.points.length ?? 0) <= 2;
+          elements.newPointButton.textContent = addPointMode
+            ? "Click graph…"
+            : "New point";
+          elements.editorMessage.textContent = addPointMode
+            ? "Click anywhere in the chart to place the point"
+            : "";
+        }
+
+        function renderOverrides() {
+          elements.overrideBank.replaceChildren();
+          for (const channel of state.channels) {
+            const wrapper = document.createElement("label");
+            wrapper.className = "override-channel";
+            wrapper.style.setProperty("--channel-color", channel.color);
+            const name = document.createElement("span");
+            name.className = "override-label";
+            name.textContent = channel.name;
+            const value = document.createElement("output");
+            value.className = "override-value";
+            value.textContent = `${channel.override}%`;
+            const input = document.createElement("input");
+            input.className = "override-slider";
+            input.type = "range";
+            input.min = "0";
+            input.max = "100";
+            input.value = String(channel.override);
+            input.style.accentColor = channel.color;
+            input.setAttribute(
+              "aria-label",
+              `${channel.name} temporary override`,
+            );
+            input.addEventListener("input", () => {
+              channel.override = Number(input.value);
+              value.textContent = `${channel.override}%`;
+              markDirty();
+            });
+            wrapper.append(name, value, input);
+            elements.overrideBank.append(wrapper);
+          }
+        }
+
+        function renderDevices() {
+          elements.deviceList.replaceChildren();
+          for (const controller of state.devices) {
+            const firmware = firmwarePresentation(controller.firmware);
+            const profile =
+              state.mappingProfiles.find(
+                (candidate) => candidate.id === controller.mappingProfileId,
+              ) ?? null;
+            const card = document.createElement("article");
+            card.className = `device-card ${controller.status}`;
+            const canExclude = ["stale", "offline"].includes(controller.status);
+            card.innerHTML = `
+              <div class="device-card-header">
+                <h3>${escapeHtml(controller.name)}</h3>
+                <div class="device-card-actions">
+                  <button
+                    class="button small"
+                    type="button"
+                    data-device-id="${escapeHtml(controller.id)}"
+                    aria-label="Edit ${escapeHtml(controller.name)}"
+                  >Edit</button>
+                  ${
+                    canExclude
+                      ? `<button
+                          class="button device-exclude"
+                          type="button"
+                          data-exclude-device-id="${escapeHtml(controller.id)}"
+                          aria-label="Exclude ${escapeHtml(controller.name)}"
+                          title="Exclude device"
+                        >×</button>`
+                      : ""
+                  }
+                </div>
+              </div>
+              <div class="device-id">ID: ${escapeHtml(controller.hardwareId)}</div>
+              <dl class="device-facts">
+                <dt>Status</dt>
+                <dd><span class="status ${controller.status}">${capitalize(
+                  controller.status,
+                )}</span></dd>
+                <dt>Firmware</dt>
+                <dd class="${firmware.className}">${escapeHtml(
+                  firmware.label,
+                )}</dd>
+                <dt>Profile</dt>
+                <dd>${escapeHtml(profile?.name ?? "None")}</dd>
+                <dt>Mappings</dt>
+                <dd>${profile?.mappings.filter((item) => item.enabled).length ?? 0}</dd>
+                <dt>Last response</dt>
+                <dd>${escapeHtml(controller.lastResponse)}</dd>
+              </dl>
+            `;
+            card
+              .querySelector("[data-device-id]")
+              .addEventListener("click", () => openDeviceDialog(controller.id));
+            card
+              .querySelector("[data-exclude-device-id]")
+              ?.addEventListener("click", () => excludeDevice(controller.id));
+            elements.deviceList.append(card);
+          }
+        }
+
+        function excludeDevice(deviceId) {
+          const controller = state.devices.find((item) => item.id === deviceId);
+          if (controller === undefined) return;
+          state.devices = state.devices.filter((item) => item.id !== deviceId);
+          renderDevices();
+          showToast(
+            `${controller.name} excluded from command dispatch. It can return when rediscovered.`,
+          );
+        }
+
+        function firmwarePresentation(version) {
+          if (version === "4.1.0") {
+            return { className: "", label: version };
+          }
+          const majorVersion = Number.parseInt(version.split(".")[0], 10);
+          if (majorVersion >= 4) {
+            return {
+              className: "firmware-warning",
+              label: `${version} · update available`,
+            };
+          }
+          return {
+            className: "firmware-required",
+            label: `${version} · upgrade required`,
+          };
+        }
+
+        function renderChannelManagement() {
+          elements.channelManagementList.replaceChildren();
+          for (const channel of state.channels) {
+            const row = document.createElement("div");
+            row.className = "channel-management-row";
+            const colorInput = document.createElement("input");
+            colorInput.type = "color";
+            colorInput.value = channel.color;
+            colorInput.setAttribute("aria-label", `${channel.name} color`);
+            colorInput.addEventListener("input", () => {
+              channel.color = colorInput.value;
+              markDirty();
+              renderAll();
+            });
+            const nameInput = document.createElement("input");
+            nameInput.type = "text";
+            nameInput.value = channel.name;
+            nameInput.maxLength = 40;
+            nameInput.setAttribute("aria-label", `${channel.name} name`);
+            nameInput.addEventListener("input", () => {
+              channel.name = nameInput.value || "Untitled";
+              markDirty();
+              renderAll();
+            });
+            const removeButton = document.createElement("button");
+            removeButton.className = "button danger small";
+            removeButton.type = "button";
+            removeButton.textContent = "Delete";
+            removeButton.disabled = state.channels.length <= 1;
+            removeButton.addEventListener("click", () => {
+              removeChannel(channel.id);
+            });
+            row.append(colorInput, nameInput, removeButton);
+            elements.channelManagementList.append(row);
+          }
+        }
+
+        function removeChannel(channelId) {
+          if (state.channels.length <= 1) return;
+          const index = state.channels.findIndex(
+            (channel) => channel.id === channelId,
+          );
+          if (index < 0) return;
+          state.channels.splice(index, 1);
+          for (const profile of state.mappingProfiles) {
+            profile.mappings = profile.mappings.filter(
+              (item) =>
+                item.targetKind !== "channel" || item.targetId !== channelId,
+            );
+          }
+          if (state.selectedChannelId === channelId) {
+            const fallback =
+              state.channels[Math.min(index, state.channels.length - 1)];
+            state.selectedChannelId = fallback.id;
+            state.selectedPointId = fallback.points[0]?.id ?? null;
+          }
+          markDirty();
+          renderChannelManagement();
+          renderAll();
+        }
+
+        function chooseDistinctChannelColor() {
+          const candidates = [
+            "#0f766e",
+            "#d97706",
+            "#2b8a3e",
+            "#be123c",
+            "#4f46e5",
+            "#c026d3",
+            "#0891b2",
+            "#65a30d",
+            "#7c3aed",
+          ];
+          const toRgb = (hex) => [
+            Number.parseInt(hex.slice(1, 3), 16),
+            Number.parseInt(hex.slice(3, 5), 16),
+            Number.parseInt(hex.slice(5, 7), 16),
+          ];
+          const existingColors = state.channels.map((channel) =>
+            toRgb(channel.color),
+          );
+          return candidates.reduce(
+            (best, candidate) => {
+              const [red, green, blue] = toRgb(candidate);
+              const nearestDistance = Math.min(
+                ...existingColors.map(
+                  ([existingRed, existingGreen, existingBlue]) =>
+                    (red - existingRed) ** 2 +
+                    (green - existingGreen) ** 2 +
+                    (blue - existingBlue) ** 2,
+                ),
+              );
+              return nearestDistance > best.distance
+                ? { color: candidate, distance: nearestDistance }
+                : best;
+            },
+            { color: candidates[0], distance: -1 },
+          ).color;
+        }
+
+        function addChannel() {
+          const name = elements.newChannelName.value.trim();
+          if (name.length === 0) {
+            showToast("Enter a channel name first.");
+            elements.newChannelName.focus();
+            return;
+          }
+          const id = `channel-${nextSequence++}`;
+          const channel = {
+            id,
+            name,
+            color: elements.newChannelColor.value,
+            override: 0,
+            points: [
+              point(`${id}-1`, 0, 0),
+              point(`${id}-2`, 12 * 60, 50),
+              point(`${id}-3`, 24 * 60, 0),
+            ],
+          };
+          state.channels.push(channel);
+          elements.newChannelName.value = "";
+          elements.newChannelColor.value = chooseDistinctChannelColor();
+          state.selectedChannelId = channel.id;
+          state.selectedPointId = channel.points[1].id;
+          markDirty();
+          renderChannelManagement();
+          renderAll();
+          showToast(`${channel.name} added to the combined chart.`);
+        }
+
+        function openDeviceDialog(deviceId) {
+          const controller = state.devices.find((item) => item.id === deviceId);
+          if (controller === undefined) return;
+          editingDeviceId = controller.id;
+          elements.deviceDialogTitle.textContent = `Edit ${controller.name}`;
+          elements.deviceNameInput.value = controller.name;
+          elements.deviceFrequencyInput.value = String(controller.frequency);
+          elements.deviceResolutionInput.value = String(controller.resolution);
+          elements.deviceDialog.showModal();
+        }
+
+        function editingDevice() {
+          return (
+            state.devices.find((item) => item.id === editingDeviceId) ?? null
+          );
+        }
+
+        function openMappingDialog() {
+          if (
+            !state.mappingProfiles.some(
+              (profile) => profile.id === editingMappingProfileId,
+            )
+          ) {
+            editingMappingProfileId = state.mappingProfiles[0]?.id ?? null;
+          }
+          renderMappingProfileSelector();
+          renderMappings(editingMappingProfile());
+          elements.mappingDialog.showModal();
+        }
+
+        function renderMappingProfileSelector() {
+          elements.mappingProfileSelect.replaceChildren();
+          for (const profile of state.mappingProfiles) {
+            const option = document.createElement("option");
+            option.value = profile.id;
+            option.textContent = `${profile.name} · ${profile.deviceNamePrefix}*`;
+            option.selected = profile.id === editingMappingProfileId;
+            elements.mappingProfileSelect.append(option);
+          }
+          elements.mappingProfileSelect.value = editingMappingProfileId;
+        }
+
+        function editingMappingProfile() {
+          return (
+            state.mappingProfiles.find(
+              (item) => item.id === editingMappingProfileId,
+            ) ?? null
+          );
+        }
+
+        function availableMappingTargets(targetKind) {
+          if (targetKind === "output") return state.outputs;
+          return [
+            ...state.channels.map((channel) => ({
+              id: channel.id,
+              area: "Lights",
+              name: channel.name,
+            })),
+            ...state.otherAreaChannels,
+          ];
+        }
+
+        function mappingTargetLabel(target) {
+          return `${target.area} · ${target.name}`;
+        }
+
+        function closeTargetPickers(except = null) {
+          for (const picker of document.querySelectorAll(
+            ".target-picker.open",
+          )) {
+            if (picker === except) continue;
+            picker.classList.remove("open");
+            picker
+              .querySelector(".target-picker-button")
+              .setAttribute("aria-expanded", "false");
+            picker.querySelector(".target-picker-popover").hidden = true;
+          }
+        }
+
+        function renderMappings(profile) {
+          elements.mappingList.replaceChildren();
+          if (profile === null) {
+            elements.mappingProfileHeading.textContent = "Mappings";
+            elements.mappingProfileNameInput.value = "";
+            elements.mappingProfilePrefixInput.value = "";
+            elements.mappingProfileMultiplierInput.value = "";
+            return;
+          }
+          elements.mappingProfileNameInput.value = profile.name;
+          elements.mappingProfilePrefixInput.value = profile.deviceNamePrefix;
+          elements.mappingProfileMultiplierInput.value = String(
+            profile.outputMultiplier,
+          );
+          elements.mappingProfileHeading.textContent = `${profile.name} · ${profile.deviceNamePrefix}*`;
+          for (const item of profile.mappings) {
+            const row = document.createElement("div");
+            row.className = "mapping-row";
+
+            const enabledLabel = document.createElement("label");
+            enabledLabel.className = "checkbox-field";
+            const enabled = document.createElement("input");
+            enabled.type = "checkbox";
+            enabled.checked = item.enabled;
+            enabled.addEventListener("change", () => {
+              item.enabled = enabled.checked;
+              markDirty();
+            });
+            enabledLabel.append(enabled, document.createTextNode("Enabled"));
+
+            const pinField = document.createElement("label");
+            pinField.className = "field";
+            pinField.innerHTML = "<span>Pin</span>";
+            const pinInput = document.createElement("input");
+            pinInput.type = "number";
+            pinInput.min = "0";
+            pinInput.max = "63";
+            pinInput.value = String(item.pin);
+            pinInput.addEventListener("input", () => {
+              item.pin = clamp(Number(pinInput.value) || 0, 0, 63);
+              markDirty();
+            });
+            pinField.append(pinInput);
+
+            const targetKindField = document.createElement("label");
+            targetKindField.className = "field";
+            targetKindField.innerHTML = "<span>Target type</span>";
+            const targetKindSelect = document.createElement("select");
+            for (const [value, name] of [
+              ["channel", "Channel"],
+              ["output", "Output"],
+            ]) {
+              const option = document.createElement("option");
+              option.value = value;
+              option.textContent = name;
+              option.selected = value === item.targetKind;
+              targetKindSelect.append(option);
+            }
+            targetKindField.append(targetKindSelect);
+
+            const targetField = document.createElement("div");
+            targetField.className = "field";
+            targetField.innerHTML = "<span>Target</span>";
+            const targetPicker = document.createElement("div");
+            targetPicker.className = "target-picker";
+            const targetButton = document.createElement("button");
+            targetButton.className = "target-picker-button";
+            targetButton.type = "button";
+            targetButton.setAttribute("aria-haspopup", "listbox");
+            targetButton.setAttribute("aria-expanded", "false");
+            targetButton.setAttribute(
+              "aria-label",
+              `Select target for pin ${item.pin}`,
+            );
+            const targetValue = document.createElement("span");
+            const targetPopover = document.createElement("div");
+            targetPopover.className = "target-picker-popover";
+            targetPopover.hidden = true;
+            const targetSearch = document.createElement("input");
+            targetSearch.className = "target-picker-search";
+            targetSearch.type = "search";
+            targetSearch.placeholder = "Search targets…";
+            targetSearch.setAttribute(
+              "aria-label",
+              `Search targets for pin ${item.pin}`,
+            );
+            const targetOptions = document.createElement("div");
+            targetOptions.className = "target-picker-options";
+            targetOptions.setAttribute("role", "listbox");
+            const targets = availableMappingTargets(item.targetKind);
+            if (!targets.some((target) => target.id === item.targetId)) {
+              item.targetId = targets[0]?.id ?? "";
+            }
+            const selectedTarget = targets.find(
+              (target) => target.id === item.targetId,
+            );
+            targetValue.textContent =
+              selectedTarget === undefined
+                ? "Select target"
+                : mappingTargetLabel(selectedTarget);
+            targetButton.append(targetValue);
+
+            const renderTargetOptions = () => {
+              targetOptions.replaceChildren();
+              const query = targetSearch.value.trim().toLocaleLowerCase();
+              const matches = targets.filter((target) =>
+                mappingTargetLabel(target).toLocaleLowerCase().includes(query),
+              );
+              for (const target of matches) {
+                const option = document.createElement("button");
+                option.className = "target-picker-option";
+                option.type = "button";
+                option.setAttribute("role", "option");
+                option.setAttribute(
+                  "aria-selected",
+                  String(target.id === item.targetId),
+                );
+                const name = document.createElement("span");
+                name.textContent = target.name;
+                const area = document.createElement("span");
+                area.className = "target-picker-area";
+                area.textContent = target.area;
+                option.append(name, area);
+                option.addEventListener("click", () => {
+                  item.targetId = target.id;
+                  targetValue.textContent = mappingTargetLabel(target);
+                  markDirty();
+                  closeTargetPickers();
+                });
+                targetOptions.append(option);
+              }
+              if (matches.length === 0) {
+                const empty = document.createElement("p");
+                empty.className = "target-picker-empty";
+                empty.textContent = "No matching targets";
+                targetOptions.append(empty);
+              }
+            };
+
+            targetButton.addEventListener("click", (event) => {
+              event.stopPropagation();
+              const wasOpen = targetPicker.classList.contains("open");
+              closeTargetPickers(targetPicker);
+              if (wasOpen) {
+                targetPicker.classList.remove("open");
+                targetButton.setAttribute("aria-expanded", "false");
+                targetPopover.hidden = true;
+                return;
+              }
+              targetSearch.value = "";
+              renderTargetOptions();
+              targetPicker.classList.add("open");
+              targetButton.setAttribute("aria-expanded", "true");
+              targetPopover.hidden = false;
+              targetSearch.focus();
+            });
+            targetPopover.addEventListener("click", (event) => {
+              event.stopPropagation();
+            });
+            targetSearch.addEventListener("input", renderTargetOptions);
+            targetSearch.addEventListener("keydown", (event) => {
+              if (event.key === "Escape") {
+                closeTargetPickers();
+                targetButton.focus();
+              }
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                targetOptions.querySelector(".target-picker-option")?.focus();
+              }
+            });
+            targetPopover.append(targetSearch, targetOptions);
+            targetPicker.append(targetButton, targetPopover);
+            targetKindSelect.addEventListener("change", () => {
+              item.targetKind = targetKindSelect.value;
+              const nextTargets = availableMappingTargets(item.targetKind);
+              item.targetId = nextTargets[0]?.id ?? "";
+              markDirty();
+              renderMappings(profile);
+            });
+            targetField.append(targetPicker);
+
+            const remove = document.createElement("button");
+            remove.className = "button danger small";
+            remove.type = "button";
+            remove.textContent = "Remove";
+            remove.addEventListener("click", () => {
+              profile.mappings = profile.mappings.filter(
+                (candidate) => candidate.id !== item.id,
+              );
+              markDirty();
+              renderMappings(profile);
+            });
+
+            row.append(
+              enabledLabel,
+              pinField,
+              targetKindField,
+              targetField,
+              remove,
+            );
+            elements.mappingList.append(row);
+          }
+        }
+
+        function addMapping() {
+          const profile = editingMappingProfile();
+          const channel = selectedChannel() ?? state.channels[0];
+          if (profile === null || channel === undefined) return;
+          const usedPins = new Set(profile.mappings.map((item) => item.pin));
+          let pin = 0;
+          while (usedPins.has(pin) && pin < 63) pin += 1;
+          profile.mappings.push(mapping(pin, channel.id));
+          markDirty();
+          renderMappings(profile);
+        }
+
+        function addMappingProfile() {
+          const profileNumber = state.mappingProfiles.length + 1;
+          const profile = mappingProfile(
+            `profile-${nextSequence++}`,
+            `New profile ${profileNumber}`,
+            `New${profileNumber}`,
+            1,
+            [],
+          );
+          state.mappingProfiles.push(profile);
+          editingMappingProfileId = profile.id;
+          markDirty();
+          renderMappingProfileSelector();
+          renderMappings(profile);
+          elements.mappingProfileNameInput.focus();
+        }
+
+        function saveDevice() {
+          const controller = editingDevice();
+          if (controller === null) return;
+          controller.name =
+            elements.deviceNameInput.value.trim() || controller.name;
+          controller.frequency = clamp(
+            Number(elements.deviceFrequencyInput.value) || 1000,
+            1,
+            40000,
+          );
+          controller.resolution = Number(elements.deviceResolutionInput.value);
+          controller.mappingProfileId =
+            state.mappingProfiles.find((profile) =>
+              controller.name.startsWith(profile.deviceNamePrefix),
+            )?.id ?? null;
+          markDirty();
+          renderDevices();
+          elements.deviceDialog.close();
+          showToast(`${controller.name} configuration updated in the demo.`);
+        }
+
+        function addPointAt(event) {
+          const channel = selectedChannel();
+          if (channel === undefined) return;
+          const position = graphPositionFromEvent(event);
+          const id = `point-${nextSequence++}`;
+          const candidate = point(id, position.minute, position.value);
+          const duplicate = channel.points.find(
+            (schedulePoint) => schedulePoint.minute === candidate.minute,
+          );
+          if (duplicate !== undefined) {
+            duplicate.value = candidate.value;
+            state.selectedPointId = duplicate.id;
+            showToast("Updated the existing point at that time.");
+          } else {
+            channel.points.push(candidate);
+            channel.points.sort((left, right) => left.minute - right.minute);
+            state.selectedPointId = candidate.id;
+          }
+          addPointMode = false;
+          addPointHoverMinute = null;
+          markDirty();
+          renderAll();
+        }
+
+        function deleteSelectedPoint() {
+          const channel = selectedChannel();
+          const schedulePoint = selectedPoint();
+          if (
+            channel === undefined ||
+            schedulePoint === null ||
+            channel.points.length <= 2
+          ) {
+            return;
+          }
+          const index = channel.points.findIndex(
+            (candidate) => candidate.id === schedulePoint.id,
+          );
+          channel.points.splice(index, 1);
+          state.selectedPointId =
+            channel.points[Math.min(index, channel.points.length - 1)]?.id ??
+            null;
+          markDirty();
+          renderAll();
+        }
+
+        function applyPointFields() {
+          const channel = selectedChannel();
+          const schedulePoint = selectedPoint();
+          if (channel === undefined || schedulePoint === null) return;
+          const minute = parseTime(elements.pointTimeInput.value);
+          const value = Number(elements.pointValueInput.value);
+          if (minute === null || !Number.isFinite(value)) {
+            showToast("Enter a valid time and output percentage.");
+            return;
+          }
+          const pointIndex = channel.points.findIndex(
+            (candidate) => candidate.id === schedulePoint.id,
+          );
+          const minimumMinute =
+            pointIndex === 0 ? 0 : channel.points[pointIndex - 1].minute + 1;
+          const maximumMinute =
+            pointIndex === channel.points.length - 1
+              ? 1440
+              : channel.points[pointIndex + 1].minute - 1;
+          schedulePoint.minute = clamp(minute, minimumMinute, maximumMinute);
+          schedulePoint.value = clamp(Math.round(value), 0, 100);
+          channel.points.sort((left, right) => left.minute - right.minute);
+          markDirty();
+          renderAll();
+        }
+
+        function beginPointDrag(event) {
+          const target = event.target;
+          const pointId = target.dataset?.pointId;
+          const channelId = target.dataset?.channelId;
+          if (pointId === undefined || channelId === undefined) return false;
+          if (channelId !== state.selectedChannelId) {
+            event.preventDefault();
+            return true;
+          }
+          const channel = state.channels.find(
+            (candidate) => candidate.id === channelId,
+          );
+          const schedulePoint = channel?.points.find(
+            (candidate) => candidate.id === pointId,
+          );
+          if (schedulePoint === undefined) return false;
+          const pointerPosition = graphPositionFromEvent(event);
+          state.selectedPointId = pointId;
+          dragState = {
+            pointerId: event.pointerId,
+            channelId,
+            pointId,
+            minuteOffset: schedulePoint.minute - pointerPosition.rawMinute,
+            valueOffset: schedulePoint.value - pointerPosition.rawValue,
+          };
+          elements.scheduleChart.setPointerCapture(event.pointerId);
+          event.preventDefault();
+          renderAll();
+          return true;
+        }
+
+        function movePointDrag(event) {
+          if (dragState === null || dragState.pointerId !== event.pointerId) {
+            return;
+          }
+          const channel = state.channels.find(
+            (candidate) => candidate.id === dragState.channelId,
+          );
+          const schedulePoint = channel?.points.find(
+            (candidate) => candidate.id === dragState.pointId,
+          );
+          if (channel === undefined || schedulePoint === undefined) return;
+          const pointIndex = channel.points.indexOf(schedulePoint);
+          const position = graphPositionFromEvent(event);
+          const minimumMinute =
+            pointIndex === 0 ? 0 : channel.points[pointIndex - 1].minute + 5;
+          const maximumMinute =
+            pointIndex === channel.points.length - 1
+              ? 1440
+              : channel.points[pointIndex + 1].minute - 5;
+          const offsetMinute =
+            Math.round((position.rawMinute + dragState.minuteOffset) / 5) * 5;
+          schedulePoint.minute = clamp(
+            offsetMinute,
+            minimumMinute,
+            maximumMinute,
+          );
+          schedulePoint.value = clamp(
+            Math.round(position.rawValue + dragState.valueOffset),
+            0,
+            100,
+          );
+          markDirty();
+          renderAll();
+        }
+
+        function handleChartPointerMove(event) {
+          if (dragState !== null) {
+            movePointDrag(event);
+            return;
+          }
+          if (!addPointMode) return;
+          const { minute } = graphPositionFromEvent(event);
+          if (minute === addPointHoverMinute) return;
+          addPointHoverMinute = minute;
+          renderGraph();
+        }
+
+        function endPointDrag(event) {
+          if (dragState === null || dragState.pointerId !== event.pointerId) {
+            return;
+          }
+          if (elements.scheduleChart.hasPointerCapture(event.pointerId)) {
+            elements.scheduleChart.releasePointerCapture(event.pointerId);
+          }
+          dragState = null;
+          renderAll();
+        }
+
+        function escapeHtml(value) {
+          return String(value)
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+        }
+
+        function capitalize(value) {
+          return value.charAt(0).toUpperCase() + value.slice(1);
+        }
+
+        elements.scheduleChart.addEventListener("pointerdown", (event) => {
+          if (addPointMode) {
+            addPointAt(event);
+            return;
+          }
+          if (beginPointDrag(event)) return;
+        });
+        elements.scheduleChart.addEventListener(
+          "pointermove",
+          handleChartPointerMove,
+        );
+        elements.scheduleChart.addEventListener("pointerleave", () => {
+          if (!addPointMode || addPointHoverMinute === null) return;
+          addPointHoverMinute = null;
+          renderGraph();
+        });
+        elements.scheduleChart.addEventListener("pointerup", endPointDrag);
+        elements.scheduleChart.addEventListener("pointercancel", endPointDrag);
+
+        elements.newPointButton.addEventListener("click", () => {
+          addPointMode = !addPointMode;
+          addPointHoverMinute = null;
+          renderPointEditor();
+          renderGraph();
+        });
+        elements.deletePointButton.addEventListener(
+          "click",
+          deleteSelectedPoint,
+        );
+        elements.applyPointButton.addEventListener("click", applyPointFields);
+        elements.pointTimeInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") applyPointFields();
+        });
+        elements.pointValueInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") applyPointFields();
+        });
+
+        elements.throttleInput.addEventListener("input", () => {
+          state.throttle = Number(elements.throttleInput.value);
+          elements.throttleOutput.textContent = `${state.throttle}%`;
+          markDirty();
+        });
+
+        document
+          .querySelector("#manageMappingsButton")
+          .addEventListener("click", openMappingDialog);
+        document
+          .querySelector("#manageChannelsButton")
+          .addEventListener("click", () => {
+            elements.newChannelColor.value = chooseDistinctChannelColor();
+            renderChannelManagement();
+            elements.channelDialog.showModal();
+          });
+        document
+          .querySelector("#addChannelButton")
+          .addEventListener("click", addChannel);
+        elements.newChannelName.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") addChannel();
+        });
+        document
+          .querySelector("#saveConfigurationButton")
+          .addEventListener("click", saveDemo);
+        document
+          .querySelector("#applyOverridesButton")
+          .addEventListener("click", () => {
+            const duration = Number(
+              document.querySelector("#overrideDuration").value,
+            );
+            showToast(
+              `Demo only: ${state.channels.length} temporary levels would be applied for ${
+                duration / 60
+              } minute${duration === 60 ? "" : "s"}.`,
+            );
+          });
+        document
+          .querySelector("#releaseOverridesButton")
+          .addEventListener("click", () => {
+            for (const channel of state.channels) {
+              channel.override = scheduleValueAt(channel, currentMinute);
+            }
+            markDirty();
+            renderOverrides();
+            showToast(
+              "All demo override sliders returned to their scheduled levels.",
+            );
+          });
+        document
+          .querySelector("#refreshDevicesButton")
+          .addEventListener("click", () => {
+            showToast("Device status refreshed from dummy data.");
+          });
+        document
+          .querySelector("#addMappingButton")
+          .addEventListener("click", addMapping);
+        document
+          .querySelector("#newMappingProfileButton")
+          .addEventListener("click", addMappingProfile);
+        elements.mappingProfileSelect.addEventListener("change", () => {
+          editingMappingProfileId = elements.mappingProfileSelect.value;
+          renderMappings(editingMappingProfile());
+        });
+        elements.mappingProfileNameInput.addEventListener("input", () => {
+          const profile = editingMappingProfile();
+          if (profile === null) return;
+          profile.name =
+            elements.mappingProfileNameInput.value.trim() || "Untitled";
+          elements.mappingProfileHeading.textContent = `${profile.name} · ${profile.deviceNamePrefix}*`;
+          renderMappingProfileSelector();
+          markDirty();
+          renderDevices();
+        });
+        elements.mappingProfilePrefixInput.addEventListener("input", () => {
+          const profile = editingMappingProfile();
+          if (profile === null) return;
+          profile.deviceNamePrefix =
+            elements.mappingProfilePrefixInput.value.trim();
+          for (const controller of state.devices) {
+            controller.mappingProfileId =
+              state.mappingProfiles.find(
+                (candidate) =>
+                  candidate.deviceNamePrefix.length > 0 &&
+                  controller.name.startsWith(candidate.deviceNamePrefix),
+              )?.id ?? null;
+          }
+          elements.mappingProfileHeading.textContent = `${profile.name} · ${profile.deviceNamePrefix}*`;
+          renderMappingProfileSelector();
+          markDirty();
+          renderDevices();
+        });
+        elements.mappingProfileMultiplierInput.addEventListener("input", () => {
+          const profile = editingMappingProfile();
+          if (profile === null) return;
+          profile.outputMultiplier = clamp(
+            Number(elements.mappingProfileMultiplierInput.value) || 0,
+            0,
+            1,
+          );
+          markDirty();
+        });
+        document
+          .querySelector("#saveDeviceButton")
+          .addEventListener("click", saveDevice);
+        elements.areaSelect.addEventListener("change", () => {
+          elements.pageTitle.textContent = elements.areaSelect.value;
+          showToast(
+            `${elements.areaSelect.value} selected. This prototype keeps the Lights dummy data visible.`,
+          );
+        });
+        document.addEventListener("click", () => closeTargetPickers());
+
+        document.querySelectorAll("[data-close-dialog]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const dialog = document.querySelector(
+              `#${button.dataset.closeDialog}`,
+            );
+            dialog.close();
+          });
+        });
+
+        for (const dialog of document.querySelectorAll("dialog")) {
+          dialog.addEventListener("click", (event) => {
+            if (event.target === dialog) dialog.close();
+          });
+        }
+
+        renderAll();
+      })();
+    </script>
+  </body>
+</html>
