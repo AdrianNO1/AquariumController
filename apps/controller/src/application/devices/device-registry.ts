@@ -6,6 +6,7 @@ import {
 } from "@aquarium/contracts";
 import {
   CURRENT_ESP_FIRMWARE_VERSION,
+  espFirmwareDiagnosticSchema,
   isCurrentEspFirmwareVersion,
   isSupportedEsp32PwmConfiguration,
   type EspAnnouncement,
@@ -34,6 +35,7 @@ const registryAnnouncementSchema = z
     status: boundedTextSchema,
     version: boundedTextSchema,
     scheduleHash: canonicalUint32HashSchema,
+    lastError: espFirmwareDiagnosticSchema.optional(),
   })
   .superRefine((announcement, context) => {
     if (
@@ -67,7 +69,9 @@ export type DeviceRegistryUpdateReason =
   | "repeated_announcement"
   | "delayed_announcement"
   | "delayed_response_contact"
-  | "response_contact";
+  | "response_contact"
+  | "response_timeout"
+  | "protocol_fault";
 
 export interface DeviceRegistryUpdate {
   readonly changed: boolean;
@@ -143,6 +147,50 @@ export class DeviceRegistry {
     const parsedReceivedAtMs = nonnegativeSafeIntegerSchema.parse(receivedAtMs);
     return this.#serialize(() =>
       this.#applyResponseContact(parsedHardwareId, parsedReceivedAtMs),
+    );
+  }
+
+  async recordResponseTimeout(
+    hardwareId: string,
+    observedAtMs: number,
+  ): Promise<DeviceRegistryUpdate> {
+    const parsedHardwareId = identifierSchema.parse(hardwareId);
+    const parsedObservedAtMs = nonnegativeSafeIntegerSchema.parse(observedAtMs);
+    return this.#serialize(() =>
+      this.#applyResponseTimeout(parsedHardwareId, parsedObservedAtMs),
+    );
+  }
+
+  async recordProtocolFault(
+    hardwareId: string,
+    observedAtMs: number,
+    message: string,
+  ): Promise<DeviceRegistryUpdate | null> {
+    const parsedHardwareId = identifierSchema.safeParse(hardwareId);
+    if (!parsedHardwareId.success) {
+      return null;
+    }
+    const parsedObservedAtMs = nonnegativeSafeIntegerSchema.parse(observedAtMs);
+    const parsedMessage = boundedTextSchema.parse(message);
+    return this.#serialize(() =>
+      this.#applyProtocolFault(
+        parsedHardwareId.data,
+        parsedObservedAtMs,
+        parsedMessage,
+      ),
+    );
+  }
+
+  async isCommandEligible(deviceId: string): Promise<boolean> {
+    const parsedDeviceId = identifierSchema.parse(deviceId);
+    const device = await this.#database
+      .selectFrom("devices")
+      .select(["enabled", "status"])
+      .where("id", "=", parsedDeviceId)
+      .executeTakeFirst();
+    return (
+      device?.enabled === 1 &&
+      ["online", "stale", "offline"].includes(device.status)
     );
   }
 
@@ -250,14 +298,26 @@ export class DeviceRegistry {
             `Device identity changed concurrently for hardware ${announcement.id}`,
           );
         }
-        const error = announcementError(announcement, {
+        const quarantinedForProtocolFault =
+          existing.enabled === 0 &&
+          existing.last_error_code === "protocol_invalid_response";
+        const reportedError = announcementError(announcement, {
           name: existing.name,
           frequencyHz: existing.desired_pwm_frequency_hz,
           resolutionBits: existing.desired_pwm_resolution_bits,
         });
-        const nextStatus: DeviceStatus =
-          announcement.status === "online" &&
-          error?.code !== "firmware_outdated"
+        const error = quarantinedForProtocolFault
+          ? {
+              code: existing.last_error_code,
+              message:
+                existing.last_error_message ??
+                "Device returned a response that violated the wire protocol",
+            }
+          : reportedError;
+        const nextStatus: DeviceStatus = quarantinedForProtocolFault
+          ? "error"
+          : announcement.status === "online" &&
+              error?.code !== "firmware_outdated"
             ? "online"
             : "error";
         const reportedStateChanged =
@@ -415,6 +475,139 @@ export class DeviceRegistry {
     };
   }
 
+  async #applyResponseTimeout(
+    hardwareId: string,
+    observedAtMs: number,
+  ): Promise<DeviceRegistryUpdate> {
+    const identity = await this.#database
+      .selectFrom("devices")
+      .select("id")
+      .where("hardware_id", "=", hardwareId)
+      .executeTakeFirstOrThrow();
+    const committed = await commitConditionalStateChange(
+      this.#database,
+      {
+        actor: "mqtt.device-registry",
+        mutationType: "device.response-timeout",
+        summary: `Marked device ${identity.id} offline after a response timeout`,
+        eventType: "device.response-timeout",
+        entityType: "device",
+        entityId: identity.id,
+        occurredAtMs: observedAtMs,
+        retentionClass: "critical",
+        payloadJson: JSON.stringify({
+          schemaVersion: 1,
+          status: "offline",
+          excluded: false,
+        }),
+        payloadSchemaVersion: 1,
+      },
+      async (transaction) => {
+        const existing = await transaction
+          .selectFrom("devices")
+          .selectAll()
+          .where("hardware_id", "=", hardwareId)
+          .executeTakeFirstOrThrow();
+        if (
+          existing.enabled !== 1 ||
+          existing.status === "error" ||
+          existing.status === "unknown" ||
+          existing.status === "offline"
+        ) {
+          return {
+            changed: false,
+            result: { deviceId: existing.id },
+          };
+        }
+        await transaction
+          .updateTable("devices")
+          .set({
+            status: "offline",
+            updated_at_ms: sql<number>`MAX(updated_at_ms, ${observedAtMs})`,
+          })
+          .where("id", "=", existing.id)
+          .executeTakeFirstOrThrow();
+        return { changed: true, result: { deviceId: existing.id } };
+      },
+    );
+    return {
+      changed: committed.changed,
+      deviceId: committed.result.deviceId,
+      reason: "response_timeout",
+      revision: committed.changed ? committed.revision : null,
+    };
+  }
+
+  async #applyProtocolFault(
+    hardwareId: string,
+    observedAtMs: number,
+    message: string,
+  ): Promise<DeviceRegistryUpdate | null> {
+    const identity = await this.#database
+      .selectFrom("devices")
+      .select("id")
+      .where("hardware_id", "=", hardwareId)
+      .executeTakeFirst();
+    if (identity === undefined) {
+      return null;
+    }
+    const committed = await commitConditionalStateChange(
+      this.#database,
+      {
+        actor: "mqtt.device-registry",
+        mutationType: "device.protocol-quarantine",
+        summary: `Quarantined device ${identity.id} after an invalid response`,
+        eventType: "device.protocol-quarantined",
+        entityType: "device",
+        entityId: identity.id,
+        occurredAtMs: observedAtMs,
+        retentionClass: "critical",
+        payloadJson: JSON.stringify({
+          schemaVersion: 1,
+          code: "protocol_invalid_response",
+          excluded: true,
+        }),
+        payloadSchemaVersion: 1,
+      },
+      async (transaction) => {
+        const existing = await transaction
+          .selectFrom("devices")
+          .selectAll()
+          .where("hardware_id", "=", hardwareId)
+          .executeTakeFirstOrThrow();
+        if (
+          existing.enabled === 0 &&
+          existing.status === "error" &&
+          existing.last_error_code === "protocol_invalid_response" &&
+          existing.last_error_message === message
+        ) {
+          return {
+            changed: false,
+            result: { deviceId: existing.id },
+          };
+        }
+        await transaction
+          .updateTable("devices")
+          .set({
+            enabled: 0,
+            status: "error",
+            last_error_code: "protocol_invalid_response",
+            last_error_message: message,
+            updated_at_ms: sql<number>`MAX(updated_at_ms, ${observedAtMs})`,
+          })
+          .where("id", "=", existing.id)
+          .executeTakeFirstOrThrow();
+        return { changed: true, result: { deviceId: existing.id } };
+      },
+    );
+    return {
+      changed: committed.changed,
+      deviceId: committed.result.deviceId,
+      reason: "protocol_fault",
+      revision: committed.changed ? committed.revision : null,
+    };
+  }
+
   async #applyConnectionStatuses(
     nowMs: number,
   ): Promise<readonly DeviceStatusTransition[]> {
@@ -423,7 +616,7 @@ export class DeviceRegistry {
       .selectAll()
       .where("enabled", "=", 1)
       .where("last_seen_at_ms", "is not", null)
-      .where("status", "in", ["online", "stale", "error"])
+      .where("status", "in", ["online", "stale"])
       .orderBy("id")
       .execute();
     const transitions: DeviceStatusTransition[] = [];
@@ -559,6 +752,12 @@ function announcementError(
     return {
       code: "configuration_mismatch",
       message: "Reported configuration differs from desired configuration",
+    };
+  }
+  if (announcement.lastError?.active === true) {
+    return {
+      code: `firmware_${announcement.lastError.code}`,
+      message: announcement.lastError.message,
     };
   }
   return null;

@@ -5,7 +5,7 @@ export interface ScheduledOutputRefreshCommand {
   readonly mappingId: string;
   readonly pin: number;
   readonly value: number;
-  readonly overwrite: false;
+  readonly overwrite: boolean;
 }
 
 export interface EffectiveOutputRefreshCommand {

@@ -39,6 +39,22 @@ describe("projectControlArea", () => {
       devices: [],
     });
   });
+
+  it("keeps an unmapped device visible so it can be excluded or recovered", () => {
+    const snapshot = controlSnapshot();
+    const model = projectControlArea(
+      controllerSnapshotSchema.parse({
+        ...snapshot,
+        devices: [...snapshot.devices, device("device-unassigned", null)],
+      }),
+      "lights",
+    );
+
+    expect(model?.devices.map(({ id }) => id)).toEqual([
+      "device-main",
+      "device-unassigned",
+    ]);
+  });
 });
 
 function controlSnapshot() {
@@ -188,7 +204,7 @@ function throttle(id: string, typeKey: "light" | "pump", percentage: number) {
   };
 }
 
-function device(id: string, mappingProfileId: string) {
+function device(id: string, mappingProfileId: string | null) {
   return {
     id,
     hardwareId: id.toUpperCase(),

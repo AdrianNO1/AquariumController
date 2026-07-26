@@ -76,7 +76,6 @@ export interface StoredDeviceOperation {
 
 export interface InterruptedOperationRecovery {
   readonly recoveredOperationIds: readonly string[];
-  readonly unresolvedOutcomeUnknownIds: readonly string[];
 }
 
 export class InvalidDeviceOperationTransitionError extends Error {
@@ -223,7 +222,8 @@ export class ControlOperationRepository {
           existingDevice.desired_pwm_frequency_hz ===
             parsed.request.pwmFrequencyHz &&
           existingDevice.desired_pwm_resolution_bits ===
-            parsed.request.pwmResolutionBits
+            parsed.request.pwmResolutionBits &&
+          existingDevice.last_error_code !== "configuration_mismatch"
         ) {
           return { changed: false, result: null };
         }
@@ -415,7 +415,11 @@ export class ControlOperationRepository {
   reconcileOutcome(input: {
     readonly operationId: string;
     readonly expectedRevision: number | null;
-    readonly origin: "manual_override" | "operator";
+    readonly origin:
+      | "manual_override"
+      | "schedule_reconciliation"
+      | "routine_expiry"
+      | "operator";
     readonly reconciledAtMs: number;
   }): Promise<MutationResult> {
     const operationId = identifierSchema.parse(input.operationId);
@@ -428,7 +432,7 @@ export class ControlOperationRepository {
     );
     if ((input.origin === "operator") !== (expectedRevision !== null)) {
       throw new TypeError(
-        "Operator reconciliation requires a revision and manual-override reconciliation must not provide one",
+        "Operator reconciliation requires a revision and runtime reconciliation must not provide one",
       );
     }
     return this.#serialize(async () => {
@@ -483,7 +487,10 @@ export class ControlOperationRepository {
                 `Operation ${operationId} does not have an unknown outcome`,
               );
             }
-            if (input.origin === "operator") {
+            if (
+              input.origin === "operator" ||
+              input.origin === "routine_expiry"
+            ) {
               await assertNotOwnedByUnresolvedManualOverride(
                 transaction,
                 operationId,
@@ -624,28 +631,66 @@ export class ControlOperationRepository {
     }
     return {
       recoveredOperationIds,
-      unresolvedOutcomeUnknownIds: await this.listUnresolvedOutcomeUnknownIds(),
     };
   }
 
-  async listUnresolvedOutcomeUnknownIds(): Promise<readonly string[]> {
+  async reconcileExpiredRoutinePwmOutcomes(
+    rawDeviceId: string,
+    rawReconciledAtMs: number,
+  ): Promise<readonly string[]> {
+    const deviceId = identifierSchema.parse(rawDeviceId);
+    const reconciledAtMs =
+      nonnegativeSafeIntegerSchema.parse(rawReconciledAtMs);
+    const safetyCutoffMs = Math.max(
+      0,
+      reconciledAtMs - ESP32_PWM_OVERWRITE_DURATION_MS,
+    );
     const rows = await this.#database
       .selectFrom("control_operations")
       .selectAll()
-      .where("kind", "in", [...DEVICE_OPERATION_KINDS])
+      .where("device_id", "=", deviceId)
+      .where("kind", "=", "set_pwm")
       .where("status", "=", "outcome_unknown")
+      .where("completed_at_ms", "<=", safetyCutoffMs)
       .orderBy("requested_at_ms")
       .orderBy("id")
       .execute();
-    return rows.flatMap((row) => {
+    const reconciledIds: string[] = [];
+    for (const row of rows) {
       const operation = parseStoredOperation(row);
-      if (operation.result?.status !== "outcome_unknown") {
+      if (
+        operation.request.kind !== "set_pwm" ||
+        operation.result?.status !== "outcome_unknown"
+      ) {
         throw new Error(
-          `Outcome-unknown operation ${operation.id} lacks its typed result`,
+          `Routine PWM reconciliation candidate ${operation.id} has invalid persisted state`,
         );
       }
-      return operation.result.reconciledAtMs === null ? [operation.id] : [];
-    });
+      if (!operation.request.overwrite) {
+        continue;
+      }
+      if (operation.result.reconciledAtMs !== null) {
+        continue;
+      }
+      try {
+        await this.reconcileOutcome({
+          operationId: operation.id,
+          expectedRevision: null,
+          origin: "routine_expiry",
+          reconciledAtMs,
+        });
+        reconciledIds.push(operation.id);
+      } catch (error) {
+        if (
+          error instanceof DeviceOperationReconciliationConflictError &&
+          error.relation === "manual_override_owns_operation"
+        ) {
+          continue;
+        }
+        throw error;
+      }
+    }
+    return reconciledIds;
   }
 
   getById(id: string): Promise<StoredDeviceOperation> {
@@ -668,7 +713,11 @@ export class ControlOperationRepository {
 
   async #readIdempotentReconciliation(
     operationId: string,
-    origin: "manual_override" | "operator",
+    origin:
+      | "manual_override"
+      | "schedule_reconciliation"
+      | "routine_expiry"
+      | "operator",
     expectedRevision: number | null,
   ): Promise<Extract<MutationResult, { readonly changed: false }> | null> {
     return this.#database.transaction().execute(async (transaction) => {
@@ -1017,7 +1066,7 @@ async function assertNotOwnedByUnresolvedManualOverride(
     if (
       result.status === "outcome_unknown" &&
       result.reconciledAtMs === null &&
-      result.unknownChildOperationId === operationId
+      result.unknownChildOperationIds.includes(operationId)
     ) {
       throw new DeviceOperationReconciliationConflictError(
         operationId,

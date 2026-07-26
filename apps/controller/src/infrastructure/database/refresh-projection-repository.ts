@@ -8,7 +8,7 @@ import {
   validateScheduleGraph,
   type SchedulePoint,
 } from "@aquarium/domain";
-import type { Kysely } from "kysely";
+import { sql, type Kysely } from "kysely";
 import { z } from "zod";
 
 import type {
@@ -76,7 +76,7 @@ export class RefreshProjectionRepository implements ActiveOutputProjectionReader
         "point.percentage as pointPercent",
       ])
       .where("device.enabled", "=", 1)
-      .where("device.status", "=", "online")
+      .where("device.status", "in", ["online", "stale", "offline"])
       .where("mapping.enabled", "=", 1)
       .where("channel.enabled", "=", 1)
       .where((expression) =>
@@ -84,6 +84,14 @@ export class RefreshProjectionRepository implements ActiveOutputProjectionReader
           expression("schedule.id", "is", null),
           expression("schedule.enabled", "=", 1),
         ]),
+      )
+      .orderBy(
+        sql<number>`CASE ${sql.ref("device.status")}
+          WHEN 'online' THEN 0
+          WHEN 'stale' THEN 1
+          ELSE 2
+        END`,
+        "asc",
       )
       .orderBy("device.id", "asc")
       .orderBy("mapping.display_order", "asc")

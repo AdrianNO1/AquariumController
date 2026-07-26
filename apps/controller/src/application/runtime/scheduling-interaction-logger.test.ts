@@ -39,10 +39,11 @@ describe("scheduling interaction logger", () => {
         ...healthyReport,
         diagnostics: [
           {
-            code: "scheduled_operation_blocked",
+            code: "scheduled_operation_not_succeeded",
             deviceId: "A1",
             mappingId: "M1",
-            reason: "outcome_unknown",
+            operationId: "OP-unknown",
+            status: "outcome_unknown",
           },
         ],
       },

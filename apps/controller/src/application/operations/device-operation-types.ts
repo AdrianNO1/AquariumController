@@ -162,7 +162,12 @@ const outcomeUnknownResultSchema = z.strictObject({
 
 const cancelledResultSchema = z.strictObject({
   status: z.literal("cancelled"),
-  reason: z.enum(["controller_restart_before_attempt", "cancelled_by_owner"]),
+  reason: z.enum([
+    "controller_restart_before_attempt",
+    "cancelled_by_owner",
+    "device_command_cooldown",
+    "device_command_in_flight",
+  ]),
 });
 
 export const deviceOperationResultSchema = z.discriminatedUnion("status", [

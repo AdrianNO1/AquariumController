@@ -19,7 +19,6 @@ import {
 } from "../../integration-support/mosquitto-test-harness.js";
 import { createMqttJsClientFactory } from "./mqtt-js-client.js";
 import {
-  LegacyMqttOutcomeUnknownError,
   LegacyMqttTransport,
   type LegacyAnnouncementEvent,
   type LegacyMqttInteraction,
@@ -392,7 +391,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     expect(broker.publications()).toHaveLength(publicationCount);
   }, 30_000);
 
-  it("fails closed on response faults and broker loss without actuator retry", async () => {
+  it("records response faults and continues without retrying the uncertain command", async () => {
     const actor = await startActor("alpha", "Alpha", ALPHA_ID);
     const controller = await startTransport(200);
     await waitForDiscovery(controller, ALPHA_ID);
@@ -406,13 +405,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
       { status: "outcome_unknown", reason: "timeout" },
     ]);
     expect(await capturedCommandPayloads(1)).toEqual([`${ALPHA_ID} s 4 200 1`]);
-    await expect(
-      controller.transport.executeCommands([ping(ALPHA_ID)]),
-    ).rejects.toBeInstanceOf(LegacyMqttOutcomeUnknownError);
-    expect(await capturedCommandPayloads(1)).toHaveLength(1);
-
     actor.session.actor.setResponseFaults({});
-    controller.transport.acknowledgeUnknownOutcome();
     expect(
       (await controller.transport.executeCommands([ping(ALPHA_ID)])).outcomes[0]
         ?.status,
@@ -465,8 +458,6 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
           interaction.topic === topics.response,
       ),
     ).toBe(true);
-    controller.transport.acknowledgeUnknownOutcome();
-
     broker.clearPublications();
     actor.session.actor.setResponseFaults({ delayMilliseconds: 1_000 });
     const readyCount = lifecycleCount(controller, "ready");
@@ -495,7 +486,6 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     );
 
     actor.session.actor.setResponseFaults({});
-    controller.transport.acknowledgeUnknownOutcome();
     expect(
       (await controller.transport.executeCommands([ping(ALPHA_ID)])).outcomes[0]
         ?.status,

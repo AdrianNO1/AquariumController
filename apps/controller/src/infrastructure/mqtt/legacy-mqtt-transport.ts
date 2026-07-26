@@ -1,5 +1,8 @@
+import { randomBytes } from "node:crypto";
+
 import {
   batchLegacyCommands,
+  encodeCorrelatedLegacyRequest,
   encodeLegacyMessage,
   espAnnouncementSchema,
   espCommandResponseSchema,
@@ -28,6 +31,7 @@ const MIN_LEGACY_PIN = 0;
 const MAX_LEGACY_PIN = 63;
 const MIN_ANALOG_VALUE = 0;
 const MAX_ANALOG_VALUE = 4_095;
+const MAX_REQUEST_SESSION_ID_LENGTH = 24;
 
 export interface LegacyDeviceTarget {
   /** Stable ESP chip identifier used on the wire. */
@@ -76,8 +80,7 @@ export type LegacyCommandOutcome =
     })
   | (OutcomeBase & {
       readonly status: "not_attempted";
-      readonly reason:
-        "prior_batch_outcome_unknown" | "disconnected" | "transport_stopped";
+      readonly reason: "disconnected" | "transport_stopped";
     });
 
 export interface LegacyWireOperationResult {
@@ -95,6 +98,7 @@ export interface LegacyAnnouncementEvent {
 
 export type IgnoredResponseReason =
   | "no_active_batch"
+  | "wrong_request"
   | "index_out_of_range"
   | "wrong_device"
   | "premature_response"
@@ -173,6 +177,8 @@ export interface LegacyMqttTransportOptions {
   readonly responseTimeoutMs?: number;
   readonly callbacks?: LegacyMqttTransportCallbacks;
   readonly now?: () => number;
+  /** Stable only for this transport instance; injectable for deterministic tests. */
+  readonly requestSessionId?: string;
 }
 
 interface NormalizedCommand {
@@ -198,6 +204,7 @@ interface BatchExpectation {
 
 interface ActiveBatch {
   readonly operationId: string;
+  readonly requestId: string;
   readonly batchIndex: number;
   readonly expectations: ReadonlyMap<number, BatchExpectation>;
   readonly outcomes: Map<number, LegacyCommandOutcome>;
@@ -217,28 +224,19 @@ export class LegacyMqttUnavailableError extends Error {
   }
 }
 
-export class LegacyMqttOutcomeUnknownError extends Error {
-  public constructor() {
-    super(
-      "A prior MQTT operation has an unknown outcome; reconcile device state and explicitly acknowledge it before sending more commands",
-    );
-    this.name = "LegacyMqttOutcomeUnknownError";
-  }
-}
-
 export class LegacyMqttTransport {
   private readonly clientFactory: LegacyMqttClientFactory;
   private readonly topics: EspTopicSet;
   private readonly responseTimeoutMs: number;
   private readonly callbacks: LegacyMqttTransportCallbacks;
   private readonly now: () => number;
+  private readonly requestSessionId: string;
   private readonly operationQueue: QueuedOperation[] = [];
   private client: LegacyMqttClientPort | undefined;
   private removeClientListeners: Array<() => void> = [];
   private started = false;
   private ready = false;
   private pumping = false;
-  private outcomeUnknown = false;
   private operationSequence = 0;
   private connectionGeneration = 0;
   private activeBatch: ActiveBatch | undefined;
@@ -256,6 +254,7 @@ export class LegacyMqttTransport {
     this.responseTimeoutMs = responseTimeoutMs;
     this.callbacks = options.callbacks ?? {};
     this.now = options.now ?? Date.now;
+    this.requestSessionId = normalizeRequestSessionId(options.requestSessionId);
   }
 
   public start(): void {
@@ -337,18 +336,6 @@ export class LegacyMqttTransport {
     }
   }
 
-  /**
-   * Clears the fail-closed timeout latch only after an owner has reconciled the
-   * affected device state. This method never retries the uncertain command.
-   */
-  public acknowledgeUnknownOutcome(): void {
-    if (this.activeBatch !== undefined) {
-      throw new LegacyMqttOutcomeUnknownError();
-    }
-    this.outcomeUnknown = false;
-    void this.pumpQueue();
-  }
-
   public executeCommands(
     commands: readonly LegacyWireCommand[],
   ): Promise<LegacyWireOperationResult> {
@@ -357,10 +344,6 @@ export class LegacyMqttTransport {
         new LegacyMqttUnavailableError("MQTT transport is not ready"),
       );
     }
-    if (this.outcomeUnknown) {
-      return Promise.reject(new LegacyMqttOutcomeUnknownError());
-    }
-
     const normalizedCommands = commands.map(normalizeCommand);
     const operationId = `wire-${++this.operationSequence}`;
     return new Promise<LegacyWireOperationResult>((resolve, reject) => {
@@ -565,21 +548,59 @@ export class LegacyMqttTransport {
         isPreviewTruncated(rawPayload),
         parsedResponse.error.message,
       );
+      this.handleAttributableMalformedResponse(parsedJson.value, payloadBytes);
       return;
     }
 
     const activeBatch = this.activeBatch;
-    for (const response of parsedResponse.data.responses) {
-      if (activeBatch === undefined) {
+    if (activeBatch === undefined) {
+      if (parsedResponse.data.responses.length === 0) {
+        this.emitIgnoredResponse(
+          "no_active_batch",
+          parsedResponse.data.id,
+          -1,
+          payloadBytes,
+        );
+      }
+      for (const response of parsedResponse.data.responses) {
         this.emitIgnoredResponse(
           "no_active_batch",
           parsedResponse.data.id,
           response.index,
           payloadBytes,
         );
-        continue;
       }
+      return;
+    }
+    if (activeBatch.requestId !== parsedResponse.data.requestId) {
+      if (parsedResponse.data.responses.length === 0) {
+        this.emitIgnoredResponse(
+          "wrong_request",
+          parsedResponse.data.id,
+          -1,
+          payloadBytes,
+        );
+      }
+      for (const response of parsedResponse.data.responses) {
+        this.emitIgnoredResponse(
+          "wrong_request",
+          parsedResponse.data.id,
+          response.index,
+          payloadBytes,
+        );
+      }
+      return;
+    }
+    if (parsedResponse.data.responses.length === 0) {
+      this.handleEmptyCorrelatedResponse(
+        activeBatch,
+        parsedResponse.data.id,
+        payloadBytes,
+      );
+      return;
+    }
 
+    for (const response of parsedResponse.data.responses) {
       const expectation = activeBatch.expectations.get(response.index);
       if (expectation === undefined) {
         this.emitIgnoredResponse(
@@ -645,6 +666,88 @@ export class LegacyMqttTransport {
     }
   }
 
+  private handleEmptyCorrelatedResponse(
+    activeBatch: ActiveBatch,
+    responderId: string,
+    payloadBytes: number,
+  ): void {
+    if (!activeBatch.responsesEnabled()) {
+      this.emitIgnoredResponse(
+        "premature_response",
+        responderId,
+        -1,
+        payloadBytes,
+      );
+      return;
+    }
+    const matchingExpectations = [...activeBatch.expectations.values()].filter(
+      ({ command }) => command.targetId === responderId,
+    );
+    if (matchingExpectations.length === 0) {
+      this.emitIgnoredResponse("wrong_device", responderId, -1, payloadBytes);
+      return;
+    }
+    const unansweredExpectations = matchingExpectations.filter(
+      ({ localIndex }) => !activeBatch.outcomes.has(localIndex),
+    );
+    if (unansweredExpectations.length === 0) {
+      this.emitIgnoredResponse("duplicate", responderId, -1, payloadBytes);
+      return;
+    }
+    for (const expectation of unansweredExpectations) {
+      const outcome: LegacyCommandOutcome = {
+        index: expectation.originalIndex,
+        command: expectation.command.command,
+        targetId: expectation.command.targetId,
+        status: "failed",
+        response: "",
+        expectedResponse: expectation.command.expectedResponse,
+      };
+      activeBatch.outcomes.set(expectation.localIndex, outcome);
+      this.emitCommandOutcome(activeBatch.operationId, outcome);
+    }
+    activeBatch.settleIfComplete();
+  }
+
+  private handleAttributableMalformedResponse(
+    value: JsonValue,
+    payloadBytes: number,
+  ): void {
+    const identity = responseIdentity(value);
+    const activeBatch = this.activeBatch;
+    if (
+      identity === null ||
+      activeBatch === undefined ||
+      !activeBatch.responsesEnabled() ||
+      identity.requestId !== activeBatch.requestId
+    ) {
+      return;
+    }
+    const matchingExpectations = [...activeBatch.expectations.values()].filter(
+      ({ command }) => command.targetId === identity.id,
+    );
+    if (matchingExpectations.length === 0) {
+      this.emitIgnoredResponse("wrong_device", identity.id, -1, payloadBytes);
+      return;
+    }
+    for (const expectation of matchingExpectations) {
+      if (activeBatch.outcomes.has(expectation.localIndex)) {
+        continue;
+      }
+      const outcome: LegacyCommandOutcome = {
+        index: expectation.originalIndex,
+        command: expectation.command.command,
+        targetId: expectation.command.targetId,
+        status: "failed",
+        response: "[malformed response envelope]",
+        expectedResponse: expectation.command.expectedResponse,
+      };
+      activeBatch.outcomes.set(expectation.localIndex, outcome);
+      this.emitCommandOutcome(activeBatch.operationId, outcome);
+    }
+    activeBatch.settleIfComplete();
+  }
+
   private async pumpQueue(): Promise<void> {
     if (this.pumping) {
       return;
@@ -662,11 +765,6 @@ export class LegacyMqttTransport {
           );
           continue;
         }
-        if (this.outcomeUnknown) {
-          queued.reject(new LegacyMqttOutcomeUnknownError());
-          continue;
-        }
-
         try {
           queued.resolve(await this.executeQueuedOperation(queued));
         } catch (error) {
@@ -697,10 +795,8 @@ export class LegacyMqttTransport {
     const outcomes = new Map<number, LegacyCommandOutcome>();
 
     for (const [batchIndex, batch] of batches.entries()) {
-      if (!this.started || !this.ready || this.outcomeUnknown) {
-        const reason = this.started
-          ? "prior_batch_outcome_unknown"
-          : "transport_stopped";
+      if (!this.started || !this.ready) {
+        const reason = this.started ? "disconnected" : "transport_stopped";
         addNotAttemptedOutcomes(operation.commands, outcomes, reason);
         break;
       }
@@ -713,17 +809,6 @@ export class LegacyMqttTransport {
       );
       for (const outcome of batchOutcomes) {
         outcomes.set(outcome.index, outcome);
-      }
-      if (
-        batchOutcomes.some((outcome) => outcome.status === "outcome_unknown")
-      ) {
-        this.outcomeUnknown = true;
-        addNotAttemptedOutcomes(
-          operation.commands,
-          outcomes,
-          "prior_batch_outcome_unknown",
-        );
-        break;
       }
     }
 
@@ -755,7 +840,9 @@ export class LegacyMqttTransport {
       commands,
     );
     this.activeBatch = activeBatch;
-    const frames = encodeLegacyMessage(batch.payload);
+    const frames = encodeLegacyMessage(
+      encodeCorrelatedLegacyRequest(activeBatch.requestId, batch.payload),
+    );
     let publishedFrames = 0;
 
     for (const [frameIndex, frame] of frames.entries()) {
@@ -872,6 +959,7 @@ export class LegacyMqttTransport {
 
     return {
       operationId,
+      requestId: `${this.requestSessionId}-${operationId}-${batchIndex}`,
       batchIndex,
       expectations,
       outcomes,
@@ -1172,6 +1260,39 @@ function parseJson(payload: string): ParsedJson {
   } catch (error) {
     return { ok: false, detail: toError(error).message };
   }
+}
+
+function responseIdentity(
+  value: JsonValue,
+): { readonly id: string; readonly requestId: string } | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const id = value["id"];
+  const requestId = value["requestId"];
+  return typeof id === "string" && typeof requestId === "string"
+    ? { id, requestId }
+    : null;
+}
+
+function isJsonObject(
+  value: JsonValue,
+): value is { readonly [key: string]: JsonValue } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeRequestSessionId(value: string | undefined): string {
+  const sessionId = value ?? randomBytes(8).toString("hex");
+  if (
+    sessionId.length < 1 ||
+    sessionId.length > MAX_REQUEST_SESSION_ID_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/u.test(sessionId)
+  ) {
+    throw new TypeError(
+      `requestSessionId must be 1-${MAX_REQUEST_SESSION_ID_LENGTH} wire-safe characters`,
+    );
+  }
+  return sessionId;
 }
 
 function preview(payload: string): string {

@@ -1,4 +1,8 @@
-import { createEspTopicSet, encodeLegacyMessage } from "@aquarium/esp-protocol";
+import {
+  createEspTopicSet,
+  encodeCorrelatedLegacyRequest,
+  encodeLegacyMessage,
+} from "@aquarium/esp-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -8,7 +12,6 @@ import type {
   QosZeroSubscribeOptions,
 } from "./client-port.js";
 import {
-  LegacyMqttOutcomeUnknownError,
   LegacyMqttTransport,
   LegacyMqttUnavailableError,
   type LegacyAnnouncementEvent,
@@ -266,7 +269,9 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     const second = transport.executeCommands([ping("A2")]);
 
     await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
-    expect(commandPublishes(client)[0]?.payload).toBe("A1 p");
+    expect(commandPublishes(client)[0]?.payload).toBe(
+      encodeCorrelatedLegacyRequest("session-wire-1-0", "A1 p"),
+    );
 
     client.emitJson(
       topics.response,
@@ -278,11 +283,13 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       analogValue: null,
     });
     await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(2));
-    expect(commandPublishes(client)[1]?.payload).toBe("A2 p");
+    expect(commandPublishes(client)[1]?.payload).toBe(
+      encodeCorrelatedLegacyRequest("session-wire-2-0", "A2 p"),
+    );
 
     client.emitJson(
       topics.response,
-      response("A2", [{ index: 0, response: "o" }]),
+      response("A2", [{ index: 0, response: "o" }], "session-wire-2-0"),
     );
     expect((await second).outcomes[0]?.status).toBe("succeeded");
     await transport.stop();
@@ -372,7 +379,10 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
 
     await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
     expect(commandPublishes(client)[0]?.payload).toBe(
-      "A1 p;A1 sync 10;A2 p;A1 s 1 10 0;A2 sync 10",
+      encodeCorrelatedLegacyRequest(
+        "session-wire-1-0",
+        "A1 p;A1 sync 10;A2 p;A1 s 1 10 0;A2 sync 10",
+      ),
     );
 
     client.emitJson(
@@ -392,10 +402,12 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     );
 
     await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(2));
-    expect(commandPublishes(client)[1]?.payload).toBe("A1 p");
+    expect(commandPublishes(client)[1]?.payload).toBe(
+      encodeCorrelatedLegacyRequest("session-wire-1-1", "A1 p"),
+    );
     client.emitJson(
       topics.response,
-      response("A1", [{ index: 0, response: "o" }]),
+      response("A1", [{ index: 0, response: "o" }], "session-wire-1-1"),
     );
 
     const result = await operation;
@@ -415,7 +427,9 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     const operation = transport.executeCommands([
       command(rawCommand, "A1", "schedule_ok"),
     ]);
-    const expectedFrames = encodeLegacyMessage(rawCommand);
+    const expectedFrames = encodeLegacyMessage(
+      encodeCorrelatedLegacyRequest("session-wire-1-0", rawCommand),
+    );
 
     await vi.waitFor(() =>
       expect(commandPublishes(client)).toHaveLength(expectedFrames.length),
@@ -437,7 +451,7 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     await transport.stop();
   });
 
-  it("marks timeout unknown, never retries, and requires explicit reconciliation", async () => {
+  it("marks a timeout unknown, ignores its late response, and continues queued work", async () => {
     const client = new InMemoryMqttClient();
     const interactions: LegacyMqttInteraction[] = [];
     const transport = await readyTransport(
@@ -457,10 +471,6 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       { index: 0, status: "outcome_unknown", reason: "timeout" },
     ]);
     expect(commandPublishes(client)).toHaveLength(1);
-    await expect(
-      transport.executeCommands([ping("A1")]),
-    ).rejects.toBeInstanceOf(LegacyMqttOutcomeUnknownError);
-    expect(commandPublishes(client)).toHaveLength(1);
 
     client.emitJson(
       topics.response,
@@ -474,15 +484,14 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       ),
     ).toBe(true);
 
-    transport.acknowledgeUnknownOutcome();
-    const reconciledOperation = transport.executeCommands([ping("A1")]);
+    const nextOperation = transport.executeCommands([ping("A1")]);
     await flushMicrotasks();
     expect(commandPublishes(client)).toHaveLength(2);
     client.emitJson(
       topics.response,
-      response("A1", [{ index: 0, response: "o" }]),
+      response("A1", [{ index: 0, response: "o" }], "session-wire-2-0"),
     );
-    expect((await reconciledOperation).outcomes[0]?.status).toBe("succeeded");
+    expect((await nextOperation).outcomes[0]?.status).toBe("succeeded");
     await transport.stop();
   });
 
@@ -500,10 +509,16 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       { status: "outcome_unknown", reason: "publish_failed" },
     ]);
     expect(commandPublishes(client)).toHaveLength(1);
-    await expect(
-      transport.executeCommands([ping("A1")]),
-    ).rejects.toBeInstanceOf(LegacyMqttOutcomeUnknownError);
-    expect(commandPublishes(client)).toHaveLength(1);
+
+    client.onPublish = undefined;
+    const nextOperation = transport.executeCommands([ping("A1")]);
+    await flushMicrotasks();
+    expect(commandPublishes(client)).toHaveLength(2);
+    client.emitJson(
+      topics.response,
+      response("A1", [{ index: 0, response: "o" }], "session-wire-2-0"),
+    );
+    expect((await nextOperation).outcomes[0]?.status).toBe("succeeded");
     await transport.stop();
   });
 
@@ -560,6 +575,89 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
         "index_out_of_range",
         "duplicate",
       ]),
+    );
+    await transport.stop();
+  });
+
+  it("treats a current correlated empty response as an attributable failure", async () => {
+    const client = new InMemoryMqttClient();
+    const transport = await readyTransport(client);
+    const operation = transport.executeCommands([ping("A1")]);
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+
+    client.emitJson(topics.response, response("A1", []));
+
+    await expect(operation).resolves.toMatchObject({
+      outcomes: [
+        {
+          targetId: "A1",
+          status: "failed",
+          response: "",
+          expectedResponse: { kind: "exact", value: "o" },
+        },
+      ],
+    });
+    await transport.stop();
+  });
+
+  it("attributes a malformed response envelope only when device and request match", async () => {
+    const client = new InMemoryMqttClient();
+    const interactions: LegacyMqttInteraction[] = [];
+    const transport = await readyTransport(client, {
+      onInteraction: (interaction) => interactions.push(interaction),
+    });
+    const operation = transport.executeCommands([ping("A1")]);
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+
+    client.emitJson(topics.response, {
+      id: "A1",
+      name: "A1",
+      requestId: "session-wire-1-0",
+      responses: "invalid",
+    });
+
+    await expect(operation).resolves.toMatchObject({
+      outcomes: [
+        {
+          targetId: "A1",
+          status: "failed",
+          response: "[malformed response envelope]",
+        },
+      ],
+    });
+    expect(interactions).toContainEqual(
+      expect.objectContaining({
+        kind: "malformed_message",
+        topic: topics.response,
+      }),
+    );
+    await transport.stop();
+  });
+
+  it("does not attribute an empty response from a wrong request", async () => {
+    const client = new InMemoryMqttClient();
+    const interactions: LegacyMqttInteraction[] = [];
+    const transport = await readyTransport(client, {
+      onInteraction: (interaction) => interactions.push(interaction),
+    });
+    const operation = transport.executeCommands([ping("A1")]);
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+
+    client.emitJson(topics.response, response("A1", [], "wire-old-0"));
+    client.emitJson(
+      topics.response,
+      response("A1", [{ index: 0, response: "o" }]),
+    );
+
+    await expect(operation).resolves.toMatchObject({
+      outcomes: [{ status: "succeeded" }],
+    });
+    expect(interactions).toContainEqual(
+      expect.objectContaining({
+        kind: "ignored_response",
+        reason: "wrong_request",
+        responderId: "A1",
+      }),
     );
     await transport.stop();
   });
@@ -628,6 +726,7 @@ async function readyTransport(
     topics,
     responseTimeoutMs,
     callbacks,
+    requestSessionId: "session",
   });
   transport.start();
   client.emitConnected();
@@ -679,8 +778,9 @@ function announcement(id: string, name: string): object {
 function response(
   id: string,
   responses: readonly { readonly index: number; readonly response: string }[],
+  requestId = "session-wire-1-0",
 ): object {
-  return { id, name: id, responses };
+  return { id, name: id, requestId, responses };
 }
 
 function commandPublishes(client: InMemoryMqttClient): readonly PublishCall[] {

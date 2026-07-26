@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("file-backed fake ESP persistence", () => {
-  it("persists EEPROM and SPIFFS schedule independently", () => {
+  it("persists EEPROM, schedule, and last error independently", () => {
     const directory = temporaryDirectory();
     const persistence = new FileFakeEspPersistence(directory);
     persistence.writeEeprom({
@@ -26,6 +26,14 @@ describe("file-backed fake ESP persistence", () => {
       time: { lastSavedEpochSeconds: 1_735_689_600 },
     });
     persistence.writeSchedule('{"c":[]}');
+    persistence.writeLastError({
+      code: "pin_attach_failed",
+      severity: "error",
+      message: "LEDC attach failed on pin 4",
+      sequence: 1,
+      active: true,
+      at: 1_735_689_600,
+    });
 
     expect(new FileFakeEspPersistence(directory).read()).toEqual({
       deviceName: "Alpha",
@@ -34,11 +42,27 @@ describe("file-backed fake ESP persistence", () => {
       resolution: 10,
       time: { lastSavedEpochSeconds: 1_735_689_600 },
       schedule: '{"c":[]}',
+      lastError: {
+        code: "pin_attach_failed",
+        severity: "error",
+        message: "LEDC attach failed on pin 4",
+        sequence: 1,
+        active: true,
+        at: 1_735_689_600,
+      },
     });
 
     persistence.clearEeprom();
     expect(new FileFakeEspPersistence(directory).read()).toEqual({
       schedule: '{"c":[]}',
+      lastError: {
+        code: "pin_attach_failed",
+        severity: "error",
+        message: "LEDC attach failed on pin 4",
+        sequence: 1,
+        active: true,
+        at: 1_735_689_600,
+      },
     });
   });
 

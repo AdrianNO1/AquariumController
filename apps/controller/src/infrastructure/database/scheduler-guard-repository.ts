@@ -2,7 +2,7 @@ import {
   identifierSchema,
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
-import type { Kysely } from "kysely";
+import { sql, type Kysely } from "kysely";
 import { z } from "zod";
 
 import type {
@@ -181,7 +181,15 @@ export class OnlineDeviceRepository implements OnlineDeviceReader {
       .selectFrom("devices")
       .select("id")
       .where("enabled", "=", 1)
-      .where("status", "=", "online")
+      .where("status", "in", ["online", "stale", "offline"])
+      .orderBy(
+        sql<number>`CASE ${sql.ref("status")}
+          WHEN 'online' THEN 0
+          WHEN 'stale' THEN 1
+          ELSE 2
+        END`,
+        "asc",
+      )
       .orderBy("id", "asc")
       .execute();
     return rows.map(({ id }) => identifierSchema.parse(id));

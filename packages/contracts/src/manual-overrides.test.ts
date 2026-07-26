@@ -69,6 +69,7 @@ describe("manual override contracts", () => {
         requestedAt: "2026-07-13T10:00:00.000Z",
         deadlineAt: "2026-07-13T10:00:30.000Z",
         completedAt: null,
+        outcomeUnresolved: false,
       },
       mutation,
     };

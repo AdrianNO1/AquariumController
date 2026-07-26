@@ -50,7 +50,7 @@ export type TimeSyncDiagnostic =
   | {
       readonly code: "time_sync_operation_blocked";
       readonly deviceId: string;
-      readonly reason: "outcome_unknown" | "command_error";
+      readonly reason: "command_error";
     }
   | {
       readonly code: "time_sync_operation_not_succeeded";
@@ -291,9 +291,6 @@ export class TimeSyncCoordinator {
           operationId: operation.id,
           status: operation.status,
         });
-        if (operation.status === "outcome_unknown") {
-          return;
-        }
       }
     }
   }

@@ -32,10 +32,8 @@ export class SchedulingInteractionLogger {
     }
     const critical = report.diagnostics.some(
       (diagnostic) =>
-        (diagnostic.code === "scheduled_operation_blocked" &&
-          diagnostic.reason === "outcome_unknown") ||
-        (diagnostic.code === "scheduled_operation_not_succeeded" &&
-          diagnostic.status === "outcome_unknown"),
+        diagnostic.code === "scheduled_operation_not_succeeded" &&
+        diagnostic.status === "outcome_unknown",
     );
     await this.repository.log({
       occurredAtMs,
@@ -60,10 +58,8 @@ export class SchedulingInteractionLogger {
     occurredAtMs: number,
   ): Promise<void> {
     const critical =
-      (diagnostic.code === "time_sync_operation_blocked" &&
-        diagnostic.reason === "outcome_unknown") ||
-      (diagnostic.code === "time_sync_operation_not_succeeded" &&
-        diagnostic.status === "outcome_unknown");
+      diagnostic.code === "time_sync_operation_not_succeeded" &&
+      diagnostic.status === "outcome_unknown";
     await this.repository.log({
       occurredAtMs,
       direction: "internal",

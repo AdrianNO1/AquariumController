@@ -14,7 +14,7 @@ import { z } from "zod";
 
 export const MANUAL_OVERRIDE_DURATION_MS = ESP32_PWM_OVERWRITE_DURATION_MS;
 export const MANUAL_OVERRIDE_OPERATION_TIMEOUT_MS = 30_000;
-export const MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION = 1;
+export const MANUAL_OVERRIDE_OPERATION_SCHEMA_VERSION = 2;
 
 export const manualOverridePinCommandSchema = z.strictObject({
   deviceId: identifierSchema,
@@ -98,7 +98,7 @@ export const manualOverrideOperationResultSchema = z.discriminatedUnion(
         "controller_restart",
         "controller_restart_before_release",
       ]),
-      unknownChildOperationId: identifierSchema.nullable(),
+      unknownChildOperationIds: manualOverrideChildOperationIdsSchema,
       safetyReconcileAtMs: nonnegativeSafeIntegerSchema,
       reconciledAtMs: nonnegativeSafeIntegerSchema.nullable(),
     }),
@@ -194,7 +194,7 @@ export interface ManualOverrideDeviceCommandPort {
       readonly overwrite: boolean;
     },
   ): Promise<ManualOverrideDeviceDispatchResult>;
-  reconcileUnknownOutcome(operationId: string): Promise<void>;
+  reconcileUnknownOutcomes(operationIds: readonly string[]): Promise<void>;
 }
 
 export interface ManualOverrideRepositoryPort extends ManualOverrideOverlayReader {
@@ -249,7 +249,7 @@ export interface ManualOverrideRepositoryPort extends ManualOverrideOverlayReade
       ManualOverrideOperationResult,
       { readonly status: "outcome_unknown" }
     >["reason"];
-    readonly unknownChildOperationId: string | null;
+    readonly unknownChildOperationIds: readonly string[];
     readonly safetyReconcileAtMs: number;
   }): Promise<void>;
   recoverInterrupted(nowMs: number): Promise<void>;
@@ -301,5 +301,9 @@ export function toOperationSummary(
       value.completedAtMs === null
         ? null
         : new Date(value.completedAtMs).toISOString(),
+    outcomeUnresolved:
+      value.status === "outcome_unknown" &&
+      value.result?.status === "outcome_unknown" &&
+      value.result.reconciledAtMs === null,
   };
 }

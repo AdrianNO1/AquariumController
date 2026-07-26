@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 
 import {
+  CURRENT_ESP_FIRMWARE_VERSION,
   legacyScheduleDocumentSchema,
   serializeLegacyScheduleCore,
 } from "@aquarium/esp-protocol";
@@ -109,7 +110,7 @@ describe("schedule artifact affected-device projection", () => {
         kind: "announcement",
         deviceId: "device-a",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual(["device-a"]);
   });
 });
 
@@ -404,6 +405,7 @@ class RecordingScheduleOperations implements DeviceScheduleOperationPort {
     readonly deviceId: string;
     readonly scheduleJson: string;
   }[] = [];
+  readonly reconciledOperationIds: string[] = [];
   readonly firstOperationStarted: Promise<void>;
   readonly #results: DeviceOperationResult[];
   readonly #firstStarted: () => void;
@@ -479,6 +481,12 @@ class RecordingScheduleOperations implements DeviceScheduleOperationPort {
       })
       .executeTakeFirstOrThrow();
     return { id: operationId, status: result.status, result };
+  }
+
+  async acknowledgeScheduleReconciledOutcome(
+    operationId: string,
+  ): Promise<void> {
+    this.reconciledOperationIds.push(operationId);
   }
 }
 
@@ -638,7 +646,7 @@ function deviceRow(deviceId: string, mappingProfileId: string | null) {
     desired_pwm_resolution_bits: 8,
     reported_pwm_frequency_hz: 1_000,
     reported_pwm_resolution_bits: 8,
-    firmware_version: "4.0.0",
+    firmware_version: CURRENT_ESP_FIRMWARE_VERSION,
     reported_schedule_hash: "0",
     status: "online" as const,
     last_seen_at_ms: 0,

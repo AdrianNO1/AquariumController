@@ -28,6 +28,25 @@ describe("independent fake ESP chunk reassembly", () => {
     expect(responseEntries(harness)).toEqual([]);
   });
 
+  it("preserves a correlated request ID through chunk reassembly", () => {
+    const harness = createHarness();
+    harness.publishCommand("chunk:0:2:0:request:chunk_request|A1");
+    harness.publishCommand("chunk:1:2:1:B2C3D4 p");
+
+    const response = harness.bus
+      .publications()
+      .find(
+        (publication) =>
+          publication.origin === "actor" &&
+          publication.topic === harness.topics.response,
+      );
+    expect(JSON.parse(response?.payload ?? "{}")).toMatchObject({
+      id: DEVICE_ID,
+      requestId: "chunk_request",
+      responses: [{ index: 0, response: "o" }],
+    });
+  });
+
   it("fails closed on changing totals and inconsistent final-chunk metadata", () => {
     const harness = createHarness();
 

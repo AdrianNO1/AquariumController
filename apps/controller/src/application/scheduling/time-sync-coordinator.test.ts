@@ -112,7 +112,7 @@ describe("time-sync coordinator", () => {
     await nextDay.stop();
   });
 
-  it("shares the unknown-outcome latch across announcement and scheduled callers", async () => {
+  it("continues syncing other devices after an unknown outcome", async () => {
     const time = new ManualSchedulingTime("2026-07-13T04:00:00.000Z");
     const diagnostics: TimeSyncDiagnostic[] = [];
     const port = new RecordingOperationPort(async (_device, _request, call) =>
@@ -133,23 +133,14 @@ describe("time-sync coordinator", () => {
 
     await coordinator.signalAnnouncement("device-a");
     await coordinator.signalAnnouncement("device-b");
-    expect(port.calls).toHaveLength(1);
+    expect(port.calls).toHaveLength(2);
     expect(diagnostics).toMatchObject([
       {
         code: "time_sync_operation_not_succeeded",
         deviceId: "device-a",
         status: "outcome_unknown",
       },
-      {
-        code: "time_sync_operation_blocked",
-        deviceId: "device-b",
-        reason: "outcome_unknown",
-      },
     ]);
-
-    await dispatcher.acknowledgeReconciledOutcome();
-    await coordinator.signalAnnouncement("device-b");
-    expect(port.calls).toHaveLength(2);
     await coordinator.stop();
   });
 

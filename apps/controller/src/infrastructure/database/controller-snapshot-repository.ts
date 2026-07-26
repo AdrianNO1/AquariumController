@@ -21,6 +21,15 @@ export const RECENT_OPERATION_LIMIT = 100;
 export const UNRESOLVED_DEVICE_OPERATION_LIMIT = 100;
 const RECENT_IMPORT_RUN_LIMIT = 100;
 const ALERT_DELIVERY_LIMIT = 100;
+const outcomeUnknownReconciliationSchema = z.object({
+  status: z.literal("outcome_unknown"),
+  reconciledAtMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(Number.MAX_SAFE_INTEGER)
+    .nullable(),
+});
 
 export const CONTROL_AREA_DEFINITIONS = [
   { slug: "lights", typeKey: "light", label: "Lights" },
@@ -128,7 +137,29 @@ function toOperationSummary(
             operation.completed_at_ms,
             `operation ${operation.id} completion time`,
           ),
+    outcomeUnresolved: operationOutcomeUnresolved(operation),
   };
+}
+
+function operationOutcomeUnresolved(
+  operation: Selectable<StateDatabaseSchema["control_operations"]>,
+): boolean {
+  if (operation.status !== "outcome_unknown") {
+    return false;
+  }
+  const result = parseOptionalStoredJson(
+    operation.result_json,
+    operation.result_schema_version,
+    null,
+    outcomeUnknownReconciliationSchema,
+    `operation ${operation.id} reconciliation state`,
+  );
+  if (result === null) {
+    throw new InvalidPersistedSnapshotDataError(
+      `operation ${operation.id} reconciliation state`,
+    );
+  }
+  return result.reconciledAtMs === null;
 }
 
 export class ControllerSnapshotRepository implements ControllerSnapshotReader {

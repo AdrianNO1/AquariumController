@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 describe("routine control-operation retention", () => {
-  it("prunes old successful PWM rows in bounded batches without deleting referenced or diagnostic history", async () => {
+  it("prunes old terminal routine PWM rows in bounded batches without deleting referenced or diagnostic history", async () => {
     const database = await openStateDatabase({ filename: ":memory:" });
     openDatabases.push(database);
     await database
@@ -26,6 +26,8 @@ describe("routine control-operation retention", () => {
         succeededOperation("old-a", "set_pwm", 100),
         succeededOperation("old-b", "set_pwm", 200),
         succeededOperation("old-c", "set_pwm", 300),
+        reconciledUnknownOperation("old-reconciled", 350),
+        unresolvedUnknownOperation("old-unresolved", 360),
         succeededOperation("referenced", "set_pwm", 400),
         succeededOperation("at-cutoff", "set_pwm", 500),
         succeededOperation("old-ping", "ping", 100),
@@ -76,11 +78,11 @@ describe("routine control-operation retention", () => {
 
     await expect(
       repository.pruneRoutineSucceededOperations({
-        nowMs: 1_000,
-        retainForMs: 500,
+        nowMs: 200_000,
+        retainForMs: 199_500,
         batchSize: 2,
       }),
-    ).resolves.toEqual({ cutoffMs: 500, deletedCount: 3 });
+    ).resolves.toEqual({ cutoffMs: 500, deletedCount: 4 });
 
     expect(
       await database
@@ -92,6 +94,7 @@ describe("routine control-operation retention", () => {
       { id: "at-cutoff" },
       { id: "old-failed" },
       { id: "old-ping" },
+      { id: "old-unresolved" },
       { id: "pending" },
       { id: "referenced" },
     ]);
@@ -122,6 +125,44 @@ describe("routine control-operation retention", () => {
     ).rejects.toThrow();
   });
 });
+
+function reconciledUnknownOperation(id: string, completedAtMs: number) {
+  return {
+    ...unresolvedUnknownOperation(id, completedAtMs),
+    result_json: JSON.stringify({
+      status: "outcome_unknown",
+      wireOperationId: `wire-${id}`,
+      reason: "timeout",
+      reconciledAtMs: completedAtMs + 120_000,
+    }),
+  };
+}
+
+function unresolvedUnknownOperation(id: string, completedAtMs: number) {
+  return {
+    id,
+    device_id: null,
+    kind: "set_pwm",
+    status: "outcome_unknown" as const,
+    requested_at_ms: 0,
+    deadline_at_ms: completedAtMs,
+    completed_at_ms: completedAtMs,
+    request_json: JSON.stringify({
+      kind: "set_pwm",
+      pin: 4,
+      value: 128,
+      overwrite: true,
+    }),
+    request_schema_version: 1,
+    result_json: JSON.stringify({
+      status: "outcome_unknown",
+      wireOperationId: `wire-${id}`,
+      reason: "timeout",
+      reconciledAtMs: null,
+    }),
+    result_schema_version: 1,
+  };
+}
 
 function succeededOperation(id: string, kind: string, completedAtMs: number) {
   return {

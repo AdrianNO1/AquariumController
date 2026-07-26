@@ -1,3 +1,4 @@
+import { identifierSchema } from "@aquarium/contracts";
 import {
   evaluateSchedulePercent,
   toHostPwm,
@@ -24,6 +25,7 @@ import {
 } from "./scheduling-time.js";
 
 export const OUTPUT_REFRESH_INTERVAL_MS = 5_000;
+export const OUTPUT_RETRY_COOLDOWN_MS = 60_000;
 
 export interface ActiveScheduledOutput {
   readonly deviceId: string;
@@ -58,7 +60,7 @@ export type OutputRefreshDiagnostic =
       readonly code: "scheduled_operation_blocked";
       readonly deviceId: string;
       readonly mappingId: string;
-      readonly reason: "outcome_unknown" | "command_error";
+      readonly reason: "command_error";
     }
   | {
       readonly code: "scheduled_operation_not_succeeded";
@@ -97,6 +99,7 @@ export class OutputRefreshScheduler {
   readonly #manualOverrideReader: ManualOverrideOverlayReader;
   readonly #onTick: (report: OutputRefreshTickReport) => void;
   readonly #onError: (error: Error) => void;
+  readonly #retryAfterByDevice = new Map<string, number>();
   #cancelTimer: CancelScheduledTask | null = null;
   #activeTick: Promise<void> | null = null;
   #nextDeadlineMs: number | null = null;
@@ -121,6 +124,10 @@ export class OutputRefreshScheduler {
 
   isReady(): boolean {
     return this.#started && !this.#stopping && this.#fatalError === null;
+  }
+
+  signalDeviceAvailable(deviceId: string): void {
+    this.#retryAfterByDevice.delete(identifierSchema.parse(deviceId));
   }
 
   start(): void {
@@ -237,7 +244,7 @@ export class OutputRefreshScheduler {
         mappingId: output.mappingId,
         pin: output.pin,
         value,
-        overwrite: false,
+        overwrite: true,
       });
     }
 
@@ -246,9 +253,20 @@ export class OutputRefreshScheduler {
       manualOverrides,
     );
     let operationCount = 0;
+    const deferredDeviceIds = new Set<string>();
     for (const command of effectiveCommands) {
       if (this.#stopping) {
         break;
+      }
+      if (deferredDeviceIds.has(command.deviceId)) {
+        continue;
+      }
+      const retryAfterMs = this.#retryAfterByDevice.get(command.deviceId);
+      if (retryAfterMs !== undefined && retryAfterMs > startedAtMonotonicMs) {
+        continue;
+      }
+      if (retryAfterMs !== undefined) {
+        this.#retryAfterByDevice.delete(command.deviceId);
       }
       const dispatch = await this.#commands.dispatch(command.deviceId, {
         kind: "set_pwm",
@@ -274,9 +292,11 @@ export class OutputRefreshScheduler {
           operationId: dispatch.operation.id,
           status: dispatch.operation.status,
         });
-        if (dispatch.operation.status === "outcome_unknown") {
-          break;
-        }
+        deferredDeviceIds.add(command.deviceId);
+        this.#retryAfterByDevice.set(
+          command.deviceId,
+          this.#readMonotonicNow() + OUTPUT_RETRY_COOLDOWN_MS,
+        );
       }
     }
 

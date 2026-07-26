@@ -37,7 +37,11 @@ describe("manual override service", () => {
         status: "pending",
         expiresAt: new Date(130_000).toISOString(),
       },
-      operation: { id: "operation-2", status: "pending" },
+      operation: {
+        id: "operation-2",
+        status: "pending",
+        outcomeUnresolved: false,
+      },
       mutation: { revision: 1 },
     });
     await waitForOverrideStatus(context.repository, "override-1", "active");
@@ -82,7 +86,7 @@ describe("manual override service", () => {
         deviceId: "device-a",
         pin: 4,
         value: 89,
-        overwrite: false,
+        overwrite: true,
       },
     ]);
   });
@@ -118,12 +122,12 @@ describe("manual override service", () => {
         deviceId: "device-a",
         pin: 5,
         value: 0,
-        overwrite: false,
+        overwrite: true,
       },
     ]);
   });
 
-  it("records a dropped response as unknown, never retries, and waits for firmware safety reconciliation", async () => {
+  it("keeps a dropped-response start active until its normal expiry", async () => {
     const context = await createContext([
       {
         kind: "completed",
@@ -141,20 +145,25 @@ describe("manual override service", () => {
       "outcome_unknown",
     );
     expect(await context.repository.getOverride("override-1")).toMatchObject({
-      status: "pending",
-      startsAtMs: null,
+      status: "active",
+      startsAtMs: INITIAL_TIME_MS,
     });
     await expect(
       context.repository.readActiveManualOverrideOutputs(20_000),
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject([{ overwrite: true, pin: 4, value: 125 }]);
 
     await context.time.advanceBy(119_999);
     expect(context.commands.calls).toHaveLength(1);
     expect(context.commands.reconciledOperationIds).toEqual([]);
 
     await context.time.advanceBy(1);
-    await waitForOverrideStatus(context.repository, "override-1", "failed");
-    expect(context.commands.calls).toHaveLength(1);
+    await waitForOverrideStatus(context.repository, "override-1", "expired");
+    expect(context.commands.calls).toHaveLength(2);
+    expect(context.commands.calls[1]).toMatchObject({
+      deviceId: "device-a",
+      pin: 4,
+      overwrite: true,
+    });
     expect(context.commands.reconciledOperationIds).toEqual(["child-unknown"]);
     await expect(
       context.repository.getManualOperation("operation-2"),
@@ -164,7 +173,7 @@ describe("manual override service", () => {
     });
   });
 
-  it("keeps an unknown coordinator pending until its child latch is reconciled", async () => {
+  it("keeps an unknown start active when child reconciliation initially fails", async () => {
     const context = await createContext([
       {
         kind: "completed",
@@ -194,17 +203,141 @@ describe("manual override service", () => {
     ).resolves.toMatchObject({ result: { reconciledAtMs: null } });
     await expect(
       context.repository.getOverride("override-1"),
-    ).resolves.toMatchObject({ status: "pending" });
+    ).resolves.toMatchObject({ status: "active" });
 
     context.commands.reconciliationError = null;
     await expect(
       context.service.reconcileOverride("override-1", {
         expectedRevision: 3,
       }),
-    ).resolves.toMatchObject({ override: { status: "failed" } });
+    ).resolves.toMatchObject({ override: { status: "active" } });
     expect(context.commands.reconciledOperationIds).toEqual([
       "child-unknown",
       "child-unknown",
+    ]);
+  });
+
+  it("immediately reconciles an ambiguous aggregate when every child outcome is known", async () => {
+    const context = await createContext([
+      {
+        kind: "completed",
+        operation: { id: "child-failed", status: "failed" },
+      },
+    ]);
+    await context.service.startOverride({
+      expectedRevision: 0,
+      target: { targetType: "channel", targetId: "channel-blue" },
+      valuePercentage: 70,
+    });
+    await waitForOperationStatus(
+      context.repository,
+      "operation-2",
+      "outcome_unknown",
+    );
+
+    await context.time.advanceBy(0);
+    await vi.waitFor(async () => {
+      await expect(
+        context.repository.getManualOperation("operation-2"),
+      ).resolves.toMatchObject({
+        status: "outcome_unknown",
+        result: {
+          unknownChildOperationIds: [],
+          safetyReconcileAtMs: INITIAL_TIME_MS,
+          reconciledAtMs: INITIAL_TIME_MS,
+        },
+      });
+    });
+    await expect(
+      context.repository.getOverride("override-1"),
+    ).resolves.toMatchObject({ status: "active" });
+    expect(context.commands.reconciliationCallCount).toBe(1);
+  });
+
+  it("allows an unresolved start to cancel and reconciles its historical operation later", async () => {
+    const context = await createContext([
+      {
+        kind: "completed",
+        operation: { id: "child-unknown", status: "outcome_unknown" },
+      },
+    ]);
+    await context.service.startOverride({
+      expectedRevision: 0,
+      target: { targetType: "channel", targetId: "channel-blue" },
+      valuePercentage: 70,
+    });
+    await waitForOperationStatus(
+      context.repository,
+      "operation-2",
+      "outcome_unknown",
+    );
+
+    await context.service.cancelOverride("override-1", {
+      expectedRevision: 3,
+    });
+    await waitForOverrideStatus(context.repository, "override-1", "cancelled");
+    expect(context.commands.calls).toHaveLength(2);
+
+    await context.time.advanceBy(120_000);
+    await vi.waitFor(async () => {
+      await expect(
+        context.repository.getManualOperation("operation-2"),
+      ).resolves.toMatchObject({
+        status: "outcome_unknown",
+        result: { reconciledAtMs: 130_000 },
+      });
+    });
+    await expect(
+      context.repository.getOverride("override-1"),
+    ).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("continues with later devices after one child consumes the original aggregate deadline", async () => {
+    const context = await createContext([
+      {
+        kind: "completed",
+        operation: { id: "child-unknown", status: "outcome_unknown" },
+      },
+      {
+        kind: "completed",
+        operation: { id: "child-success", status: "succeeded" },
+      },
+    ]);
+    const firstDevice = await requireDatabase()
+      .selectFrom("devices")
+      .selectAll()
+      .where("id", "=", "device-a")
+      .executeTakeFirstOrThrow();
+    await requireDatabase()
+      .insertInto("devices")
+      .values({
+        ...firstDevice,
+        id: "device-b",
+        hardware_id: "hardware-b",
+        name: "Beta",
+        reported_name: "Beta",
+      })
+      .executeTakeFirstOrThrow();
+    context.commands.onDispatch = (callIndex) => {
+      if (callIndex === 1) {
+        context.time.setUtc(INITIAL_TIME_MS + 30_000);
+      }
+    };
+
+    await context.service.startOverride({
+      expectedRevision: 0,
+      target: { targetType: "channel", targetId: "channel-blue" },
+      valuePercentage: 70,
+    });
+    await waitForOperationStatus(
+      context.repository,
+      "operation-2",
+      "outcome_unknown",
+    );
+
+    expect(context.commands.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
     ]);
   });
 
@@ -243,7 +376,7 @@ describe("manual override service", () => {
     await context.time.advanceBy(120_000);
     await waitForOverrideStatus(context.repository, "override-1", "expired");
     expect(context.commands.calls).toHaveLength(2);
-    expect(context.commands.calls[1]).toMatchObject({ overwrite: false });
+    expect(context.commands.calls[1]).toMatchObject({ overwrite: true });
   });
 });
 
@@ -255,7 +388,9 @@ class TestCommandPort implements ManualOverrideDeviceCommandPort {
     readonly overwrite: boolean;
   }> = [];
   readonly reconciledOperationIds: string[] = [];
+  reconciliationCallCount = 0;
   reconciliationError: Error | null = null;
+  onDispatch: ((callIndex: number) => void) | null = null;
   readonly #results: ManualOverrideDeviceDispatchResult[];
   #sequence = 0;
 
@@ -278,6 +413,7 @@ class TestCommandPort implements ManualOverrideDeviceCommandPort {
       value: request.value,
       overwrite: request.overwrite,
     });
+    this.onDispatch?.(this.calls.length);
     return (
       this.#results.shift() ?? {
         kind: "completed",
@@ -286,8 +422,11 @@ class TestCommandPort implements ManualOverrideDeviceCommandPort {
     );
   }
 
-  async reconcileUnknownOutcome(operationId: string): Promise<void> {
-    this.reconciledOperationIds.push(operationId);
+  async reconcileUnknownOutcomes(
+    operationIds: readonly string[],
+  ): Promise<void> {
+    this.reconciliationCallCount += 1;
+    this.reconciledOperationIds.push(...operationIds);
     if (this.reconciliationError !== null) {
       throw this.reconciliationError;
     }

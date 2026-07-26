@@ -12,7 +12,7 @@ import {
   serializeLegacyScheduleDocument,
   utf8ByteLength,
 } from "@aquarium/esp-protocol";
-import type { Kysely, Selectable, Transaction } from "kysely";
+import { sql, type Kysely, type Selectable, type Transaction } from "kysely";
 
 import {
   DEVICE_OPERATION_REQUEST_SCHEMA_VERSION,
@@ -50,9 +50,9 @@ export class DeviceScheduleArtifactRepository implements DeviceScheduleArtifactS
       case "startup":
         return this.selectMappedDevices();
       case "device_configuration":
-        return this.selectOneMappedDevice(trigger.deviceId, false);
+        return this.selectOneMappedDevice(trigger.deviceId);
       case "announcement":
-        return this.selectOneMappedDevice(trigger.deviceId, true);
+        return this.selectOneMappedDevice(trigger.deviceId);
       case "mapping_profile": {
         const mappingProfileId = identifierSchema.parse(
           trigger.mappingProfileId,
@@ -170,7 +170,7 @@ export class DeviceScheduleArtifactRepository implements DeviceScheduleArtifactS
       if (
         device === undefined ||
         device.enabled !== 1 ||
-        device.status !== "online" ||
+        !["online", "stale", "offline"].includes(device.status) ||
         device.mapping_profile_id === null
       ) {
         return null;
@@ -461,8 +461,16 @@ export class DeviceScheduleArtifactRepository implements DeviceScheduleArtifactS
       .selectFrom("devices")
       .select("id")
       .where("enabled", "=", 1)
-      .where("status", "=", "online")
+      .where("status", "in", ["online", "stale", "offline"])
       .where("mapping_profile_id", "is not", null)
+      .orderBy(
+        sql<number>`CASE ${sql.ref("status")}
+          WHEN 'online' THEN 0
+          WHEN 'stale' THEN 1
+          ELSE 2
+        END`,
+        "asc",
+      )
       .orderBy("id")
       .execute();
     return rows.map((row) => row.id);
@@ -470,7 +478,6 @@ export class DeviceScheduleArtifactRepository implements DeviceScheduleArtifactS
 
   private async selectOneMappedDevice(
     rawDeviceId: string,
-    requireHashMismatch: boolean,
   ): Promise<readonly string[]> {
     const deviceId = identifierSchema.parse(rawDeviceId);
     const row = await this.database
@@ -494,15 +501,8 @@ export class DeviceScheduleArtifactRepository implements DeviceScheduleArtifactS
     if (
       row === undefined ||
       row.enabled !== 1 ||
-      row.status !== "online" ||
+      !["online", "stale", "offline"].includes(row.status) ||
       row.mapping_profile_id === null
-    ) {
-      return [];
-    }
-    if (
-      requireHashMismatch &&
-      row.compile_status === "succeeded" &&
-      row.desired_schedule_hash === row.reported_schedule_hash
     ) {
       return [];
     }

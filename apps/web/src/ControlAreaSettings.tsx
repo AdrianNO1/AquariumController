@@ -13,6 +13,7 @@ import { useMemo, useState } from "react";
 import {
   patchDeviceConfiguration,
   replaceMappingProfile,
+  setDeviceEnabled,
   updateThrottle,
 } from "./api.js";
 import {
@@ -712,6 +713,17 @@ export function DevicesPanel({
   const [editingDevice, setEditingDevice] = useState<EditingDevice | null>(
     null,
   );
+  const enabledMutation = useMutation({
+    mutationFn: ({
+      deviceId,
+      enabled,
+    }: {
+      readonly deviceId: string;
+      readonly enabled: boolean;
+    }) => setDeviceEnabled(deviceId, { expectedRevision, enabled }),
+    onSuccess: refresh,
+    onError: refreshOnConflict(refresh),
+  });
   return (
     <section className="control-panel" aria-labelledby="devices-heading">
       <div className="section-heading">
@@ -734,9 +746,47 @@ export function DevicesPanel({
                   <h3>{device.desired.name}</h3>
                   <code>{device.hardwareId}</code>
                 </div>
-                <span className={`status-pill status-${device.status}`}>
-                  {device.status}
-                </span>
+                <div className="device-status-actions">
+                  <span className={`status-pill status-${device.status}`}>
+                    {device.status}
+                  </span>
+                  {device.enabled ? null : (
+                    <span className="status-pill status-excluded">
+                      Excluded
+                    </span>
+                  )}
+                  {device.enabled ? (
+                    <button
+                      aria-label={`Exclude ${device.desired.name}`}
+                      className="device-exclude-button"
+                      title="Exclude this device from controller commands"
+                      type="button"
+                      disabled={enabledMutation.isPending}
+                      onClick={() =>
+                        enabledMutation.mutate({
+                          deviceId: device.id,
+                          enabled: false,
+                        })
+                      }
+                    >
+                      ×
+                    </button>
+                  ) : (
+                    <button
+                      className="text-button"
+                      type="button"
+                      disabled={enabledMutation.isPending}
+                      onClick={() =>
+                        enabledMutation.mutate({
+                          deviceId: device.id,
+                          enabled: true,
+                        })
+                      }
+                    >
+                      Include
+                    </button>
+                  )}
+                </div>
               </div>
               <dl className="comparison-list">
                 <DeviceComparison
@@ -784,6 +834,17 @@ export function DevicesPanel({
               <button
                 className="secondary-button"
                 type="button"
+                disabled={
+                  !device.enabled ||
+                  !["online", "stale", "offline"].includes(device.status)
+                }
+                title={
+                  !device.enabled
+                    ? "Include this device before sending configuration"
+                    : ["online", "stale", "offline"].includes(device.status)
+                      ? undefined
+                      : "Wait for a healthy announcement before sending configuration"
+                }
                 onClick={() => setEditingDevice({ device, expectedRevision })}
               >
                 Edit {device.desired.name} configuration
@@ -791,6 +852,11 @@ export function DevicesPanel({
             </article>
           ))}
         </div>
+      )}
+      {enabledMutation.error === null ? null : (
+        <p className="field-error" role="alert">
+          {configurationErrorMessage(enabledMutation.error)}
+        </p>
       )}
       {editingDevice === null ? null : (
         <DeviceConfigurationDialog
@@ -853,9 +919,23 @@ function DeviceConfigurationDialog({
   const [resolution, setResolution] = useState(
     String(device.desired.pwmResolutionBits),
   );
+  const parsedFrequency = Number(frequency);
+  const parsedResolution = Number(resolution);
+  const fieldsChanged =
+    name !== device.desired.name ||
+    parsedFrequency !== device.desired.pwmFrequencyHz ||
+    parsedResolution !== device.desired.pwmResolutionBits;
+  const reapplyingConfiguration =
+    !fieldsChanged && device.lastError?.code === "configuration_mismatch";
   const patch = useMemo<PatchDeviceConfigurationRequest>(() => {
-    const parsedFrequency = Number(frequency);
-    const parsedResolution = Number(resolution);
+    if (reapplyingConfiguration) {
+      return {
+        expectedRevision,
+        name: device.desired.name,
+        pwmFrequencyHz: device.desired.pwmFrequencyHz,
+        pwmResolutionBits: device.desired.pwmResolutionBits,
+      };
+    }
     return {
       expectedRevision,
       ...(name === device.desired.name ? {} : { name }),
@@ -866,8 +946,15 @@ function DeviceConfigurationDialog({
         ? {}
         : { pwmResolutionBits: parsedResolution }),
     };
-  }, [device, expectedRevision, frequency, name, resolution]);
-  const changed = Object.keys(patch).length > 1;
+  }, [
+    device,
+    expectedRevision,
+    name,
+    parsedFrequency,
+    parsedResolution,
+    reapplyingConfiguration,
+  ]);
+  const canSubmit = fieldsChanged || reapplyingConfiguration;
   const mutation = useMutation({
     mutationFn: () => patchDeviceConfiguration(device.id, patch),
     onSuccess: () => {
@@ -938,11 +1025,13 @@ function DeviceConfigurationDialog({
             <button
               className="primary-button"
               type="submit"
-              disabled={!changed || mutation.isPending}
+              disabled={!canSubmit || mutation.isPending}
             >
               {mutation.isPending
                 ? "Sending configuration…"
-                : "Save configuration"}
+                : reapplyingConfiguration
+                  ? "Reapply desired configuration"
+                  : "Save configuration"}
             </button>
             <button
               className="secondary-button"

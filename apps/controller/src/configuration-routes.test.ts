@@ -389,16 +389,16 @@ describe("configuration HTTP routes", () => {
           valuePercentage: 78,
           expiresAtMs: 120_100,
         }),
-        request_schema_version: 1,
+        request_schema_version: 2,
         result_json: JSON.stringify({
           status: "outcome_unknown",
           childOperationIds: ["child-unknown"],
           reason: "child_outcome_not_succeeded",
-          unknownChildOperationId: "child-unknown",
+          unknownChildOperationIds: ["child-unknown"],
           safetyReconcileAtMs: 120_150,
           reconciledAtMs: null,
         }),
-        result_schema_version: 1,
+        result_schema_version: 2,
       })
       .executeTakeFirstOrThrow();
     const app = trackApp(buildApp({ configurationService: repository }));
@@ -415,7 +415,7 @@ describe("configuration HTTP routes", () => {
         kind: "manual_override_start",
       },
       request: { data: { overrideId: "override-main" } },
-      result: { data: { unknownChildOperationId: "child-unknown" } },
+      result: { data: { unknownChildOperationIds: ["child-unknown"] } },
     });
   });
 

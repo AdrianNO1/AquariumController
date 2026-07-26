@@ -120,9 +120,12 @@ export function deriveManualOverrideView(
     override.status === "failed" ||
     override.status === "expired" ||
     override.status === "cancelled";
+  const outcomeUnknown = operation?.status === "outcome_unknown";
+  const outcomeUnresolved =
+    outcomeUnknown && operation.outcomeUnresolved !== false;
   const phase = terminalOverride
     ? override.status
-    : operation?.status === "outcome_unknown"
+    : outcomeUnknown
       ? "outcome_unknown"
       : operation?.status === "failed" ||
           operation?.status === "timed_out" ||
@@ -130,14 +133,14 @@ export function deriveManualOverrideView(
         ? "failed"
         : override.status;
   const remainingMs = Math.max(0, Date.parse(override.expiresAt) - nowMs);
-  const active = phase === "active" && remainingMs > 0;
+  const active = override.status === "active" && remainingMs > 0;
   return {
     phase,
     operation,
     remainingMs,
     canExtend: active,
     canCancel: active,
-    canReconcile: phase === "outcome_unknown",
+    canReconcile: outcomeUnresolved,
     blocksNewStart:
       phase === "pending" || phase === "active" || phase === "outcome_unknown",
   };

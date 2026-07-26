@@ -138,6 +138,7 @@ describe("controller snapshot repository", () => {
     expect(snapshot.operations.items.map((operation) => operation.id)).toEqual([
       "operation-apply",
     ]);
+    expect(snapshot.operations.items[0]?.outcomeUnresolved).toBe(false);
     expect(snapshot.importRuns.map((run) => run.id)).toEqual(["import-legacy"]);
     expect(snapshot.overrides).toEqual([
       expect.objectContaining({
@@ -363,6 +364,7 @@ describe("controller snapshot repository", () => {
           id: "operation-unresolved-old",
           deviceId: "device-unmapped",
           status: "outcome_unknown",
+          outcomeUnresolved: true,
         }),
       ],
       limit: UNRESOLVED_DEVICE_OPERATION_LIMIT,

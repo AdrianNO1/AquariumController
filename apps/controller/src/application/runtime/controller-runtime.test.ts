@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CURRENT_ESP_FIRMWARE_VERSION } from "@aquarium/esp-protocol";
 
 import { parseControllerConfiguration } from "../../configuration.js";
 import {
@@ -66,6 +67,69 @@ describe("controller MQTT runtime composition", () => {
     ).toThrow(/error reporter/i);
   });
 
+  it("clears a device command cooldown once before announcement work", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const databases = await openDatabasesForTest();
+    const client = new InMemoryMqttClient();
+    const errors: Error[] = [];
+    const composition = composeControllerRuntime({
+      configuration: enabledConfiguration(),
+      stateDatabase: databases.state,
+      eventsDatabase: databases.events,
+      clientFactory: () => client,
+      now: Date.now,
+      onError: (error) => errors.push(error),
+    });
+    if (!composition.mqttEnabled) {
+      throw new Error("Expected enabled MQTT runtime composition");
+    }
+    const signalDeviceAvailable = vi.spyOn(
+      composition.deviceOperations,
+      "signalDeviceAvailable",
+    );
+    const executeDeviceOperation = vi.spyOn(
+      composition.deviceOperations,
+      "executeDeviceOperation",
+    );
+    await composition.runtime.start();
+    client.emitConnected();
+    await vi.waitFor(() => expect(composition.runtime.isReady()).toBe(true));
+
+    client.emitText(
+      "test/aquarium/announce",
+      JSON.stringify({
+        id: "A1",
+        name: "One",
+        freq: 5_000,
+        res: 8,
+        status: "online",
+        version: CURRENT_ESP_FIRMWARE_VERSION,
+        scheduleHash: "0",
+      }),
+    );
+
+    await vi.waitFor(() =>
+      expect(signalDeviceAvailable).toHaveBeenCalledTimes(1),
+    );
+    expect(signalDeviceAvailable).toHaveBeenCalledWith("A1");
+    await vi.waitFor(() =>
+      expect(publishedCommand(client, "A1 sync 10")).toBeDefined(),
+    );
+    const syncCallIndex = executeDeviceOperation.mock.calls.findIndex(
+      ([, request]) => request.kind === "sync_time",
+    );
+    const syncOperation =
+      executeDeviceOperation.mock.results[syncCallIndex]?.value;
+    if (syncOperation === undefined) {
+      throw new Error("Expected the announcement time-sync operation");
+    }
+    emitCommandResponse(client, "A1 sync 10", "A1", "10");
+    await syncOperation;
+    await composition.runtime.stop();
+    expect(errors).toEqual([]);
+  });
+
   it("uses guarded test topics, survives callback failures, logs truthful bytes, and skips busy discovery without catch-up", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -90,6 +154,10 @@ describe("controller MQTT runtime composition", () => {
     if (!composition.mqttEnabled) {
       throw new Error("Expected enabled MQTT runtime composition");
     }
+    const executeDeviceOperation = vi.spyOn(
+      composition.deviceOperations,
+      "executeDeviceOperation",
+    );
 
     expect(composition.runtime.isReady()).toBe(false);
     await composition.runtime.start();
@@ -119,8 +187,15 @@ describe("controller MQTT runtime composition", () => {
         scheduleHash: "0",
       }),
     );
-    const validPayload =
-      '{ "id":"A1", "name":"One", "freq":5000, "res":8, "status":"online", "version":"4.0.0", "scheduleHash":"0" }';
+    const validPayload = JSON.stringify({
+      id: "A1",
+      name: "One",
+      freq: 5_000,
+      res: 8,
+      status: "online",
+      version: CURRENT_ESP_FIRMWARE_VERSION,
+      scheduleHash: "0",
+    });
     client.emitText("test/aquarium/announce", validPayload);
     await vi.waitFor(async () => {
       const device = await databases.state
@@ -136,27 +211,25 @@ describe("controller MQTT runtime composition", () => {
     expect(alertEvaluationTimes).toContain(10_000);
 
     await vi.waitFor(() =>
-      expect(
-        client.publishes.some(({ payload }) => payload === "A1 sync 10"),
-      ).toBe(true),
+      expect(publishedCommand(client, "A1 sync 10")).toBeDefined(),
     );
-    client.emitText(
-      "test/aquarium/response",
-      JSON.stringify({
-        id: "A1",
-        name: "A1",
-        responses: [{ index: 0, response: "10" }],
-      }),
+    const syncCallIndex = executeDeviceOperation.mock.calls.findIndex(
+      ([, request]) => request.kind === "sync_time",
     );
+    const syncOperation =
+      executeDeviceOperation.mock.results[syncCallIndex]?.value;
+    if (syncOperation === undefined) {
+      throw new Error("Expected the announcement time-sync operation");
+    }
+    emitCommandResponse(client, "A1 sync 10", "A1", "10");
+    await syncOperation;
 
     const operation = composition.deviceOperations.executeDeviceOperation(
       "A1",
       { kind: "ping" },
     );
     await vi.waitFor(() =>
-      expect(client.publishes.some(({ payload }) => payload === "A1 p")).toBe(
-        true,
-      ),
+      expect(publishedCommand(client, "A1 p")).toBeDefined(),
     );
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(async () => {
@@ -226,7 +299,7 @@ describe("controller MQTT runtime composition", () => {
     await composition.runtime.stop();
   });
 
-  it("stays unready behind a persisted unknown outcome and reruns readiness after operator reconciliation", async () => {
+  it("starts despite a persisted device-local unknown outcome and allows operator reconciliation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const databases = await openDatabasesForTest();
@@ -274,7 +347,7 @@ describe("controller MQTT runtime composition", () => {
     client.emitConnected();
     await vi.waitFor(() => expect(client.subscriptions).toHaveLength(1));
     await vi.advanceTimersByTimeAsync(100);
-    expect(composition.runtime.isReady()).toBe(false);
+    expect(composition.runtime.isReady()).toBe(true);
 
     const expectedRevision = await latestRevision(databases);
     await expect(
@@ -289,7 +362,7 @@ describe("controller MQTT runtime composition", () => {
     await composition.runtime.stop();
   });
 
-  it("propagates a live direct-operation unknown into scheduler readiness without a command-error dead end", async () => {
+  it("keeps a live direct-operation unknown local across reconnect and reconciliation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const databases = await openDatabasesForTest();
@@ -301,6 +374,7 @@ describe("controller MQTT runtime composition", () => {
         name: "Main",
         desired_pwm_frequency_hz: 5_000,
         desired_pwm_resolution_bits: 8,
+        status: "offline",
         created_at_ms: 0,
         updated_at_ms: 0,
       })
@@ -321,15 +395,12 @@ describe("controller MQTT runtime composition", () => {
     await composition.runtime.start();
     client.emitConnected();
     await vi.waitFor(() => expect(composition.runtime.isReady()).toBe(true));
-
     const operation = composition.deviceOperations.executeDeviceOperation(
       "device-main",
       { kind: "ping" },
     );
     await vi.waitFor(() =>
-      expect(
-        client.publishes.some(({ payload }) => payload === "hardware-main p"),
-      ).toBe(true),
+      expect(publishedCommand(client, "hardware-main p")).toBeDefined(),
     );
     client.emitDisconnected();
     await expect(operation).resolves.toMatchObject({
@@ -339,7 +410,7 @@ describe("controller MQTT runtime composition", () => {
 
     client.emitConnected();
     await vi.advanceTimersByTimeAsync(100);
-    expect(composition.runtime.isReady()).toBe(false);
+    expect(composition.runtime.isReady()).toBe(true);
     const unknown = await databases.state
       .selectFrom("control_operations")
       .select("id")
@@ -421,6 +492,40 @@ interface PublishRecord {
   readonly topic: string;
   readonly payload: string;
   readonly options: QosZeroPublishOptions;
+}
+
+function publishedCommand(
+  client: InMemoryMqttClient,
+  command: string,
+): PublishRecord | undefined {
+  return client.publishes.find(({ payload }) =>
+    payload.endsWith(`|${command}`),
+  );
+}
+
+function emitCommandResponse(
+  client: InMemoryMqttClient,
+  command: string,
+  deviceId: string,
+  response: string,
+): void {
+  const publication = publishedCommand(client, command);
+  if (publication === undefined) {
+    throw new Error(`Command ${command} was not published`);
+  }
+  const match = /^request:([^|]+)\|/u.exec(publication.payload);
+  if (match?.[1] === undefined) {
+    throw new Error(`Command ${command} has no request correlation`);
+  }
+  client.emitText(
+    "test/aquarium/response",
+    JSON.stringify({
+      id: deviceId,
+      name: deviceId,
+      requestId: match[1],
+      responses: [{ index: 0, response }],
+    }),
+  );
 }
 
 class InMemoryMqttClient implements LegacyMqttClientPort {

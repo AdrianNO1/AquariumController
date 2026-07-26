@@ -255,6 +255,7 @@ export const operationSummarySchema = z
     requestedAt: isoTimestampSchema,
     deadlineAt: isoTimestampSchema,
     completedAt: isoTimestampSchema.nullable(),
+    outcomeUnresolved: z.boolean().optional(),
   })
   .superRefine((operation, context) => {
     const requestedAt = Date.parse(operation.requestedAt);
@@ -281,6 +282,16 @@ export const operationSummarySchema = z
         code: "custom",
         path: ["completedAt"],
         message: "Operation completion must not precede its request",
+      });
+    }
+    if (
+      operation.outcomeUnresolved === true &&
+      operation.status !== "outcome_unknown"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["outcomeUnresolved"],
+        message: "Only outcome-unknown operations may remain unresolved",
       });
     }
   });
@@ -1338,6 +1349,11 @@ export const patchDeviceConfigurationRequestSchema = z
     }
   });
 
+export const setDeviceEnabledRequestSchema = z.strictObject({
+  expectedRevision: nonnegativeSafeIntegerSchema,
+  enabled: z.boolean(),
+});
+
 export const alertRuleSourceSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("device"), id: identifierSchema }),
   z.strictObject({ type: z.literal("output"), id: identifierSchema }),
@@ -1650,6 +1666,9 @@ export type ReplaceMappingProfileRequest = z.infer<
 >;
 export type PatchDeviceConfigurationRequest = z.infer<
   typeof patchDeviceConfigurationRequestSchema
+>;
+export type SetDeviceEnabledRequest = z.infer<
+  typeof setDeviceEnabledRequestSchema
 >;
 export type AlertRuleSource = z.infer<typeof alertRuleSourceSchema>;
 export type AlertRuleCondition = z.infer<typeof alertRuleConditionSchema>;

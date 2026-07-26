@@ -3,6 +3,7 @@ import { SystemFakeEspClock } from "./clock.js";
 import type {
   FakeEspPersistence,
   FakeEspPersistenceSnapshot,
+  FakeEspLastError,
   FakeEspTimeSnapshot,
 } from "./persistence.js";
 import { MemoryFakeEspPersistence } from "./persistence.js";
@@ -14,7 +15,7 @@ import {
 } from "./transport.js";
 
 export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
-export const FAKE_ESP_FIRMWARE_VERSION = "4.0.0";
+export const FAKE_ESP_FIRMWARE_VERSION = "4.1.0";
 export const FAKE_ESP_CHUNK_DATA_BYTES = 200;
 export const FAKE_ESP_MAX_CHUNKS = 50;
 export const FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS = 10_000;
@@ -28,8 +29,11 @@ const MINIMUM_INT32 = -2_147_483_648;
 const MAXIMUM_SYNC_TIME = 2_147_483_647;
 const LEDC_SOURCE_CLOCK_HERTZ = 80_000_000;
 const SCHEDULE_INTERVAL_MILLISECONDS = 1_000;
+const SCHEDULE_ATTACH_RETRY_INTERVAL_MILLISECONDS = 60_000;
 const OVERRIDE_CHECK_INTERVAL_MILLISECONDS = 200;
 const TIME_SAVE_INTERVAL_MILLISECONDS = 3_600_000;
+const PERSISTENCE_RETRY_INTERVAL_MILLISECONDS = TIME_SAVE_INTERVAL_MILLISECONDS;
+const DIAGNOSTIC_SAVE_INTERVAL_MILLISECONDS = 3_600_000;
 const CURRENT_SCHEDULE_BUFFER_BYTES = 4_095;
 const MINIMUM_PIN = 0;
 const MAXIMUM_PIN = 63;
@@ -60,6 +64,7 @@ export interface FakeEspActorOptions {
   readonly firmwareVersion?: string;
   readonly idGenerator?: () => string;
   readonly responseFaults?: FakeEspResponseFaults;
+  readonly pinAttachmentFailures?: readonly number[];
 }
 
 export interface FakeEspPinSnapshot {
@@ -112,6 +117,11 @@ interface CommandResponse {
   readonly response: string;
 }
 
+interface RequestEnvelope {
+  readonly commands: string;
+  readonly requestId?: string;
+}
+
 export class FakeEspActor {
   public readonly topics: FakeEspTopics;
 
@@ -126,6 +136,7 @@ export class FakeEspActor {
   private readonly lastPinValues = new Map<number, number>();
   private readonly pinStates = new Map<number, PinState>();
   private readonly analogValues = new Map<number, number>();
+  private readonly pinAttachmentFailures = new Set<number>();
   private readonly pendingResponses: PendingPublication[] = [];
   private readonly chunkAssembly: ChunkAssembly = {
     chunks: Array.from<string | undefined>({ length: FAKE_ESP_MAX_CHUNKS }),
@@ -148,9 +159,22 @@ export class FakeEspActor {
   private activeChannels: ActiveChannel[] = [];
   private readonly bootClockMilliseconds: number;
   private lastScheduleUpdateMilliseconds: number;
+  private lastScheduleAttachRetryMilliseconds: number;
   private lastOverwriteCheckMilliseconds: number;
-  private lastTimeSaveMilliseconds: number;
   private responseFaults: NormalizedFakeEspResponseFaults;
+  private lastError: FakeEspLastError | undefined;
+  private timeCheckpointPending = false;
+  private timeCheckpointImmediate = false;
+  private freshTimeCheckpointCommittedThisBoot = false;
+  private timeCheckpointFailed = false;
+  private timeCheckpointAttemptMilliseconds: number;
+  private timeCheckpointSuccessMilliseconds: number;
+  private diagnosticPersistenceDirty = false;
+  private diagnosticPersistedThisBoot = false;
+  private diagnosticPersistenceFailed = false;
+  private diagnosticPersistenceAttemptMilliseconds: number;
+  private diagnosticPersistenceSuccessMilliseconds: number;
+  private diagnosticAnnouncementPending = false;
 
   public constructor(options: FakeEspActorOptions) {
     this.transport = options.transport;
@@ -158,13 +182,24 @@ export class FakeEspActor {
     this.bootClockMilliseconds = this.clock.nowMilliseconds();
     const bootMilliseconds = this.firmwareMillis(this.bootClockMilliseconds);
     this.lastScheduleUpdateMilliseconds = bootMilliseconds;
+    this.lastScheduleAttachRetryMilliseconds = bootMilliseconds;
     this.lastOverwriteCheckMilliseconds = bootMilliseconds;
-    this.lastTimeSaveMilliseconds = bootMilliseconds;
+    this.timeCheckpointAttemptMilliseconds = bootMilliseconds;
+    this.timeCheckpointSuccessMilliseconds = bootMilliseconds;
+    this.diagnosticPersistenceAttemptMilliseconds = bootMilliseconds;
+    this.diagnosticPersistenceSuccessMilliseconds = bootMilliseconds;
     this.persistence = options.persistence ?? new MemoryFakeEspPersistence();
     this.defaultDeviceName = options.defaultDeviceName ?? DEFAULT_DEVICE_NAME;
     this.firmwareVersion = options.firmwareVersion ?? FAKE_ESP_FIRMWARE_VERSION;
     this.idGenerator = options.idGenerator ?? generateDeviceId;
     this.responseFaults = normalizeResponseFaults(options.responseFaults);
+    for (const pin of options.pinAttachmentFailures ?? []) {
+      assertInteger(pin, "Pin attachment failure");
+      if (!validPin(pin)) {
+        throw new RangeError("Pin attachment failure must target pin 0-63");
+      }
+      this.pinAttachmentFailures.add(pin);
+    }
 
     this.topics = createFakeEspTopics(
       options.namespace ?? FAKE_ESP_DEFAULT_NAMESPACE,
@@ -249,6 +284,18 @@ export class FakeEspActor {
     this.responseFaults = normalizeResponseFaults(faults);
   }
 
+  public setPinAttachmentFailure(pin: number, failing: boolean): void {
+    assertInteger(pin, "Pin attachment failure");
+    if (!validPin(pin)) {
+      throw new RangeError("Pin attachment failure must target pin 0-63");
+    }
+    if (failing) {
+      this.pinAttachmentFailures.add(pin);
+    } else {
+      this.pinAttachmentFailures.delete(pin);
+    }
+  }
+
   public currentEpochSeconds(): number {
     if (!this.timeInitialized) {
       return 0;
@@ -275,19 +322,8 @@ export class FakeEspActor {
     const now = this.firmwareMillis(clockNow);
     this.checkChunkTimeout(now);
 
-    if (
-      this.timeInitialized &&
-      uint32Elapsed(now, this.lastTimeSaveMilliseconds) >
-        TIME_SAVE_INTERVAL_MILLISECONDS
-    ) {
-      this.persistedTime = {
-        lastSavedEpochSeconds: this.currentEpochSeconds(),
-      };
-      this.timeBaseEpochSeconds = this.persistedTime.lastSavedEpochSeconds;
-      this.timeBaseMilliseconds = clockNow;
-      this.persistEeprom();
-      this.lastTimeSaveMilliseconds = now;
-    }
+    this.serviceTimeCheckpoint(now, clockNow);
+    this.serviceDiagnosticPersistence(now);
 
     if (
       uint32Elapsed(now, this.lastOverwriteCheckMilliseconds) >=
@@ -295,6 +331,15 @@ export class FakeEspActor {
     ) {
       this.checkOverwriteExpiries(now);
       this.lastOverwriteCheckMilliseconds = now;
+    }
+
+    if (
+      this.currentSchedule.length > 0 &&
+      uint32Elapsed(now, this.lastScheduleAttachRetryMilliseconds) >=
+        SCHEDULE_ATTACH_RETRY_INTERVAL_MILLISECONDS
+    ) {
+      this.lastScheduleAttachRetryMilliseconds = now;
+      this.retryMissingSchedulePins();
     }
 
     if (
@@ -307,6 +352,114 @@ export class FakeEspActor {
     }
 
     this.flushPendingResponses(clockNow);
+    if (this.diagnosticAnnouncementPending && this.connected) {
+      this.announcePresence();
+    }
+  }
+
+  private queueTimeCheckpoint(immediate: boolean): void {
+    this.timeCheckpointPending = true;
+    if (
+      immediate &&
+      !this.freshTimeCheckpointCommittedThisBoot &&
+      !this.timeCheckpointImmediate
+    ) {
+      this.timeCheckpointImmediate = true;
+      this.timeCheckpointFailed = false;
+    }
+    this.serviceTimeCheckpoint(
+      this.firmwareMillis(),
+      this.clock.nowMilliseconds(),
+    );
+  }
+
+  private serviceTimeCheckpoint(now: number, clockNow: number): void {
+    if (!this.timeInitialized) {
+      return;
+    }
+    if (
+      !this.timeCheckpointPending &&
+      uint32Elapsed(now, this.timeCheckpointSuccessMilliseconds) >=
+        TIME_SAVE_INTERVAL_MILLISECONDS
+    ) {
+      this.timeCheckpointPending = true;
+    }
+    if (!this.timeCheckpointPending) {
+      return;
+    }
+
+    const due = this.timeCheckpointFailed
+      ? uint32Elapsed(now, this.timeCheckpointAttemptMilliseconds) >=
+        PERSISTENCE_RETRY_INTERVAL_MILLISECONDS
+      : this.timeCheckpointImmediate &&
+          !this.freshTimeCheckpointCommittedThisBoot
+        ? true
+        : uint32Elapsed(now, this.timeCheckpointSuccessMilliseconds) >=
+          TIME_SAVE_INTERVAL_MILLISECONDS;
+    if (!due) {
+      return;
+    }
+
+    this.timeCheckpointAttemptMilliseconds = now;
+    const checkpoint = this.currentEpochSeconds();
+    if (!validRestoredEpochSeconds(checkpoint)) {
+      this.timeCheckpointFailed = true;
+      return;
+    }
+    const previousPersistedTime = this.persistedTime;
+    this.persistedTime = { lastSavedEpochSeconds: checkpoint };
+    try {
+      this.persistEeprom();
+    } catch {
+      this.persistedTime = previousPersistedTime;
+      this.timeCheckpointFailed = true;
+      return;
+    }
+
+    this.timeBaseEpochSeconds = checkpoint;
+    this.timeBaseMilliseconds = clockNow;
+    const committingFreshTime = this.timeCheckpointImmediate;
+    this.timeCheckpointPending = false;
+    this.timeCheckpointImmediate = false;
+    if (committingFreshTime) {
+      this.freshTimeCheckpointCommittedThisBoot = true;
+    }
+    this.timeCheckpointFailed = false;
+    this.timeCheckpointSuccessMilliseconds = now;
+  }
+
+  private serviceDiagnosticPersistence(now: number): void {
+    if (!this.diagnosticPersistenceDirty || this.lastError === undefined) {
+      return;
+    }
+    const due = this.diagnosticPersistenceFailed
+      ? uint32Elapsed(now, this.diagnosticPersistenceAttemptMilliseconds) >=
+        PERSISTENCE_RETRY_INTERVAL_MILLISECONDS
+      : !this.diagnosticPersistedThisBoot
+        ? true
+        : uint32Elapsed(now, this.diagnosticPersistenceSuccessMilliseconds) >=
+          DIAGNOSTIC_SAVE_INTERVAL_MILLISECONDS;
+    if (!due) {
+      return;
+    }
+
+    this.diagnosticPersistenceAttemptMilliseconds = now;
+    try {
+      this.persistence.writeLastError(this.lastError);
+    } catch {
+      this.diagnosticPersistenceFailed = true;
+      return;
+    }
+    this.diagnosticPersistenceDirty = false;
+    this.diagnosticPersistedThisBoot = true;
+    this.diagnosticPersistenceFailed = false;
+    this.diagnosticPersistenceSuccessMilliseconds = now;
+  }
+
+  private queueDiagnosticTransition(): void {
+    this.diagnosticPersistenceDirty = true;
+    this.diagnosticAnnouncementPending = true;
+    this.serviceDiagnosticPersistence(this.firmwareMillis());
   }
 
   private bootFromPersistence(): void {
@@ -326,20 +479,27 @@ export class FakeEspActor {
       this.frequency = DEFAULT_FREQUENCY;
       this.resolution = DEFAULT_RESOLUTION;
     }
-    this.persistedTime = snapshot.time;
+    const restoredTime =
+      snapshot.time !== undefined &&
+      validRestoredEpochSeconds(snapshot.time.lastSavedEpochSeconds)
+        ? snapshot.time
+        : undefined;
+    this.persistedTime = restoredTime;
+    this.lastError =
+      snapshot.lastError !== undefined &&
+      validFirmwareDiagnostic(snapshot.lastError)
+        ? snapshot.lastError
+        : undefined;
     this.persistEeprom();
 
-    if (
-      snapshot.time !== undefined &&
-      snapshot.time.lastSavedEpochSeconds >= MINIMUM_RESTORED_TIME
-    ) {
+    if (restoredTime !== undefined) {
       this.timeInitialized = true;
-      this.timeBaseEpochSeconds = snapshot.time.lastSavedEpochSeconds;
+      this.timeBaseEpochSeconds = restoredTime.lastSavedEpochSeconds;
       this.timeBaseMilliseconds = this.clock.nowMilliseconds();
     }
 
     if (snapshot.schedule !== undefined && snapshot.schedule.length > 0) {
-      this.processSchedule(snapshot.schedule);
+      this.processSchedule(snapshot.schedule, false);
     }
   }
 
@@ -388,9 +548,13 @@ export class FakeEspActor {
         id: this.deviceId,
         status: "online",
         version: this.firmwareVersion,
+        ...(this.lastError === undefined
+          ? {}
+          : { lastError: { ...this.lastError } }),
         scheduleHash: this.scheduleHash(),
       }),
     );
+    this.diagnosticAnnouncementPending = false;
   }
 
   private scheduleHash(): string {
@@ -403,11 +567,15 @@ export class FakeEspActor {
   }
 
   private processCompleteMessage(message: string): void {
+    const envelope = parseRequestEnvelope(message);
+    if (envelope === undefined) {
+      return;
+    }
     const responseId = this.deviceId;
     const responseName = this.deviceName;
     const responses: CommandResponse[] = [];
-    const commands = message.split(";");
-    if (message.endsWith(";")) {
+    const commands = envelope.commands.split(";");
+    if (envelope.commands.endsWith(";")) {
       commands.pop();
     }
     const commandNames = commands.map((command) =>
@@ -423,7 +591,14 @@ export class FakeEspActor {
 
     if (responses.length > 0) {
       this.publishResponse(
-        JSON.stringify({ id: responseId, name: responseName, responses }),
+        JSON.stringify({
+          id: responseId,
+          name: responseName,
+          ...(envelope.requestId === undefined
+            ? {}
+            : { requestId: envelope.requestId }),
+          responses,
+        }),
         commandNames,
       );
     }
@@ -465,7 +640,7 @@ export class FakeEspActor {
     if (!validScheduleDocument(parsed)) {
       return "E: Invalid schedule";
     }
-    this.processSchedule(scheduleJson);
+    this.processSchedule(scheduleJson, true);
     return "schedule_ok";
   }
 
@@ -485,8 +660,7 @@ export class FakeEspActor {
         this.timeInitialized = true;
         this.timeBaseEpochSeconds = serverTime;
         this.timeBaseMilliseconds = this.clock.nowMilliseconds();
-        this.persistedTime = { lastSavedEpochSeconds: serverTime };
-        this.persistEeprom();
+        this.queueTimeCheckpoint(true);
         return String(serverTime);
       }
       return "E: Invalid time value";
@@ -520,7 +694,16 @@ export class FakeEspActor {
     }
 
     const pwmValue = scaleNormalizedPwmValue(value, this.resolution);
-    this.attachPin(pin, pwmValue);
+    if (!this.attachedPins.has(pin) && !this.attachPin(pin, pwmValue)) {
+      this.recordLastError(
+        "pin_attach_failed",
+        "error",
+        `LEDC attach failed on pin ${pin}`,
+      );
+      return "E: LEDC attach failed";
+    }
+    this.resolveLastErrorForPin("pin_attach_failed", pin);
+    this.outputValues.set(pin, pwmValue);
     this.lastPinValues.set(pin, pwmValue);
     this.pinStates.set(pin, {
       lastValue: pwmValue,
@@ -602,7 +785,7 @@ export class FakeEspActor {
     return `r ${pin} ${this.analogValues.get(pin) ?? 0}`;
   }
 
-  private processSchedule(schedule: string): void {
+  private processSchedule(schedule: string, persist: boolean): void {
     if (
       new TextEncoder().encode(schedule).length > CURRENT_SCHEDULE_BUFFER_BYTES
     ) {
@@ -623,14 +806,12 @@ export class FakeEspActor {
       }
       this.outputValues.set(previousChannel.pin, 0);
       this.lastPinValues.set(previousChannel.pin, 0);
-      const state = this.pinStates.get(previousChannel.pin);
-      if (state !== undefined) {
-        state.lastValue = 0;
-        state.isOverwritten = false;
-        state.overwriteStartedAtMilliseconds = 0;
-      }
+      this.attachedPins.delete(previousChannel.pin);
+      this.pinStates.delete(previousChannel.pin);
     }
-    this.persistence.writeSchedule(schedule);
+    if (persist) {
+      this.persistence.writeSchedule(schedule);
+    }
     this.currentSchedule = schedule;
     this.activeChannels = channels.map((channel) => ({
       pin: channel.pin,
@@ -638,11 +819,19 @@ export class FakeEspActor {
       type: channel.type,
     }));
 
+    const failedPins: number[] = [];
     for (const channel of channels) {
-      if (!this.attachedPins.has(channel.pin)) {
-        this.attachPin(channel.pin, 0);
+      if (this.attachedPins.has(channel.pin)) {
+        continue;
+      }
+      if (!this.attachPin(channel.pin, 0)) {
+        failedPins.push(channel.pin);
+      } else {
+        this.resolveLastErrorForPin("pin_attach_failed", channel.pin);
       }
     }
+    this.lastScheduleAttachRetryMilliseconds = this.firmwareMillis();
+    this.reportScheduleAttachFailures(failedPins);
   }
 
   private processScheduledOutputs(): void {
@@ -659,7 +848,7 @@ export class FakeEspActor {
       const activeChannel = this.activeChannels.find(
         (candidate) => candidate.pin === channel.pin,
       );
-      if (activeChannel === undefined) {
+      if (activeChannel === undefined || !this.attachedPins.has(channel.pin)) {
         continue;
       }
       if (this.pinStates.get(channel.pin)?.isOverwritten === true) {
@@ -681,6 +870,88 @@ export class FakeEspActor {
     }
   }
 
+  private retryMissingSchedulePins(): void {
+    const failedPins: number[] = [];
+    for (const channel of this.activeChannels) {
+      if (this.attachedPins.has(channel.pin)) {
+        continue;
+      }
+      if (!this.attachPin(channel.pin, 0)) {
+        failedPins.push(channel.pin);
+      } else {
+        this.resolveLastErrorForPin("pin_attach_failed", channel.pin);
+      }
+    }
+    this.reportScheduleAttachFailures(failedPins);
+  }
+
+  private reportScheduleAttachFailures(failedPins: readonly number[]): void {
+    if (failedPins.length === 0) {
+      return;
+    }
+    this.recordLastError(
+      "pin_attach_failed",
+      "error",
+      `LEDC attach failed on pin ${failedPins[0] ?? -1}`,
+    );
+  }
+
+  private recordLastError(
+    code: string,
+    severity: "warning" | "error",
+    message: string,
+  ): void {
+    const boundedMessage = message.slice(0, 160);
+    if (!/^[a-z0-9_]{1,48}$/u.test(code) || boundedMessage.length === 0) {
+      return;
+    }
+    if (
+      this.lastError?.code === code &&
+      this.lastError.severity === severity &&
+      this.lastError.message === boundedMessage &&
+      this.lastError.active
+    ) {
+      return;
+    }
+    const sequence =
+      this.lastError?.sequence === 0xffff_ffff
+        ? 1
+        : (this.lastError?.sequence ?? 0) + 1;
+    this.lastError = {
+      code,
+      severity,
+      message: boundedMessage,
+      sequence,
+      active: true,
+      at: Math.min(this.currentEpochSeconds(), MAXIMUM_SYNC_TIME),
+    };
+    this.queueDiagnosticTransition();
+  }
+
+  private resolveLastError(code: string): void {
+    if (this.lastError?.code !== code || !this.lastError.active) {
+      return;
+    }
+    this.lastError = {
+      ...this.lastError,
+      sequence:
+        this.lastError.sequence === 0xffff_ffff
+          ? 1
+          : this.lastError.sequence + 1,
+      active: false,
+    };
+    this.queueDiagnosticTransition();
+  }
+
+  private resolveLastErrorForPin(code: "pin_attach_failed", pin: number): void {
+    if (
+      this.lastError?.code === code &&
+      this.lastError.message === `LEDC attach failed on pin ${pin}`
+    ) {
+      this.resolveLastError(code);
+    }
+  }
+
   private checkOverwriteExpiries(now: number): void {
     for (const [pin, state] of this.pinStates) {
       if (
@@ -694,7 +965,7 @@ export class FakeEspActor {
       const controlledBySchedule =
         this.currentSchedule.length > 0 &&
         this.activeChannels.some((channel) => channel.pin === pin);
-      if (!controlledBySchedule) {
+      if (!controlledBySchedule || !this.timeInitialized) {
         this.outputValues.set(pin, 0);
         this.lastPinValues.set(pin, 0);
         state.lastValue = 0;
@@ -709,12 +980,16 @@ export class FakeEspActor {
     }
   }
 
-  private attachPin(pin: number, value: number): void {
+  private attachPin(pin: number, value: number): boolean {
+    if (this.pinAttachmentFailures.has(pin)) {
+      return false;
+    }
     this.attachedPins.add(pin);
     this.outputValues.set(pin, value);
     if (!this.lastPinValues.has(pin)) {
       this.lastPinValues.set(pin, 0);
     }
+    return true;
   }
 
   private handleChunk(chunkData: string): void {
@@ -954,6 +1229,31 @@ function validResolution(value: number | undefined): value is number {
   );
 }
 
+function validRestoredEpochSeconds(value: number): boolean {
+  return (
+    Number.isSafeInteger(value) &&
+    value >= MINIMUM_RESTORED_TIME &&
+    value <= MAXIMUM_SYNC_TIME &&
+    !Number.isNaN(new Date(value * 1_000).getTime())
+  );
+}
+
+function validFirmwareDiagnostic(value: FakeEspLastError): boolean {
+  return (
+    /^[a-z0-9_]{1,48}$/u.test(value.code) &&
+    (value.severity === "warning" || value.severity === "error") &&
+    value.message.length >= 1 &&
+    value.message.length <= 160 &&
+    Number.isSafeInteger(value.sequence) &&
+    value.sequence >= 1 &&
+    value.sequence <= 0xffff_ffff &&
+    typeof value.active === "boolean" &&
+    Number.isSafeInteger(value.at) &&
+    value.at >= 0 &&
+    value.at <= MAXIMUM_SYNC_TIME
+  );
+}
+
 function validPin(value: number): boolean {
   return (
     Number.isInteger(value) && value >= MINIMUM_PIN && value <= MAXIMUM_PIN
@@ -1004,6 +1304,26 @@ function parseSyncTime(value: string): number | undefined {
     parsed <= MAXIMUM_SYNC_TIME
     ? parsed
     : undefined;
+}
+
+function parseRequestEnvelope(message: string): RequestEnvelope | undefined {
+  if (!message.startsWith("request:")) {
+    return { commands: message };
+  }
+  const separator = message.indexOf("|", 8);
+  if (separator === -1) {
+    return undefined;
+  }
+  const requestId = message.slice(8, separator);
+  const commands = message.slice(separator + 1);
+  if (
+    requestId.length > 64 ||
+    !/^[A-Za-z0-9_-]+$/u.test(requestId) ||
+    commands.length === 0
+  ) {
+    return undefined;
+  }
+  return { commands, requestId };
 }
 
 function validScheduleDocument(schedule: unknown): boolean {

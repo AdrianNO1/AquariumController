@@ -157,6 +157,7 @@ export interface DeviceScheduleOperationPort {
     deviceId: string,
     request: { readonly kind: "schedule"; readonly scheduleJson: string },
   ): Promise<ScheduleDeliveryOperation>;
+  acknowledgeScheduleReconciledOutcome(operationId: string): Promise<void>;
 }
 
 export type DeviceScheduleReconciliationResult =

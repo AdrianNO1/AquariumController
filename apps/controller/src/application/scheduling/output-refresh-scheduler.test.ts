@@ -58,11 +58,11 @@ describe("five-second output refresh scheduler", () => {
     expect(port.calls).toEqual([
       {
         deviceId: "device-a",
-        request: { kind: "set_pwm", pin: 1, value: 64, overwrite: false },
+        request: { kind: "set_pwm", pin: 1, value: 64, overwrite: true },
       },
       {
         deviceId: "device-b",
-        request: { kind: "set_pwm", pin: 2, value: 178, overwrite: false },
+        request: { kind: "set_pwm", pin: 2, value: 178, overwrite: true },
       },
     ]);
     expect(reports).toMatchObject([
@@ -190,18 +190,35 @@ describe("five-second output refresh scheduler", () => {
     expect(port.calls).toHaveLength(1);
   });
 
-  it("latches outcome unknown before another mapping or later refresh can publish", async () => {
+  it("continues other devices and skips remaining mappings for the failed device", async () => {
     const time = new ManualSchedulingTime("2026-07-13T12:00:00.000Z");
     const reports: OutputRefreshTickReport[] = [];
-    const port = new RecordingOperationPort(async () => ({
-      id: "operation-unknown",
-      status: "outcome_unknown",
-    }));
+    const port = new RecordingOperationPort(async (deviceId, _request, call) =>
+      deviceId === "device-a"
+        ? {
+            id: `operation-unknown-${call}`,
+            status: "outcome_unknown",
+          }
+        : succeeded(call),
+    );
     const scheduler = createScheduler(
       time,
       [
-        output({ mappingId: "mapping-first", pin: 1 }),
-        output({ mappingId: "mapping-second", pin: 2 }),
+        output({
+          deviceId: "device-a",
+          mappingId: "mapping-a-first",
+          pin: 1,
+        }),
+        output({
+          deviceId: "device-a",
+          mappingId: "mapping-a-second",
+          pin: 2,
+        }),
+        output({
+          deviceId: "device-b",
+          mappingId: "mapping-b",
+          pin: 3,
+        }),
       ],
       port,
       reports,
@@ -209,18 +226,33 @@ describe("five-second output refresh scheduler", () => {
 
     scheduler.start();
     await time.advanceBy(5_000);
-    expect(port.calls).toHaveLength(1);
+    expect(
+      port.calls.map(({ deviceId, request }) => [
+        deviceId,
+        request.kind === "set_pwm" ? request.pin : null,
+      ]),
+    ).toEqual([
+      ["device-a", 1],
+      ["device-b", 3],
+    ]);
     expect(reports[0]?.diagnostics).toMatchObject([
       { code: "scheduled_operation_not_succeeded", status: "outcome_unknown" },
     ]);
 
     await time.advanceBy(5_000);
-    expect(port.calls).toHaveLength(1);
-    expect(reports[1]?.diagnostics).toMatchObject([
-      {
-        code: "scheduled_operation_blocked",
-        reason: "outcome_unknown",
-      },
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+      "device-b",
+    ]);
+    scheduler.signalDeviceAvailable("device-a");
+    await time.advanceBy(5_000);
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+      "device-b",
+      "device-a",
+      "device-b",
     ]);
     await scheduler.stop();
   });
