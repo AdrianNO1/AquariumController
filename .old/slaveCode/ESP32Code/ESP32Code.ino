@@ -147,6 +147,13 @@ struct FirmwareLastError {
     time_t at;
 };
 
+struct ScheduleAttachResult {
+    int attachFailedCount;
+    int firstAttachFailedPin;
+    int writeFailedCount;
+    int firstWriteFailedPin;
+};
+
 FirmwareLastError lastError = {"", "", "", 0, false, 0};
 bool spiffsAvailable = false;
 bool lastErrorPersistenceDirty = false;
@@ -1026,13 +1033,6 @@ void rollbackNewSchedulePins(bool newlyAttached[MAX_PIN + 1]) {
         lastPinValues[pin] = 0;
     }
 }
-
-struct ScheduleAttachResult {
-    int attachFailedCount;
-    int firstAttachFailedPin;
-    int writeFailedCount;
-    int firstWriteFailedPin;
-};
 
 ScheduleAttachResult attachMissingSchedulePins(
     JsonArray& channels,
