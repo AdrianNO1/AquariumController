@@ -1,6 +1,6 @@
 # Raspberry Pi production handoff
 
-Updated: 2026-07-25
+Updated: 2026-07-26
 
 This is the concise external-operator checklist for putting AquariumController
 into production. Repository implementation and validation did **not** contact,
@@ -10,21 +10,37 @@ this checklist does not replace it.
 
 ## Current handoff state
 
-Repository release-candidate evidence is green:
+The repository contains the firmware 4.1, correlated-request, per-device-lane,
+latest-only scheduler, and device-local failure implementation. Before this
+checklist becomes a deployment handoff, the branch must pass protected CI,
+merge, publish a new image, and record that image's exact digest.
+
+Current firmware 4.1/per-device-lane local evidence:
+
+- formatting, lint, all workspace/E2E typechecks, and production builds: green;
+- unit: 98 files/684 tests;
+- critical: 83 files/616 tests;
+- real Mosquitto integration: 5/5;
+- production Playwright: 18/18 with zero retries; and
+- pinned firmware compile: 80% flash and 19% global RAM.
+
+These results have not yet been confirmed by the protected pull-request or
+default-branch workflows.
+
+The following evidence is a historical pre-4.1 baseline only:
 
 - real Mosquitto integration: 5/5;
 - production Playwright: local, protected PR, and protected `master` runs at
   18/18 with zero retries;
-- selected-source host verification: 97 files/638 unit tests and 82 files/571
-  critical tests;
-- firmware 4.0.0 compile: 1,036,431 bytes program, 63,180 bytes global RAM,
+- host verification: 97 files/638 unit tests and 82 files/571 critical tests;
+- firmware 4.0 compile: 1,036,431 bytes program, 63,180 bytes global RAM, and
   264,500 bytes local-variable capacity remaining;
-- production Compose render and Pi-preflight Bash syntax: green; and
+- production Compose render and Pi-preflight Bash syntax: green;
 - protected PR and `master` runs: all six required validation jobs green; and
-- selected amd64/ARM64 image: published, publicly pullable, healthy as UID/GID
-  1000, and both SQLite integrity checks green.
+- an amd64/ARM64 image was publicly pullable, healthy as UID/GID 1000, and
+  passed both SQLite integrity checks.
 
-Selected release inputs:
+Historical inputs, which must not be deployed as the current release:
 
 - source: `886ed05be89a1abed8e076d91ce2802f5d5668dd`;
 - validation/publication:
@@ -43,15 +59,17 @@ actuators are not claimed verified.
       historical object and cached view.
 - [ ] Resolve its open secret-scanning alert as `revoked`; keep secret scanning
       and push protection enabled.
-- [x] Run all six hosted validation jobs successfully.
+- [ ] Run all six hosted validation jobs successfully for the current branch
+      and its protected default-branch merge.
 - [x] Protect `master` using the actual hosted check names; require pull
       requests/current branches/admin enforcement and block deletion and
       ordinary force-pushes.
 - [x] Set `AQUARIUM_GHCR_IMAGE` to the reviewed lowercase GHCR repository.
-- [x] Publish the package publicly and verify the selected exact digest is
+- [ ] Publish the current package and verify its newly selected exact digest is
       anonymously pullable.
-- [x] Run the gated image publisher and record the returned multi-platform
-      `sha256` manifest digest. Do not deploy a mutable tag.
+- [ ] Run the gated image publisher for the current merge and record the
+      returned multi-platform `sha256` manifest digest. Do not deploy a mutable
+      tag or the historical pre-4.1 digest.
 
 There is deliberately no CI job that deploys to the Pi.
 
@@ -75,7 +93,7 @@ There is deliberately no CI job that deploys to the Pi.
 ## 3. Network, MQTT, and notifications
 
 - [ ] Provision a production MQTT account for the controller and a credential
-      for firmware 4.0.0.
+      for firmware 4.1.0.
 - [ ] Restrict the plaintext MQTT listener to the trusted aquarium LAN.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
       interlock.
@@ -106,14 +124,15 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 4.0.0 with an ignored local configuration containing the
+- [ ] Build firmware 4.1.0 with an ignored local configuration containing the
       intended Wi-Fi, MQTT username/password, and NTP host.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports exactly `4.0.0`; older/unexpected firmware is
+- [ ] Confirm every device reports exactly `4.1.0`; older/unexpected firmware is
       intentionally marked `firmware_outdated` and receives no actuator work.
 - [ ] Bench-test pin assignments, normalized PWM at configured resolutions,
       override expiry, schedule restoration, resolution reattachment, NTP/DNS
-      loss, broker/Wi-Fi loss, reboot, and power cycling.
+      loss, EEPROM-time fallback, broker/Wi-Fi loss, reboot, power cycling,
+      per-pin best-effort activation, and diagnostic reporting.
 - [ ] Keep production actuators disconnected or otherwise made safe until the
       expected output behavior is observed.
 
@@ -143,8 +162,8 @@ delete and reuse a failed first-import target.
 
 - [ ] Load values from an operator-managed secret store outside the checkout;
       do not use or commit a repository `.env`.
-- [ ] Set the exact GHCR repository and 64-character digest, Pi bind address,
-      port, broker URL/interlock, and four storage paths.
+- [ ] Set the exact newly selected GHCR repository and 64-character digest, Pi
+      bind address, port, broker URL/interlock, and four storage paths.
 - [ ] Run `bash deployment/pi-preflight.sh compose.production.yaml` on the Pi.
 - [ ] Stop on any architecture, digest-pull, configuration, ownership, mode,
       nesting, free-space, or Compose-rendering failure.
@@ -153,6 +172,9 @@ delete and reuse a failed first-import target.
       checks.
 - [ ] Verify UI/snapshot, device discovery, firmware versions, schedules,
       overrides, logs, alerts, storage health, and latest verified backup.
+- [ ] Confirm a nonresponding ESP is shown offline while healthy devices continue
+      receiving work, and confirm explicit operator exclusion stops further
+      attempts to that device.
 
 ## 8. Choose the rollback branch before cutover
 

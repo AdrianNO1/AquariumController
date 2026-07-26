@@ -3,17 +3,27 @@
 This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
 controller. The previous Python and Flask application remains under `.old/` as
 migration evidence. The ESP32 sketch temporarily remains at
-`.old/slaveCode/ESP32Code/ESP32Code.ino`, but firmware 4.0.0 is now a supported,
+`.old/slaveCode/ESP32Code/ESP32Code.ino`, but firmware 4.1.0 is now a supported,
 compiled part of this application rather than read-only legacy evidence.
 
-Current release evidence dated 2026-07-25 includes 97 files/638 unit tests, 82
-files/571 critical tests, real-Mosquitto 5/5, and retry-free Playwright 18/18.
-The protected pull-request and `master` runs passed all six hosted validation
-jobs. The selected release source is
+Historical pre-4.1 release evidence dated 2026-07-25 includes 97 files/638 unit
+tests, 82 files/571 critical tests, real-Mosquitto 5/5, and retry-free
+Playwright 18/18. The protected pull-request and `master` runs passed all six
+hosted validation jobs. That historical release source is
 `886ed05be89a1abed8e076d91ce2802f5d5668dd`; its published amd64/ARM64 image is
 `ghcr.io/adrianno1/aquarium-controller@sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`. That
 exact digest passed health and both SQLite integrity checks as UID/GID 1000 on
-both platforms.
+both platforms. It predates firmware 4.1 and the per-device command-lane work,
+so it must not be deployed as the current release. Select and record a new
+source commit and exact image digest after this branch passes protected CI and
+is published from `master`.
+
+The current firmware 4.1/per-device-lane branch has passed local formatting,
+lint, workspace typechecks, production builds, 98 files/684 unit tests, 83
+files/616 critical tests, real-Mosquitto integration 5/5, and retry-free
+production Playwright 18/18. These are current source-tree results, not a
+substitute for the pending protected pull-request/default-branch jobs or a new
+published image digest.
 
 All reachable hosted branches contain only redacted credential sentinels and
 retain the original commit topology. One unreachable historical GitHub object
@@ -36,9 +46,11 @@ evidence and remaining operator gates are in the
 | Tests         | Vitest, Testing Library, Testcontainers with pinned Mosquitto, Playwright/axe, and an independent fake ESP |
 
 One controller process owns HTTP, SSE, scheduling, persistence, alerts, and the
-MQTT adapter. Mosquitto remains a separate process. The controller is deliberately
-not horizontally scalable because the deployed ESP protocol permits only one
-legacy wire operation in flight.
+MQTT adapter. Mosquitto remains a separate process. The controller is
+deliberately not horizontally scalable because device queues, schedules, and
+state revisions need one owner. Within that process, firmware 4.1 request IDs
+support bounded per-device MQTT command lanes rather than one global
+response-waiting lane.
 
 The global state revision is the contiguous snapshot/SSE cursor. User mutations
 also serialize through a separate operator revision floor, so background device
@@ -165,7 +177,7 @@ npm run test:integration
 npm run test:e2e
 npm run build
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.0.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.1.0 .
 ```
 
 CI defines six validation jobs: static/unit, critical, real-Mosquitto
@@ -178,12 +190,14 @@ uses a run-unique tag, reports the resulting manifest digest, and smoke-tests
 that exact digest on amd64 and ARM64.
 Pull-request code never runs on a Pi, and no deploy job exists.
 
-The protected [pull-request run](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
-and selected-source [`master` run](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132)
-are green. `master` requires pull requests, a current branch, all six exact
-check contexts, and administrator enforcement; force-pushes and deletion are
-blocked. GitHub Free provides standard hosted Actions without a minutes charge
-for public repositories. See GitHub's official
+The historical pre-4.1
+[pull-request run](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
+and [`master` run](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132)
+are green. The current branch still requires its own protected run and a new
+published digest. `master` requires pull requests, a current branch, all six
+exact check contexts, and administrator enforcement; force-pushes and deletion
+are blocked. GitHub Free provides standard hosted Actions without a minutes
+charge for public repositories. See GitHub's official
 [Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 and
 [protected-branch](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)
@@ -272,28 +286,33 @@ separate verified database/archive backup procedure.
   to purge the directly addressable unreachable object/cached view, resolve the
   remaining secret-scanning alert as `revoked`, and keep secret scanning and
   push protection enabled.
-- Flash firmware 4.0.0 to every deployed ESP32 before enabling actuator work.
+- Flash firmware 4.1.0 to every deployed ESP32 before enabling actuator work.
   Older or unexpected versions remain visible but are marked
   `firmware_outdated`, excluded from schedule/override commands, and identified
-  on the frontend. Firmware 4.0.0 fixes rollover-safe override expiry and forces
-  physical schedule restoration after expiry, PWM reattachment, or schedule
-  replacement. Wire duty remains normalized 0-255; firmware scales it to the
-  configured 1-16-bit range and rescales scheduled/current-overwrite caches and
-  the physical output when resolution is reattached. Its configured NTP
-  synchronization is asynchronous, so an NTP
-  or DNS outage does not delay MQTT or manual-control startup. After any boot,
-  persisted schedule pins remain safely off until NTP or the controller `sync`
-  command confirms fresh time; restored EEPROM time cannot authorize output.
+  on the frontend. Firmware 4.1.0 adds correlated response IDs, wear-limited
+  persisted diagnostics, best-effort per-pin schedule activation, and
+  rollover-safe override expiry. Routine controller and manual PWM writes use
+  `overwrite=true`, so the ESP suppresses its local schedule while the Pi is
+  refreshing it and resumes local scheduling after 120 seconds of Pi silence.
+  Wire duty remains normalized 0-255; firmware scales it to the configured
+  1-16-bit range and rescales scheduled/current-overwrite caches and physical
+  output when resolution is reattached. NTP synchronization is asynchronous,
+  so DNS/NTP failure does not delay MQTT or manual-control startup. If neither
+  the Pi nor NTP is reachable after reboot, a valid persisted EEPROM timestamp
+  intentionally authorizes the local schedule from that boundedly stale
+  estimate.
 - Configure the ESP32's ignored local firmware header with both an MQTT username
   and password plus the intended NTP host, and restrict that plaintext broker
   listener to the trusted aquarium LAN. The current ESP firmware does not
   support `mqtts://`; enabling
   TLS would require another firmware change and physical validation.
-- Set the production Compose `AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
-  `AQUARIUM_CONTROLLER_IMAGE_SHA256` to the selected public package and exact
-  digest recorded above. Configure the Pi bind/storage/broker paths, production
-  MQTT confirmation, and backup/rollback locations. No Pi deploy workflow is
-  enabled. Follow the supervised
+- After this branch is merged and published, set the production Compose
+  `AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
+  `AQUARIUM_CONTROLLER_IMAGE_SHA256` to that newly selected public package and
+  exact digest. Do not use the historical pre-4.1 digest recorded above.
+  Configure the Pi bind/storage/broker paths, production MQTT confirmation, and
+  backup/rollback locations. No Pi deploy workflow is enabled. Follow the
+  supervised
   [Raspberry Pi deployment and rollback runbook](docs/production-deployment.md),
   including its storage preflight and exact-digest checks.
 - Use the concise

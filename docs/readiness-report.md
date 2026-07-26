@@ -1,18 +1,18 @@
 # Readiness report
 
-Assessment date: 2026-07-25
+Assessment date: 2026-07-26
 
-Basis: the selected release source
-`886ed05be89a1abed8e076d91ce2802f5d5668dd`, its local verification, and the
-exact hosted evidence recorded below. The aquarium Raspberry Pi was not
-contacted or used for this assessment.
+Basis: the current firmware 4.1 and per-device-lane branch, plus the explicitly
+historical pre-4.1 release evidence recorded below. The aquarium Raspberry Pi
+was not contacted or used for this assessment.
 
 ## Verdict
 
-The repository is a **repository-validated release candidate ready for Pi
-handoff**. The selected source passed all six protected validation jobs in both
-its pull-request and `master` runs. Its immutable multi-architecture image was
-published and then smoke-tested by exact digest on amd64 and ARM64.
+The current repository implementation is **prepared for protected release
+validation**, but it is not yet the Pi handoff release. It still needs a
+protected pull-request run, merge, protected default-branch run, image
+publication, and selection of the resulting immutable multi-architecture
+digest. The earlier source and image below prove the pre-4.1 baseline only.
 
 This is not production approval. No production input has been imported, no
 ESP32 has been flashed as part of this work, and the Pi has not been contacted
@@ -28,42 +28,43 @@ independently revoked, ask GitHub Support to purge the orphaned object/cached
 view, then resolve the alert as revoked. Keep secret scanning and push
 protection enabled.
 
-## Selected release evidence
+## Historical pre-4.1 release evidence
 
-- Source commit:
+- Historical source commit:
   `886ed05be89a1abed8e076d91ce2802f5d5668dd`.
-- Protected pull-request validation:
+- Historical protected pull-request validation:
   [run 30158546118](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118),
   six of six required jobs green.
-- Protected `master` validation and publication:
+- Historical protected `master` validation and publication:
   [run 30158994132](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132),
   six of six required jobs green plus the publication job.
-- Selected image:
+- Historical image:
   `ghcr.io/adrianno1/aquarium-controller@sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
 - Package access at evidence time: publicly pullable without a registry
   credential.
 
-The selected source and digest remain the deployment identity even if a later
-documentation-only merge creates another CI image. Do not substitute a newer
-tag or digest without selecting and recording a new release.
+This source and digest predate firmware 4.1, correlated requests, per-device
+lanes, and the current failover changes. Do not deploy them as the current
+release. Select and record a new source commit and digest only after this
+branch's protected validation and merge succeed.
 
-## Current evidence
+## Current and historical evidence
 
-| Boundary                                           | 2026-07-25 result                                                         | Remaining boundary                                              |
-| -------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| Host verification before hermetic fixture refactor | Unit 95 files/619 tests; critical 81 files/558 tests                      | Superseded by the clean Docker run for reproducibility          |
-| Selected-source host verification                  | Unit 97 files/638 tests; critical 82 files/571 tests                      | Production hardware is outside this boundary                    |
-| Historical clean Linux Docker verification         | Unit 95 files/618 tests; critical 81 files/557 tests                      | Superseded by selected-source local and hosted runs             |
-| Real Mosquitto                                     | 5/5                                                                       | Production broker and LAN not contacted                         |
-| Production Chromium                                | Local, PR, and `master` runs each 18/18 with zero retries                 | Real Pi/browser clients not tested                              |
-| ESP32 firmware 4.0.0                               | Warning-free pinned compile                                               | Fleet flash and physical soak                                   |
-| Production Compose                                 | Rendered successfully with fail-closed inputs                             | Pi values and storage paths                                     |
-| Pi preflight                                       | Bash syntax passed                                                        | Must run for real on the intended Pi                            |
-| ARM64 container                                    | Selected digest became healthy as UID/GID 1000; both SQLite checks passed | Emulation is not real Pi validation                             |
-| Hosted GitHub CI/GHCR                              | PR and `master` six-job runs green; exact multi-platform digest published | Pi pull and production start                                    |
-| Production migration                               | Importer and synthetic fixtures implemented                               | Actual stopped production snapshot must be dry-run and reviewed |
+| Boundary                          | Evidence                                                                    | Remaining boundary                                                         |
+| --------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Current ESP32 firmware 4.1.0      | Pinned compiler build passes at 80% flash and 19% global RAM                | Protected firmware job, fleet flash, and physical soak                     |
+| Current transport/schedulers      | Local verification passes 98 files/684 unit and 83 files/616 critical tests | Full protected branch validation                                           |
+| Historical host verification      | Unit 97 files/638 tests; critical 82 files/571 tests                        | Historical pre-4.1 result; not current-branch evidence                     |
+| Current real Mosquitto            | Local current-branch integration passes 5/5                                 | Current protected integration job; production broker and LAN not contacted |
+| Current production Chromium       | Local current-branch run passes 18/18 with zero retries                     | Current protected browser job; real Pi/browser clients                     |
+| Historical firmware 4.0.0 compile | Warning-free; exact resource figures recorded below                         | Superseded by 4.1                                                          |
+| Historical production Compose     | Pre-4.1 template rendered with fail-closed inputs                           | Current protected container job, Pi values, and storage paths              |
+| Historical Pi preflight           | Pre-4.1 Bash syntax passed                                                  | Must run for real on the intended Pi                                       |
+| Historical ARM64 container        | Historical digest healthy as UID/GID 1000; both SQLite checks passed        | New current digest; real Pi validation                                     |
+| Current GitHub CI/GHCR            | Workflow and protected branch exist                                         | Current PR/default-branch runs and a newly selected published digest       |
+| Production migration              | Importer and synthetic fixtures implemented                                 | Actual stopped production snapshot must be dry-run and reviewed            |
 
-The one-test difference between the pre-refactor host verification and the clean
+The historical one-test difference between pre-refactor host verification and clean
 Docker verification is intentional. `.old/data` is operator-local production
 input and is ignored by Git, Docker build contexts, and CI. The former
 environment-dependent fixture assertion was removed; the importer is now
@@ -73,7 +74,22 @@ without reducing importer behavior coverage.
 
 ## Verification details
 
-### Host and clean-source verification
+### Current branch verification
+
+The current firmware 4.1/per-device-lane source passed local formatting, lint,
+all workspace and E2E typechecks, and production builds. Its current test
+counts are:
+
+- unit: 98 files, 684 tests;
+- critical: 83 files, 616 tests;
+- real-Mosquitto integration: 5/5; and
+- production Playwright: 18/18 with retries disabled.
+
+The browser run used production-built assets, fresh SQLite databases, real
+Mosquitto, and independent fake ESPs. These local results still require
+confirmation by the protected pull-request and default-branch workflows.
+
+### Historical host and clean-source verification
 
 Before the fixture isolation change, the host `npm run verify` completed with:
 
@@ -91,42 +107,53 @@ installed from the lockfile and completed with:
 That clean Docker result established the hermetic baseline before the final
 unknown-outcome reconciliation work.
 
-The selected release source then passed the complete host verification after
+The historical pre-4.1 release source then passed complete host verification after
 the reconciliation work: 97 files/638 unit tests, 82 files/571 critical tests,
 and every static/build gate. The same source passed both protected hosted runs.
+Those counts are retained as historical evidence and are not claimed for the
+current branch.
 
 ### Real broker integration
 
-The current real-wire suite passed 5/5 against digest-pinned Mosquitto
+The current firmware 4.1/per-device-lane real-wire suite passes 5/5 against
+digest-pinned Mosquitto
 `eclipse-mosquitto:2.0.22-openssl@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c`.
 It covers multi-device discovery, controller/broker/fake restarts, command and
 chunk boundaries, persisted schedules and fake EEPROM state, time/override
 safety, malformed and late replies, disconnects, broker loss, and the
 no-actuator-retry rule. Test traffic is restricted to `test/aquarium/*`.
 
+The current branch additionally proves that a healthy ESP can complete while
+another response is delayed and that each chunk sequence is published
+atomically. Hosted confirmation still belongs in the protected run.
+
 ### Production-browser stability
 
-The local, protected pull-request, and protected `master` Playwright Chromium
-runs each passed 18/18 with retries disabled. They used production-built assets,
-fresh SQLite databases, real Mosquitto, and two independent fake ESPs. Coverage
+The current local Playwright Chromium run passes 18/18 with retries disabled.
+The historical protected pull-request and protected `master` runs also passed
+their pre-4.1 18/18 suites. The current run uses production-built assets, fresh
+SQLite databases, real Mosquitto, and two independent fake ESPs. Coverage
 includes:
 
 - every retained route, direct reload, useful 404 recovery, responsive layouts,
   keyboard access, and automated accessibility checks;
 - channel, schedule, throttle, mapping, device, and override workflows;
 - revision conflicts, persistence, logs, exports, alerts, and invalid filters;
-- SSE recovery, offline/reconnect, global unknown-outcome discovery, explicit
+- SSE recovery, offline/reconnect, unknown-outcome discovery, explicit
   physical-state reconciliation, and no command resend; and
 - controller, broker, and fake-ESP restart behavior.
 
 The harness rejects unexpected external requests and browser console errors.
 
-### ESP32 firmware 4.0.0
+### ESP32 firmware 4.1.0 and historical 4.0 compile evidence
 
-The supported sketch is `.old/slaveCode/ESP32Code/ESP32Code.ino`. It compiles
-warning-free with pinned Arduino CLI 1.5.0, ESP32 core 3.3.8, ArduinoJson 7.4.3,
-and PubSubClient 2.8. The compiler image verifies the official Arduino CLI
-archive SHA-256 before extraction:
+The supported sketch is `.old/slaveCode/ESP32Code/ESP32Code.ino`, now version
+4.1.0. Its pinned Arduino CLI 1.5.0, ESP32 core 3.3.8, ArduinoJson 7.4.3, and
+PubSubClient 2.8 build passes. The compiler image verifies the official Arduino
+CLI archive SHA-256 before extraction.
+
+The exact resource figures below are from the focused 2026-07-19 firmware 4.0
+build. They are historical and are not claimed for 4.1:
 
 | Resource                          |          Result |
 | --------------------------------- | --------------: |
@@ -134,30 +161,31 @@ archive SHA-256 before extraction:
 | Global RAM                        |    63,180 bytes |
 | Local-variable capacity remaining |   264,500 bytes |
 
-Firmware 4.0.0 fixes rollover-safe override expiry, forces schedule restoration,
-invalidates output caches after PWM reattachment or schedule replacement, and
-holds persisted schedule pins off until current time is freshly confirmed.
-Wire duty is normalized 0-255 and scaled to the configured 1-16-bit resolution.
-The controller marks other versions `firmware_outdated` and excludes them from
-actuator work.
+Firmware 4.1.0 retains rollover-safe override expiry, schedule restoration,
+cache invalidation, and normalized 0-255 duty scaling. It adds correlated
+request IDs, wear-limited diagnostics, controller-owned overwrite behavior, and
+valid-EEPROM-time fallback when neither Pi nor NTP is reachable. Per-pin
+schedule activation is best effort and reports failures without stopping
+healthy pins. The controller marks every other version `firmware_outdated` and
+excludes it from actuator work.
 
 Compilation and fake-firmware tests cannot prove physical pin assignments,
 power-loss behavior, Wi-Fi quality, NTP reachability, or deployed output.
 
 ### Containers, Compose, and ARM64
 
-The production Compose template rendered successfully with explicit placeholder
-inputs, and `deployment/pi-preflight.sh` passed Bash syntax checking. The
-template still fails closed without an immutable image reference, bind address,
-broker URL, MQTT confirmation, and four explicit storage directories.
-Preflight also rejects Compose installations that lack the `up --wait`,
-`--wait-timeout`, or `ps --status` capabilities used by the start and
-single-publisher safety procedures.
+The historical pre-4.1 release validation rendered the production Compose
+template with explicit placeholder inputs, and `deployment/pi-preflight.sh`
+passed Bash syntax checking. The template still fails closed without an
+immutable image reference, bind address, broker URL, MQTT confirmation, and
+four explicit storage directories. Preflight also rejects Compose installations
+that lack the `up --wait`, `--wait-timeout`, or `ps --status` capabilities used
+by the start and single-publisher safety procedures.
 
-The clean ARM64 image built and reached health under emulation. The running
-process reported UID/GID 1000, and `state.db` and `events.db` both passed SQLite
-integrity checks. The image is non-root and supports a read-only application
-filesystem with only declared data directories and `/tmp` writable.
+The historical clean ARM64 image built and reached health under emulation. The
+running process reported UID/GID 1000, and `state.db` and `events.db` both
+passed SQLite integrity checks. The image is non-root and supports a read-only
+application filesystem with only declared data directories and `/tmp` writable.
 
 This demonstrates image-level ARM64 compatibility, not the production Pi's
 kernel, filesystem, storage latency, memory pressure, or LAN.
@@ -235,11 +263,11 @@ multi-platform manifest digest, and smoke-tests that exact digest. There is no
 Pi deployment job. The static lane also fails on high or critical production
 dependency advisories.
 
-The protected pull-request and `master` runs are green for all six jobs.
-`master` requires those exact current checks, pull requests, a current branch,
-and administrator enforcement; force-pushes and deletion are blocked. The
-`master` publisher returned the selected digest above and smoke-tested it on
-both platforms.
+The protected pull-request and `master` runs cited above are historical
+pre-4.1 evidence. `master` requires the six checks, pull requests, a current
+branch, and administrator enforcement; force-pushes and deletion are blocked.
+The current branch must pass those checks, merge, publish, and select its own
+exact digest before the Pi handoff starts.
 
 ## Remaining release gates
 
@@ -249,10 +277,16 @@ both platforms.
   rewriting, request GitHub Support cleanup of the directly addressable
   unreachable object, and close the remaining alert only as `revoked`.
 
+### Current release selection
+
+- Pass all six protected jobs for the current branch.
+- Merge through the protected default branch and confirm its hosted run.
+- Publish, smoke-test, and record the new exact multi-platform digest.
+
 ### ESP32 fleet
 
 - Build the ignored local firmware configuration without committing secrets.
-- Flash every deployed board with 4.0.0 and confirm its reported version.
+- Flash every deployed board with 4.1.0 and confirm its reported version.
 - Bench-test override expiry, schedule restoration, resolution changes, time
   acquisition, Wi-Fi/broker loss, reboot, and power cycling before enabling
   aquarium actuators.
@@ -269,6 +303,7 @@ both platforms.
 - Perform a supervised soak covering real wiring, broker, Wi-Fi, disk/load,
   restart, and sudden power loss.
 
-Until those external steps succeed, the correct claim is
-**repository-validated release candidate ready for Pi handoff**, not deployed
-production controller.
+Until current protected release evidence and immutable digest selection succeed,
+the correct claim is **repository implementation prepared for protected release
+validation**. After that, the remaining Pi, migration, fleet, and soak steps are
+external production acceptance.
