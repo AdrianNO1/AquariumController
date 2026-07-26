@@ -28,6 +28,8 @@ export interface CapturedMqttPublication {
 }
 
 const MOSQUITTO_PORT = 1_883;
+const CAPTURE_RECONNECT_TIMEOUT_MS = 5_000;
+const CAPTURE_RECONNECT_DELAY_MS = 50;
 const MOSQUITTO_CONFIGURATION = [
   "listener 1883 0.0.0.0",
   "allow_anonymous true",
@@ -168,9 +170,9 @@ export class MosquittoTestHarness {
     // Capture is instrumentation rather than a reconnect subject. Recreate it
     // after the broker is ready; controller and fake clients still recover
     // autonomously.
-    const captureClient = await connectAsync(
+    const captureClient = await reconnectCaptureClient(
       this.brokerUrl,
-      captureConnectionOptions(this.#captureClientId),
+      this.#captureClientId,
     );
     this.#captureClient = captureClient;
     this.#attachCaptureClient(captureClient);
@@ -281,6 +283,41 @@ function captureConnectionOptions(clientId: string) {
     reconnectPeriod: 100,
     resubscribe: true,
   };
+}
+
+async function reconnectCaptureClient(
+  brokerUrl: string,
+  clientId: string,
+): Promise<MqttClient> {
+  const deadline = Date.now() + CAPTURE_RECONNECT_TIMEOUT_MS;
+  let mostRecentError: Error | undefined;
+
+  do {
+    try {
+      return await connectAsync(brokerUrl, captureConnectionOptions(clientId));
+    } catch (error) {
+      const normalizedError = toError(error);
+      if (!isTransientBrokerRestartError(normalizedError)) {
+        throw normalizedError;
+      }
+      mostRecentError = normalizedError;
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, CAPTURE_RECONNECT_DELAY_MS),
+      );
+    }
+  } while (Date.now() < deadline);
+
+  throw new Error(
+    `Capture client could not reconnect within ${CAPTURE_RECONNECT_TIMEOUT_MS}ms`,
+    { cause: mostRecentError },
+  );
+}
+
+function isTransientBrokerRestartError(error: Error): boolean {
+  if (!("code" in error) || typeof error.code !== "string") {
+    return false;
+  }
+  return error.code === "ECONNRESET" || error.code === "ECONNREFUSED";
 }
 
 async function allocateHostPort(): Promise<number> {

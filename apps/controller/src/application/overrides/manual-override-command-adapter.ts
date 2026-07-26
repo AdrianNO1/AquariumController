@@ -8,7 +8,7 @@ export interface UnknownDeviceOperationReconciler {
   acknowledgeReconciledOutcomes(operationIds: readonly string[]): Promise<void>;
 }
 
-/** Bridges overrides into the scheduler's one serialized command lane. */
+/** Bridges overrides into the scheduler's per-device command lanes. */
 export class ManualOverrideCommandAdapter implements ManualOverrideDeviceCommandPort {
   constructor(
     private readonly dispatcher: ScheduledDeviceOperationDispatcher,
@@ -24,7 +24,9 @@ export class ManualOverrideCommandAdapter implements ManualOverrideDeviceCommand
       readonly overwrite: boolean;
     },
   ): Promise<ManualOverrideDeviceDispatchResult> {
-    return this.dispatcher.dispatch(deviceId, request);
+    return this.dispatcher.dispatch(deviceId, request, {
+      priority: "interactive",
+    });
   }
 
   async reconcileUnknownOutcomes(

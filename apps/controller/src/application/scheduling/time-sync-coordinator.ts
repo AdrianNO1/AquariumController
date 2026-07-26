@@ -130,12 +130,26 @@ export class TimeSyncCoordinator {
     this.#started = true;
     this.#accepting = true;
     this.#readMonotonicNow();
+    const startupDailyTask = this.#runDailyIfDue();
+    const trackedStartupDailyTask = startupDailyTask.catch((error) => {
+      this.#fail(toError(error));
+    });
+    this.#dailyTask = trackedStartupDailyTask;
     try {
-      await this.#runDailyIfDue();
+      await startupDailyTask;
       this.#armDailyTimer();
     } catch (error) {
-      this.#fail(toError(error));
-      throw this.#fatalError;
+      if (this.#fatalError === null) {
+        this.#fail(toError(error));
+      }
+      throw (
+        this.#fatalError ??
+        new Error("Daily time-sync startup failed without an error")
+      );
+    } finally {
+      if (this.#dailyTask === trackedStartupDailyTask) {
+        this.#dailyTask = null;
+      }
     }
   }
 
@@ -239,59 +253,88 @@ export class TimeSyncCoordinator {
     }
 
     const deviceIds = await this.#devices.listOnlineDeviceIds();
-    for (const rawDeviceId of deviceIds) {
-      if (this.#stopping) {
-        return;
-      }
-      const deviceId = identifierSchema.parse(rawDeviceId);
-      const claimed = await this.#guards.tryClaimDailyRun({
-        jobKey: DEVICE_TIME_SYNC_JOB_KEY,
-        scopeKey: deviceId,
-        utcDayStartMs: dayStartMs,
-        startedAtMs: epochMs,
-      });
-      if (!claimed) {
-        continue;
-      }
-
-      const dispatch = await this.#syncDevice(deviceId);
-      if (dispatch === null) {
-        continue;
-      }
-      if (dispatch.kind === "blocked") {
-        this.#onDiagnostic({
-          code: "time_sync_operation_blocked",
-          deviceId,
-          reason: dispatch.reason,
-        });
-        return;
-      }
-      const { operation } = dispatch;
-      const completedAtMs = readUtcTimestamp(this.#clock).epochMs;
-      const recorded = await this.#guards.recordDailyRunResult({
-        jobKey: DEVICE_TIME_SYNC_JOB_KEY,
-        scopeKey: deviceId,
-        utcDayStartMs: dayStartMs,
-        completedAtMs,
-        operationId: operation.id,
-        succeeded: operation.status === "succeeded",
-      });
-      if (!recorded) {
-        this.#onDiagnostic({
-          code: "daily_guard_result_superseded",
-          deviceId,
-          operationId: operation.id,
+    const syncTasks: Promise<Error | null>[] = [];
+    let traversalFailure: Error | null = null;
+    try {
+      for (const rawDeviceId of deviceIds) {
+        if (this.#stopping) {
+          break;
+        }
+        const deviceId = identifierSchema.parse(rawDeviceId);
+        const claimed = await this.#guards.tryClaimDailyRun({
+          jobKey: DEVICE_TIME_SYNC_JOB_KEY,
+          scopeKey: deviceId,
           utcDayStartMs: dayStartMs,
+          startedAtMs: epochMs,
         });
+        if (!claimed) {
+          continue;
+        }
+        syncTasks.push(
+          this.#runClaimedDailySync(deviceId, dayStartMs).then(
+            () => null,
+            (error) => toError(error),
+          ),
+        );
       }
-      if (operation.status !== "succeeded") {
-        this.#onDiagnostic({
-          code: "time_sync_operation_not_succeeded",
-          deviceId,
-          operationId: operation.id,
-          status: operation.status,
-        });
+    } catch (error) {
+      traversalFailure = toError(error);
+    }
+    const failures = (await Promise.all(syncTasks)).filter(
+      (failure): failure is Error => failure !== null,
+    );
+    if (traversalFailure !== null) {
+      if (syncTasks.length === 0) {
+        throw traversalFailure;
       }
+      failures.push(traversalFailure);
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "One or more daily time syncs failed");
+    }
+  }
+
+  async #runClaimedDailySync(
+    deviceId: string,
+    utcDayStartMs: number,
+  ): Promise<void> {
+    const dispatch = await this.#syncDevice(deviceId);
+    if (dispatch === null) {
+      return;
+    }
+    if (dispatch.kind === "blocked") {
+      this.#onDiagnostic({
+        code: "time_sync_operation_blocked",
+        deviceId,
+        reason: dispatch.reason,
+      });
+      return;
+    }
+    const { operation } = dispatch;
+    const completedAtMs = readUtcTimestamp(this.#clock).epochMs;
+    const recorded = await this.#guards.recordDailyRunResult({
+      jobKey: DEVICE_TIME_SYNC_JOB_KEY,
+      scopeKey: deviceId,
+      utcDayStartMs,
+      completedAtMs,
+      operationId: operation.id,
+      succeeded: operation.status === "succeeded",
+    });
+    if (!recorded) {
+      this.#onDiagnostic({
+        code: "daily_guard_result_superseded",
+        deviceId,
+        operationId: operation.id,
+        utcDayStartMs,
+      });
+    }
+    if (operation.status !== "succeeded") {
+      this.#onDiagnostic({
+        code: "time_sync_operation_not_succeeded",
+        deviceId,
+        operationId: operation.id,
+        status: operation.status,
+      });
     }
   }
 
@@ -331,10 +374,14 @@ export class TimeSyncCoordinator {
       });
       return null;
     }
-    return this.#commands.dispatch(deviceId, {
-      kind: "sync_time",
-      epochSeconds,
-    });
+    return this.#commands.dispatch(
+      deviceId,
+      {
+        kind: "sync_time",
+        epochSeconds,
+      },
+      { priority: "background" },
+    );
   }
 
   #readMonotonicNow(): number {

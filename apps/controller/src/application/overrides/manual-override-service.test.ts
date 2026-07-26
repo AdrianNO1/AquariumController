@@ -341,6 +341,67 @@ describe("manual override service", () => {
     ]);
   });
 
+  it("dispatches independent devices concurrently within one aggregate override", async () => {
+    let finishDeviceA: (
+      result: ManualOverrideDeviceDispatchResult,
+    ) => void = () => undefined;
+    const pendingDeviceA = new Promise<ManualOverrideDeviceDispatchResult>(
+      (resolve) => {
+        finishDeviceA = resolve;
+      },
+    );
+    const context = await createContext([
+      pendingDeviceA,
+      {
+        kind: "completed",
+        operation: { id: "child-device-b", status: "succeeded" },
+      },
+    ]);
+    const firstDevice = await requireDatabase()
+      .selectFrom("devices")
+      .selectAll()
+      .where("id", "=", "device-a")
+      .executeTakeFirstOrThrow();
+    await requireDatabase()
+      .insertInto("devices")
+      .values({
+        ...firstDevice,
+        id: "device-b",
+        hardware_id: "hardware-b",
+        name: "Beta",
+        reported_name: "Beta",
+      })
+      .executeTakeFirstOrThrow();
+
+    await context.service.startOverride({
+      expectedRevision: 0,
+      target: { targetType: "channel", targetId: "channel-blue" },
+      valuePercentage: 70,
+    });
+    await vi.waitFor(() =>
+      expect(context.commands.calls.map(({ deviceId }) => deviceId)).toEqual([
+        "device-a",
+        "device-b",
+      ]),
+    );
+    await expect(
+      context.repository.getManualOperation("operation-2"),
+    ).resolves.toMatchObject({ status: "in_flight" });
+
+    finishDeviceA({
+      kind: "completed",
+      operation: { id: "child-device-a", status: "succeeded" },
+    });
+    await waitForOverrideStatus(context.repository, "override-1", "active");
+    await expect(
+      context.repository.getManualOperation("operation-2"),
+    ).resolves.toMatchObject({
+      result: {
+        childOperationIds: ["child-device-a", "child-device-b"],
+      },
+    });
+  });
+
   it("resumes a persisted active override after controller restart without issuing a duplicate start", async () => {
     const context = await createContext();
     await context.service.startOverride({
@@ -391,10 +452,18 @@ class TestCommandPort implements ManualOverrideDeviceCommandPort {
   reconciliationCallCount = 0;
   reconciliationError: Error | null = null;
   onDispatch: ((callIndex: number) => void) | null = null;
-  readonly #results: ManualOverrideDeviceDispatchResult[];
+  readonly #results: (
+    | ManualOverrideDeviceDispatchResult
+    | Promise<ManualOverrideDeviceDispatchResult>
+  )[];
   #sequence = 0;
 
-  constructor(results: readonly ManualOverrideDeviceDispatchResult[] = []) {
+  constructor(
+    results: readonly (
+      | ManualOverrideDeviceDispatchResult
+      | Promise<ManualOverrideDeviceDispatchResult>
+    )[] = [],
+  ) {
     this.#results = [...results];
   }
 
@@ -414,12 +483,10 @@ class TestCommandPort implements ManualOverrideDeviceCommandPort {
       overwrite: request.overwrite,
     });
     this.onDispatch?.(this.calls.length);
-    return (
-      this.#results.shift() ?? {
-        kind: "completed",
-        operation: { id: `child-${++this.#sequence}`, status: "succeeded" },
-      }
-    );
+    return await (this.#results.shift() ?? {
+      kind: "completed",
+      operation: { id: `child-${++this.#sequence}`, status: "succeeded" },
+    });
   }
 
   async reconcileUnknownOutcomes(
@@ -434,7 +501,10 @@ class TestCommandPort implements ManualOverrideDeviceCommandPort {
 }
 
 async function createContext(
-  results: readonly ManualOverrideDeviceDispatchResult[] = [],
+  results: readonly (
+    | ManualOverrideDeviceDispatchResult
+    | Promise<ManualOverrideDeviceDispatchResult>
+  )[] = [],
 ): Promise<{
   readonly repository: ManualOverrideRepository;
   readonly service: ManualOverrideService;

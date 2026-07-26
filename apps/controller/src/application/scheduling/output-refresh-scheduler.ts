@@ -79,6 +79,42 @@ export interface OutputRefreshTickReport {
   readonly diagnostics: readonly OutputRefreshDiagnostic[];
 }
 
+interface OutputRefreshDeviceReport {
+  readonly operationCount: number;
+  readonly diagnostics: readonly OutputRefreshDiagnostic[];
+}
+
+interface OutputRefreshDeviceBatch {
+  readonly commands: readonly ScheduledOutputRefreshCommand[];
+  readonly resolve: (report: OutputRefreshDeviceReport) => void;
+  readonly reject: (error: Error) => void;
+}
+
+interface OutputRefreshDeviceWorker {
+  pendingBatch: OutputRefreshDeviceBatch | null;
+  task: Promise<void> | null;
+}
+
+type OutputRefreshDeviceOutcome =
+  | {
+      readonly kind: "completed";
+      readonly report: OutputRefreshDeviceReport;
+    }
+  | {
+      readonly kind: "failed";
+      readonly error: Error;
+    };
+
+type OutputRefreshReportOutcome =
+  | {
+      readonly kind: "ready";
+      readonly report: OutputRefreshTickReport;
+    }
+  | {
+      readonly kind: "failed";
+      readonly error: Error;
+    };
+
 export interface OutputRefreshSchedulerOptions {
   readonly clock: SchedulingClock;
   readonly timer: SchedulingTimer;
@@ -100,11 +136,15 @@ export class OutputRefreshScheduler {
   readonly #onTick: (report: OutputRefreshTickReport) => void;
   readonly #onError: (error: Error) => void;
   readonly #retryAfterByDevice = new Map<string, number>();
+  readonly #deviceWorkers = new Map<string, OutputRefreshDeviceWorker>();
+  readonly #reportTasks = new Set<Promise<void>>();
+  #reportTail: Promise<void> = Promise.resolve();
   #cancelTimer: CancelScheduledTask | null = null;
   #activeTick: Promise<void> | null = null;
   #nextDeadlineMs: number | null = null;
   #lastMonotonicMs: number | null = null;
   #fatalError: Error | null = null;
+  #fatalDrainPending = false;
   #started = false;
   #stopping = false;
 
@@ -150,9 +190,12 @@ export class OutputRefreshScheduler {
     this.#stopping = true;
     this.#cancelTimer?.();
     this.#cancelTimer = null;
+    this.#discardPendingBatches();
     if (this.#activeTick !== null) {
       await this.#activeTick;
     }
+    await this.#drainDeviceWorkers();
+    await Promise.all([...this.#reportTasks]);
     this.#started = false;
     if (this.#fatalError !== null) {
       throw this.#fatalError;
@@ -211,14 +254,13 @@ export class OutputRefreshScheduler {
 
   async #runTickCycle(): Promise<void> {
     try {
-      const report = await this.#executeTick();
-      this.#onTick(report);
+      await this.#executeTick();
     } catch (error) {
       this.#fail(toError(error));
     }
   }
 
-  async #executeTick(): Promise<OutputRefreshTickReport> {
+  async #executeTick(): Promise<void> {
     const startedAtMonotonicMs = this.#readMonotonicNow();
     const { date, epochMs } = readUtcTimestamp(this.#clock);
     const evaluatedUtcMinute = utcMinuteOfDay(date);
@@ -252,14 +294,10 @@ export class OutputRefreshScheduler {
       scheduledCommands,
       manualOverrides,
     );
-    let operationCount = 0;
-    const deferredDeviceIds = new Set<string>();
+    const commandsByDevice = new Map<string, ScheduledOutputRefreshCommand[]>();
     for (const command of effectiveCommands) {
       if (this.#stopping) {
         break;
-      }
-      if (deferredDeviceIds.has(command.deviceId)) {
-        continue;
       }
       const retryAfterMs = this.#retryAfterByDevice.get(command.deviceId);
       if (retryAfterMs !== undefined && retryAfterMs > startedAtMonotonicMs) {
@@ -268,12 +306,120 @@ export class OutputRefreshScheduler {
       if (retryAfterMs !== undefined) {
         this.#retryAfterByDevice.delete(command.deviceId);
       }
-      const dispatch = await this.#commands.dispatch(command.deviceId, {
-        kind: "set_pwm",
-        pin: command.pin,
-        value: command.value,
-        overwrite: command.overwrite,
-      });
+      const deviceCommands = commandsByDevice.get(command.deviceId);
+      if (deviceCommands === undefined) {
+        commandsByDevice.set(command.deviceId, [command]);
+      } else {
+        deviceCommands.push(command);
+      }
+    }
+    const deviceReports = [...commandsByDevice.entries()].map(
+      ([deviceId, commands]) => this.#offerDeviceBatch(deviceId, commands),
+    );
+    this.#queueTickReport({
+      startedAtMonotonicMs,
+      evaluatedUtcMinute,
+      outputCount: effectiveCommands.length,
+      diagnostics,
+      deviceReports,
+    });
+  }
+
+  #offerDeviceBatch(
+    deviceId: string,
+    commands: readonly ScheduledOutputRefreshCommand[],
+  ): Promise<OutputRefreshDeviceReport> {
+    const result = new Promise<OutputRefreshDeviceReport>((resolve, reject) => {
+      const worker = this.#deviceWorkers.get(deviceId) ?? {
+        pendingBatch: null,
+        task: null,
+      };
+      this.#deviceWorkers.set(deviceId, worker);
+      worker.pendingBatch?.resolve(emptyDeviceReport());
+      worker.pendingBatch = {
+        commands,
+        resolve,
+        reject: (error) => reject(error),
+      };
+      if (worker.task === null) {
+        this.#startDeviceWorker(deviceId, worker);
+      }
+    });
+    return result;
+  }
+
+  #startDeviceWorker(
+    deviceId: string,
+    worker: OutputRefreshDeviceWorker,
+  ): void {
+    const running = this.#runDeviceWorker(deviceId, worker).then(
+      () => undefined,
+      () => this.#haltForFatalDrain(),
+    );
+    worker.task = running;
+    void running.then(() => {
+      if (worker.task !== running) {
+        return;
+      }
+      worker.task = null;
+      if (!this.#stopping && worker.pendingBatch !== null) {
+        this.#startDeviceWorker(deviceId, worker);
+      } else if (worker.pendingBatch === null) {
+        this.#deviceWorkers.delete(deviceId);
+      }
+    });
+  }
+
+  async #runDeviceWorker(
+    deviceId: string,
+    worker: OutputRefreshDeviceWorker,
+  ): Promise<void> {
+    while (!this.#stopping && worker.pendingBatch !== null) {
+      const batch = worker.pendingBatch;
+      worker.pendingBatch = null;
+      try {
+        batch.resolve(
+          await this.#executeDeviceCommands(deviceId, worker, batch.commands),
+        );
+      } catch (error) {
+        const normalized = toError(error);
+        batch.reject(normalized);
+        throw normalized;
+      }
+    }
+  }
+
+  async #executeDeviceCommands(
+    deviceId: string,
+    worker: OutputRefreshDeviceWorker,
+    commands: readonly ScheduledOutputRefreshCommand[],
+  ): Promise<OutputRefreshDeviceReport> {
+    const diagnostics: OutputRefreshDiagnostic[] = [];
+    let operationCount = 0;
+    const retryAfterMs = this.#retryAfterByDevice.get(deviceId);
+    const nowMs = this.#readMonotonicNow();
+    if (retryAfterMs !== undefined && retryAfterMs > nowMs) {
+      return { operationCount, diagnostics };
+    }
+    if (retryAfterMs !== undefined) {
+      this.#retryAfterByDevice.delete(deviceId);
+    }
+    for (const command of commands) {
+      if (this.#stopping) {
+        break;
+      }
+      const dispatch = await this.#commands.dispatch(
+        command.deviceId,
+        {
+          kind: "set_pwm",
+          pin: command.pin,
+          value: command.value,
+          overwrite: command.overwrite,
+        },
+        {
+          priority: "background",
+        },
+      );
       if (dispatch.kind === "blocked") {
         diagnostics.push({
           code: "scheduled_operation_blocked",
@@ -292,22 +438,126 @@ export class OutputRefreshScheduler {
           operationId: dispatch.operation.id,
           status: dispatch.operation.status,
         });
-        deferredDeviceIds.add(command.deviceId);
         this.#retryAfterByDevice.set(
           command.deviceId,
           this.#readMonotonicNow() + OUTPUT_RETRY_COOLDOWN_MS,
         );
+        break;
+      }
+      if (worker.pendingBatch !== null) {
+        break;
       }
     }
-
     return {
-      startedAtMonotonicMs,
-      completedAtMonotonicMs: this.#readMonotonicNow(),
-      evaluatedUtcMinute,
-      outputCount: effectiveCommands.length,
       operationCount,
       diagnostics,
     };
+  }
+
+  #queueTickReport(input: {
+    readonly startedAtMonotonicMs: number;
+    readonly evaluatedUtcMinute: number;
+    readonly outputCount: number;
+    readonly diagnostics: readonly OutputRefreshDiagnostic[];
+    readonly deviceReports: readonly Promise<OutputRefreshDeviceReport>[];
+  }): void {
+    const deviceOutcomes = input.deviceReports.map((deviceReport) =>
+      deviceReport.then(
+        (report): OutputRefreshDeviceOutcome => ({
+          kind: "completed",
+          report,
+        }),
+        (error): OutputRefreshDeviceOutcome => ({
+          kind: "failed",
+          error: toError(error),
+        }),
+      ),
+    );
+    const outcome = Promise.all(deviceOutcomes).then(
+      (
+        settledDevices,
+      ): OutputRefreshReportOutcome | Promise<OutputRefreshReportOutcome> => {
+        const failures = settledDevices.flatMap((settled) =>
+          settled.kind === "failed" ? [settled.error] : [],
+        );
+        if (failures.length > 0) {
+          return this.#drainDeviceWorkers().then(
+            (): OutputRefreshReportOutcome => ({
+              kind: "failed",
+              error: new AggregateError(
+                failures,
+                "One or more output refresh device workers failed",
+              ),
+            }),
+          );
+        }
+        const diagnostics = [...input.diagnostics];
+        let operationCount = 0;
+        for (const settled of settledDevices) {
+          if (settled.kind !== "completed") {
+            continue;
+          }
+          const { report } = settled;
+          operationCount += report.operationCount;
+          diagnostics.push(...report.diagnostics);
+        }
+        try {
+          return {
+            kind: "ready",
+            report: {
+              startedAtMonotonicMs: input.startedAtMonotonicMs,
+              completedAtMonotonicMs: this.#readMonotonicNow(),
+              evaluatedUtcMinute: input.evaluatedUtcMinute,
+              outputCount: input.outputCount,
+              operationCount,
+              diagnostics,
+            },
+          };
+        } catch (error) {
+          return { kind: "failed", error: toError(error) };
+        }
+      },
+    );
+    const reportTask = this.#reportTail
+      .then(async () => {
+        const settled = await outcome;
+        if (settled.kind === "failed") {
+          if (this.#fatalError === null) {
+            this.#fail(settled.error);
+          }
+          return;
+        }
+        if (this.#fatalError === null && !this.#fatalDrainPending) {
+          this.#onTick(settled.report);
+        }
+      })
+      .catch((error) => this.#fail(toError(error)));
+    this.#reportTail = reportTask;
+    this.#reportTasks.add(reportTask);
+    void reportTask.then(() => this.#reportTasks.delete(reportTask));
+  }
+
+  #discardPendingBatches(): void {
+    for (const worker of this.#deviceWorkers.values()) {
+      worker.pendingBatch?.resolve(emptyDeviceReport());
+      worker.pendingBatch = null;
+    }
+  }
+
+  async #drainDeviceWorkers(): Promise<void> {
+    await Promise.all(
+      [...this.#deviceWorkers.values()].flatMap(({ task }) =>
+        task === null ? [] : [task],
+      ),
+    );
+  }
+
+  #haltForFatalDrain(): void {
+    this.#fatalDrainPending = true;
+    this.#stopping = true;
+    this.#cancelTimer?.();
+    this.#cancelTimer = null;
+    this.#discardPendingBatches();
   }
 
   #advanceDeadline(): void {
@@ -346,10 +596,16 @@ export class OutputRefreshScheduler {
       );
     }
     this.#fatalError ??= fatalError;
+    this.#fatalDrainPending = false;
     this.#stopping = true;
     this.#cancelTimer?.();
     this.#cancelTimer = null;
+    this.#discardPendingBatches();
   }
+}
+
+function emptyDeviceReport(): OutputRefreshDeviceReport {
+  return { operationCount: 0, diagnostics: [] };
 }
 
 function toError(error: unknown): Error {

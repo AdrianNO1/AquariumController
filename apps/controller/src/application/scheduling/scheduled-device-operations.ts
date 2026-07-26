@@ -1,11 +1,13 @@
 import type {
+  DeviceOperationExecutionOptions,
   DeviceOperationRequest,
+  DeviceOperationResult,
   DeviceOperationTerminalStatus,
 } from "../operations/device-operation-types.js";
 
 export type ScheduledDeviceOperationRequest = Extract<
   DeviceOperationRequest,
-  { readonly kind: "set_pwm" | "sync_time" }
+  { readonly kind: "schedule" | "set_pwm" | "sync_time" }
 >;
 
 export type ScheduledDeviceOperationStatus =
@@ -14,12 +16,14 @@ export type ScheduledDeviceOperationStatus =
 export interface ScheduledDeviceOperationCompletion {
   readonly id: string;
   readonly status: ScheduledDeviceOperationStatus;
+  readonly result: DeviceOperationResult | null;
 }
 
 export interface ScheduledDeviceOperationPort {
   executeDeviceOperation(
     deviceId: string,
     request: ScheduledDeviceOperationRequest,
+    options?: DeviceOperationExecutionOptions,
   ): Promise<ScheduledDeviceOperationCompletion>;
 }
 
@@ -36,14 +40,14 @@ export type ScheduledOperationDispatchResult =
     };
 
 /**
- * Serializes scheduler-owned commands before they reach the persistent device
- * operation service. Persistence/invariant failures stop the lane, while an
- * individual device's unknown wire outcome remains durable without blocking
- * commands for other devices.
+ * Serializes scheduler-owned commands per device before they reach the
+ * persistent operation service. Persistence/invariant failures stop every
+ * lane, while an individual device's unknown wire outcome remains durable
+ * without blocking commands for other devices.
  */
 export class ScheduledDeviceOperationDispatcher {
   readonly #operations: ScheduledDeviceOperationPort;
-  #tail: Promise<void> = Promise.resolve();
+  readonly #deviceTails = new Map<string, Promise<void>>();
   #commandErrorLatched = false;
 
   constructor(operations: ScheduledDeviceOperationPort) {
@@ -57,24 +61,33 @@ export class ScheduledDeviceOperationDispatcher {
   dispatch(
     deviceId: string,
     request: ScheduledDeviceOperationRequest,
+    options: DeviceOperationExecutionOptions = {},
   ): Promise<ScheduledOperationDispatchResult> {
-    const result = this.#tail.then(() =>
-      this.#dispatchExclusive(deviceId, request),
+    const prior = this.#deviceTails.get(deviceId) ?? Promise.resolve();
+    const result = prior.then(() =>
+      this.#dispatchExclusive(deviceId, request, options),
     );
-    this.#tail = result.then(
+    const tail = result.then(
       () => undefined,
       () => undefined,
     );
+    this.#deviceTails.set(deviceId, tail);
+    void tail.then(() => {
+      if (this.#deviceTails.get(deviceId) === tail) {
+        this.#deviceTails.delete(deviceId);
+      }
+    });
     return result;
   }
 
   async drain(): Promise<void> {
-    await this.#tail;
+    await Promise.all(this.#deviceTails.values());
   }
 
   async #dispatchExclusive(
     deviceId: string,
     request: ScheduledDeviceOperationRequest,
+    options: DeviceOperationExecutionOptions,
   ): Promise<ScheduledOperationDispatchResult> {
     const blockedReason = this.blockedReason;
     if (blockedReason !== null) {
@@ -86,6 +99,7 @@ export class ScheduledDeviceOperationDispatcher {
       operation = await this.#operations.executeDeviceOperation(
         deviceId,
         request,
+        options,
       );
     } catch (error) {
       this.#commandErrorLatched = true;

@@ -26,6 +26,8 @@ const NON_RETAINED_QOS_ZERO = {
 } as const;
 const QOS_ZERO_SUBSCRIPTION = { qos: QOS_ZERO } as const;
 const DEFAULT_RESPONSE_TIMEOUT_MS = 5_000;
+const DEFAULT_MAX_CONCURRENT_DEVICE_LANES = 4;
+const MAX_CONCURRENT_DEVICE_LANES = 32;
 const MAX_RAW_PAYLOAD_PREVIEW = 2_048;
 const MIN_LEGACY_PIN = 0;
 const MAX_LEGACY_PIN = 63;
@@ -54,6 +56,12 @@ export interface LegacyWireCommand {
   readonly command: string;
   readonly target: LegacyDeviceTarget;
   readonly expectedResponse: LegacyExpectedResponse;
+}
+
+export type LegacyCommandPriority = "interactive" | "background";
+
+export interface LegacyCommandExecutionOptions {
+  readonly priority?: LegacyCommandPriority;
 }
 
 interface OutcomeBase {
@@ -142,6 +150,8 @@ export type LegacyMqttInteraction =
   | {
       readonly kind: "batch_published";
       readonly operationId: string;
+      readonly requestId: string;
+      readonly targetId: string;
       readonly batchIndex: number;
       readonly frameCount: number;
       readonly payloadBytes: number;
@@ -175,6 +185,7 @@ export interface LegacyMqttTransportOptions {
   readonly clientFactory: LegacyMqttClientFactory;
   readonly topics: EspTopicSet;
   readonly responseTimeoutMs?: number;
+  readonly maxConcurrentDeviceLanes?: number;
   readonly callbacks?: LegacyMqttTransportCallbacks;
   readonly now?: () => number;
   /** Stable only for this transport instance; injectable for deterministic tests. */
@@ -182,6 +193,7 @@ export interface LegacyMqttTransportOptions {
 }
 
 interface NormalizedCommand {
+  readonly originalIndex: number;
   readonly command: string;
   readonly targetId: string;
   readonly expectedResponse: LegacyExpectedResponse;
@@ -189,11 +201,19 @@ interface NormalizedCommand {
 
 export type LegacyDiscoveryRequestResult = "published" | "skipped_busy";
 
-interface QueuedOperation {
+interface QueuedDeviceOperation {
   readonly operationId: string;
+  readonly targetId: string;
+  readonly priority: LegacyCommandPriority;
   readonly commands: readonly NormalizedCommand[];
-  readonly resolve: (result: LegacyWireOperationResult) => void;
+  readonly resolve: (result: DeviceWireOperationResult) => void;
   readonly reject: (error: Error) => void;
+}
+
+interface DeviceWireOperationResult {
+  readonly startedAtMs: number;
+  readonly completedAtMs: number;
+  readonly outcomes: readonly LegacyCommandOutcome[];
 }
 
 interface BatchExpectation {
@@ -210,11 +230,21 @@ interface ActiveBatch {
   readonly outcomes: Map<number, LegacyCommandOutcome>;
   readonly responsesEnabled: () => boolean;
   readonly enableResponses: () => void;
+  readonly armTimeout: () => void;
   readonly promise: Promise<readonly LegacyCommandOutcome[]>;
   readonly settleUnknown: (
     reason: "timeout" | "publish_failed" | "disconnected" | "transport_stopped",
   ) => void;
   readonly settleIfComplete: () => void;
+}
+
+type PublicationCancellationReason = "disconnected" | "transport_stopped";
+
+interface PublicationGeneration {
+  readonly generation: number;
+  readonly promise: Promise<PublicationCancellationReason>;
+  readonly reason: () => PublicationCancellationReason | null;
+  readonly cancel: (reason: PublicationCancellationReason) => void;
 }
 
 export class LegacyMqttUnavailableError extends Error {
@@ -224,22 +254,45 @@ export class LegacyMqttUnavailableError extends Error {
   }
 }
 
+class UnsentLegacyMqttOperationError extends LegacyMqttUnavailableError {
+  public constructor(
+    message: string,
+    readonly reason: "disconnected" | "transport_stopped",
+  ) {
+    super(message);
+    this.name = "UnsentLegacyMqttOperationError";
+  }
+}
+
 export class LegacyMqttTransport {
   private readonly clientFactory: LegacyMqttClientFactory;
   private readonly topics: EspTopicSet;
   private readonly responseTimeoutMs: number;
+  private readonly maxConcurrentDeviceLanes: number;
   private readonly callbacks: LegacyMqttTransportCallbacks;
   private readonly now: () => number;
   private readonly requestSessionId: string;
-  private readonly operationQueue: QueuedOperation[] = [];
+  private readonly deviceQueues = new Map<string, QueuedDeviceOperation[]>();
+  private readonly runnableInteractiveDeviceIds: string[] = [];
+  private readonly runnableBackgroundDeviceIds: string[] = [];
+  private readonly runnablePriorityByDevice = new Map<
+    string,
+    LegacyCommandPriority
+  >();
+  private readonly activeDeviceIds = new Set<string>();
+  private readonly activeBatches = new Map<string, ActiveBatch>();
   private client: LegacyMqttClientPort | undefined;
   private removeClientListeners: Array<() => void> = [];
   private started = false;
   private ready = false;
-  private pumping = false;
+  private discoveryPublishing = false;
+  private activeDeviceLaneCount = 0;
+  private publicationQueueDepth = 0;
+  private publicationTail: Promise<void> = Promise.resolve();
   private operationSequence = 0;
+  private requestSequence = 0;
   private connectionGeneration = 0;
-  private activeBatch: ActiveBatch | undefined;
+  private publicationGeneration = createPublicationGeneration(0);
 
   public constructor(options: LegacyMqttTransportOptions) {
     assertTopicSet(options.topics);
@@ -248,10 +301,22 @@ export class LegacyMqttTransport {
     if (!Number.isSafeInteger(responseTimeoutMs) || responseTimeoutMs <= 0) {
       throw new RangeError("responseTimeoutMs must be a positive integer");
     }
+    const maxConcurrentDeviceLanes =
+      options.maxConcurrentDeviceLanes ?? DEFAULT_MAX_CONCURRENT_DEVICE_LANES;
+    if (
+      !Number.isSafeInteger(maxConcurrentDeviceLanes) ||
+      maxConcurrentDeviceLanes < 1 ||
+      maxConcurrentDeviceLanes > MAX_CONCURRENT_DEVICE_LANES
+    ) {
+      throw new RangeError(
+        `maxConcurrentDeviceLanes must be an integer from 1 to ${MAX_CONCURRENT_DEVICE_LANES}`,
+      );
+    }
 
     this.clientFactory = options.clientFactory;
     this.topics = options.topics;
     this.responseTimeoutMs = responseTimeoutMs;
+    this.maxConcurrentDeviceLanes = maxConcurrentDeviceLanes;
     this.callbacks = options.callbacks ?? {};
     this.now = options.now ?? Date.now;
     this.requestSessionId = normalizeRequestSessionId(options.requestSessionId);
@@ -266,14 +331,23 @@ export class LegacyMqttTransport {
     this.client = client;
     this.started = true;
     this.ready = false;
-    ++this.connectionGeneration;
+    this.rotatePublicationGeneration("transport_stopped");
     this.removeClientListeners = [
       client.onConnected(() => {
-        const generation = ++this.connectionGeneration;
+        const replacedReadyConnection = this.ready;
+        this.ready = false;
+        const generation = this.rotatePublicationGeneration("disconnected");
+        if (replacedReadyConnection) {
+          this.rejectQueued(
+            new UnsentLegacyMqttOperationError(
+              "MQTT connection was replaced before queued work was sent",
+              "disconnected",
+            ),
+          );
+        }
         void this.handleConnected(client, generation);
       }),
       client.onDisconnected(() => {
-        ++this.connectionGeneration;
         this.handleDisconnected();
       }),
       client.onError((error) => {
@@ -292,7 +366,7 @@ export class LegacyMqttTransport {
     } catch (error) {
       this.started = false;
       this.client = undefined;
-      ++this.connectionGeneration;
+      this.rotatePublicationGeneration("transport_stopped");
       for (const removeListener of this.removeClientListeners.splice(0)) {
         removeListener();
       }
@@ -314,11 +388,11 @@ export class LegacyMqttTransport {
 
     this.started = false;
     this.ready = false;
-    ++this.connectionGeneration;
-    this.activeBatch?.settleUnknown("transport_stopped");
+    this.rotatePublicationGeneration("transport_stopped");
     this.rejectQueued(
-      new LegacyMqttUnavailableError(
+      new UnsentLegacyMqttOperationError(
         "MQTT transport was stopped before sending",
+        "transport_stopped",
       ),
     );
 
@@ -338,23 +412,23 @@ export class LegacyMqttTransport {
 
   public executeCommands(
     commands: readonly LegacyWireCommand[],
+    options: LegacyCommandExecutionOptions = {},
   ): Promise<LegacyWireOperationResult> {
     if (!this.started || !this.ready) {
       return Promise.reject(
         new LegacyMqttUnavailableError("MQTT transport is not ready"),
       );
     }
-    const normalizedCommands = commands.map(normalizeCommand);
+    const normalizedCommands = commands.map((command, originalIndex) =>
+      normalizeCommand(command, originalIndex),
+    );
+    const priority = normalizeCommandPriority(options.priority);
     const operationId = `wire-${++this.operationSequence}`;
-    return new Promise<LegacyWireOperationResult>((resolve, reject) => {
-      this.operationQueue.push({
-        operationId,
-        commands: normalizedCommands,
-        resolve,
-        reject,
-      });
-      void this.pumpQueue();
-    });
+    return this.executePartitionedOperation(
+      operationId,
+      normalizedCommands,
+      priority,
+    );
   }
 
   /**
@@ -367,21 +441,29 @@ export class LegacyMqttTransport {
       throw new LegacyMqttUnavailableError("MQTT transport is not ready");
     }
     if (
-      this.pumping ||
-      this.activeBatch !== undefined ||
-      this.operationQueue.length > 0
+      this.discoveryPublishing ||
+      this.publicationQueueDepth > 0 ||
+      this.activeDeviceLaneCount > 0 ||
+      this.hasQueuedOperations()
     ) {
       return "skipped_busy";
     }
 
-    this.pumping = true;
+    this.discoveryPublishing = true;
     const generation = this.connectionGeneration;
     try {
-      await client.publish(
-        this.topics.command,
-        "discover",
-        NON_RETAINED_QOS_ZERO,
-      );
+      await this.withPublicationLock(generation, async () => {
+        if (!this.isCurrentConnection(client, generation) || !this.ready) {
+          throw new LegacyMqttUnavailableError(
+            "MQTT disconnected before publishing discovery",
+          );
+        }
+        await client.publish(
+          this.topics.command,
+          "discover",
+          NON_RETAINED_QOS_ZERO,
+        );
+      });
       if (!this.isCurrentConnection(client, generation) || !this.ready) {
         throw new LegacyMqttUnavailableError(
           "MQTT disconnected while publishing discovery",
@@ -399,8 +481,8 @@ export class LegacyMqttTransport {
       });
       throw normalizedError;
     } finally {
-      this.pumping = false;
-      void this.pumpQueue();
+      this.discoveryPublishing = false;
+      this.pumpDeviceQueues();
     }
   }
 
@@ -417,19 +499,31 @@ export class LegacyMqttTransport {
         return;
       }
 
-      await client.publish(
-        this.topics.command,
-        "discover",
-        NON_RETAINED_QOS_ZERO,
+      const discoveryPublished = await this.withPublicationLock(
+        generation,
+        async () => {
+          if (!this.isCurrentConnection(client, generation)) {
+            return false;
+          }
+          await client.publish(
+            this.topics.command,
+            "discover",
+            NON_RETAINED_QOS_ZERO,
+          );
+          return true;
+        },
       );
-      if (!this.isCurrentConnection(client, generation)) {
+      if (
+        !discoveryPublished ||
+        !this.isCurrentConnection(client, generation)
+      ) {
         return;
       }
 
       this.ready = true;
       this.emitInteraction({ kind: "discovery_published", atMs: this.now() });
       this.emitLifecycle("ready");
-      void this.pumpQueue();
+      this.pumpDeviceQueues();
     } catch (error) {
       this.ready = false;
       if (!this.isCurrentConnection(client, generation)) {
@@ -449,10 +543,11 @@ export class LegacyMqttTransport {
       return;
     }
     this.ready = false;
-    this.activeBatch?.settleUnknown("disconnected");
+    this.rotatePublicationGeneration("disconnected");
     this.rejectQueued(
-      new LegacyMqttUnavailableError(
+      new UnsentLegacyMqttOperationError(
         "MQTT disconnected before the queued operation was sent",
+        "disconnected",
       ),
     );
     this.emitLifecycle("disconnected");
@@ -552,11 +647,13 @@ export class LegacyMqttTransport {
       return;
     }
 
-    const activeBatch = this.activeBatch;
+    const activeBatch = this.activeBatches.get(parsedResponse.data.requestId);
     if (activeBatch === undefined) {
+      const reason =
+        this.activeBatches.size === 0 ? "no_active_batch" : "wrong_request";
       if (parsedResponse.data.responses.length === 0) {
         this.emitIgnoredResponse(
-          "no_active_batch",
+          reason,
           parsedResponse.data.id,
           -1,
           payloadBytes,
@@ -564,26 +661,7 @@ export class LegacyMqttTransport {
       }
       for (const response of parsedResponse.data.responses) {
         this.emitIgnoredResponse(
-          "no_active_batch",
-          parsedResponse.data.id,
-          response.index,
-          payloadBytes,
-        );
-      }
-      return;
-    }
-    if (activeBatch.requestId !== parsedResponse.data.requestId) {
-      if (parsedResponse.data.responses.length === 0) {
-        this.emitIgnoredResponse(
-          "wrong_request",
-          parsedResponse.data.id,
-          -1,
-          payloadBytes,
-        );
-      }
-      for (const response of parsedResponse.data.responses) {
-        this.emitIgnoredResponse(
-          "wrong_request",
+          reason,
           parsedResponse.data.id,
           response.index,
           payloadBytes,
@@ -714,12 +792,14 @@ export class LegacyMqttTransport {
     payloadBytes: number,
   ): void {
     const identity = responseIdentity(value);
-    const activeBatch = this.activeBatch;
+    const activeBatch =
+      identity === null
+        ? undefined
+        : this.activeBatches.get(identity.requestId);
     if (
       identity === null ||
       activeBatch === undefined ||
-      !activeBatch.responsesEnabled() ||
-      identity.requestId !== activeBatch.requestId
+      !activeBatch.responsesEnabled()
     ) {
       return;
     }
@@ -748,47 +828,205 @@ export class LegacyMqttTransport {
     activeBatch.settleIfComplete();
   }
 
-  private async pumpQueue(): Promise<void> {
-    if (this.pumping) {
-      return;
-    }
-    this.pumping = true;
-    try {
-      while (this.operationQueue.length > 0) {
-        const queued = this.operationQueue.shift();
-        if (queued === undefined) {
-          break;
-        }
-        if (!this.started || !this.ready) {
-          queued.reject(
-            new LegacyMqttUnavailableError("MQTT transport is not ready"),
-          );
-          continue;
-        }
-        try {
-          queued.resolve(await this.executeQueuedOperation(queued));
-        } catch (error) {
-          queued.reject(toError(error));
-        }
-      }
-    } finally {
-      this.pumping = false;
-    }
-  }
-
-  private async executeQueuedOperation(
-    operation: QueuedOperation,
+  private async executePartitionedOperation(
+    operationId: string,
+    commands: readonly NormalizedCommand[],
+    priority: LegacyCommandPriority,
   ): Promise<LegacyWireOperationResult> {
     const startedAtMs = this.now();
-    if (operation.commands.length === 0) {
+    if (commands.length === 0) {
       return {
-        operationId: operation.operationId,
+        operationId,
         startedAtMs,
         completedAtMs: this.now(),
         outcomes: [],
       };
     }
 
+    const groups = partitionCommandsByDevice(commands);
+    const groupResults = await Promise.all(
+      groups.map(async ({ targetId, commands: deviceCommands }) => {
+        try {
+          return {
+            kind: "completed" as const,
+            commands: deviceCommands,
+            result: await this.enqueueDeviceOperation({
+              operationId,
+              targetId,
+              priority,
+              commands: deviceCommands,
+            }),
+          };
+        } catch (error) {
+          return {
+            kind: "rejected" as const,
+            commands: deviceCommands,
+            error: toError(error),
+          };
+        }
+      }),
+    );
+    const unexpectedFailure = groupResults.find(
+      (result) =>
+        result.kind === "rejected" &&
+        !(result.error instanceof UnsentLegacyMqttOperationError),
+    );
+    if (unexpectedFailure?.kind === "rejected") {
+      throw unexpectedFailure.error;
+    }
+    const completedGroups = groupResults.filter(
+      (
+        result,
+      ): result is Extract<
+        (typeof groupResults)[number],
+        { kind: "completed" }
+      > => result.kind === "completed",
+    );
+    if (completedGroups.length === 0) {
+      const rejection = groupResults.find(
+        (
+          result,
+        ): result is Extract<
+          (typeof groupResults)[number],
+          { kind: "rejected" }
+        > => result.kind === "rejected",
+      );
+      throw (
+        rejection?.error ??
+        new LegacyMqttUnavailableError("MQTT operation could not be sent")
+      );
+    }
+
+    const outcomes = new Map<number, LegacyCommandOutcome>();
+    for (const group of completedGroups) {
+      for (const outcome of group.result.outcomes) {
+        outcomes.set(outcome.index, outcome);
+      }
+    }
+    for (const group of groupResults) {
+      if (
+        group.kind !== "rejected" ||
+        !(group.error instanceof UnsentLegacyMqttOperationError)
+      ) {
+        continue;
+      }
+      addNotAttemptedOutcomes(group.commands, outcomes, group.error.reason);
+    }
+    return {
+      operationId,
+      startedAtMs,
+      completedAtMs: this.now(),
+      outcomes: [...outcomes.values()].sort(
+        (left, right) => left.index - right.index,
+      ),
+    };
+  }
+
+  private enqueueDeviceOperation(
+    operation: Omit<QueuedDeviceOperation, "resolve" | "reject">,
+  ): Promise<DeviceWireOperationResult> {
+    return new Promise<DeviceWireOperationResult>((resolve, reject) => {
+      const queue = this.deviceQueues.get(operation.targetId) ?? [];
+      queue.push({ ...operation, resolve, reject });
+      this.deviceQueues.set(operation.targetId, queue);
+      this.scheduleRunnableDevice(operation.targetId);
+      this.pumpDeviceQueues();
+    });
+  }
+
+  private pumpDeviceQueues(): void {
+    if (!this.started || !this.ready || this.discoveryPublishing) {
+      return;
+    }
+    while (
+      this.activeDeviceLaneCount < this.maxConcurrentDeviceLanes &&
+      (this.runnableInteractiveDeviceIds.length > 0 ||
+        this.runnableBackgroundDeviceIds.length > 0)
+    ) {
+      const runnable = this.takeNextRunnableDevice();
+      if (runnable === null || this.activeDeviceIds.has(runnable.targetId)) {
+        continue;
+      }
+      const queue = this.deviceQueues.get(runnable.targetId);
+      const operation = queue?.shift();
+      if (queue === undefined || operation === undefined) {
+        this.deviceQueues.delete(runnable.targetId);
+        continue;
+      }
+
+      this.activeDeviceIds.add(runnable.targetId);
+      this.activeDeviceLaneCount += 1;
+      const task = this.executeQueuedDeviceOperation(operation);
+      void task
+        .then(operation.resolve, (error) => operation.reject(toError(error)))
+        .finally(() => {
+          this.activeDeviceIds.delete(runnable.targetId);
+          this.activeDeviceLaneCount -= 1;
+          const remaining = this.deviceQueues.get(runnable.targetId);
+          if (remaining === undefined || remaining.length === 0) {
+            this.deviceQueues.delete(runnable.targetId);
+          } else {
+            this.scheduleRunnableDevice(runnable.targetId);
+          }
+          this.pumpDeviceQueues();
+        });
+    }
+  }
+
+  private scheduleRunnableDevice(targetId: string): void {
+    if (this.activeDeviceIds.has(targetId)) {
+      return;
+    }
+    const queue = this.deviceQueues.get(targetId);
+    const priority = queue?.[0]?.priority ?? null;
+    const currentPriority = this.runnablePriorityByDevice.get(targetId);
+    if (currentPriority === priority) {
+      return;
+    }
+    if (currentPriority !== undefined) {
+      removeArrayValue(
+        currentPriority === "interactive"
+          ? this.runnableInteractiveDeviceIds
+          : this.runnableBackgroundDeviceIds,
+        targetId,
+      );
+      this.runnablePriorityByDevice.delete(targetId);
+    }
+    if (priority === null) {
+      return;
+    }
+    const runnableDeviceIds =
+      priority === "interactive"
+        ? this.runnableInteractiveDeviceIds
+        : this.runnableBackgroundDeviceIds;
+    runnableDeviceIds.push(targetId);
+    this.runnablePriorityByDevice.set(targetId, priority);
+  }
+
+  private takeNextRunnableDevice(): {
+    readonly targetId: string;
+    readonly priority: LegacyCommandPriority;
+  } | null {
+    const priority: LegacyCommandPriority =
+      this.runnableInteractiveDeviceIds.length > 0
+        ? "interactive"
+        : "background";
+    const runnableDeviceIds =
+      priority === "interactive"
+        ? this.runnableInteractiveDeviceIds
+        : this.runnableBackgroundDeviceIds;
+    const targetId = runnableDeviceIds.shift();
+    if (targetId === undefined) {
+      return null;
+    }
+    this.runnablePriorityByDevice.delete(targetId);
+    return { targetId, priority };
+  }
+
+  private async executeQueuedDeviceOperation(
+    operation: QueuedDeviceOperation,
+  ): Promise<DeviceWireOperationResult> {
+    const startedAtMs = this.now();
     const batches = batchLegacyCommands(
       operation.commands.map((command) => command.command),
     );
@@ -801,19 +1039,31 @@ export class LegacyMqttTransport {
         break;
       }
 
-      const batchOutcomes = await this.executeBatch(
-        operation.operationId,
-        batchIndex,
-        batch,
-        operation.commands,
-      );
+      let batchOutcomes: readonly LegacyCommandOutcome[];
+      try {
+        batchOutcomes = await this.executeBatch(
+          operation.operationId,
+          operation.targetId,
+          batchIndex,
+          batch,
+          operation.commands,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof UnsentLegacyMqttOperationError) ||
+          outcomes.size === 0
+        ) {
+          throw error;
+        }
+        addNotAttemptedOutcomes(operation.commands, outcomes, error.reason);
+        break;
+      }
       for (const outcome of batchOutcomes) {
         outcomes.set(outcome.index, outcome);
       }
     }
 
     return {
-      operationId: operation.operationId,
       startedAtMs,
       completedAtMs: this.now(),
       outcomes: [...outcomes.values()].sort(
@@ -824,79 +1074,127 @@ export class LegacyMqttTransport {
 
   private async executeBatch(
     operationId: string,
+    targetId: string,
     batchIndex: number,
     batch: LegacyCommandBatch,
     commands: readonly NormalizedCommand[],
   ): Promise<readonly LegacyCommandOutcome[]> {
     const client = this.client;
+    const generation = this.connectionGeneration;
     if (client === undefined) {
-      throw new LegacyMqttUnavailableError("MQTT client is unavailable");
+      throw new UnsentLegacyMqttOperationError(
+        "MQTT client was unavailable before publication",
+        this.started ? "disconnected" : "transport_stopped",
+      );
     }
-
-    const activeBatch = this.createActiveBatch(
-      operationId,
-      batchIndex,
-      batch,
-      commands,
-    );
-    this.activeBatch = activeBatch;
+    const requestId = this.nextRequestId();
     const frames = encodeLegacyMessage(
-      encodeCorrelatedLegacyRequest(activeBatch.requestId, batch.payload),
+      encodeCorrelatedLegacyRequest(requestId, batch.payload),
     );
-    let publishedFrames = 0;
+    let activeBatch: ActiveBatch | undefined;
+    try {
+      await this.withPublicationLock(generation, async () => {
+        if (!this.ready || !this.isCurrentConnection(client, generation)) {
+          throw new UnsentLegacyMqttOperationError(
+            "MQTT transport became unavailable before publication",
+            this.started ? "disconnected" : "transport_stopped",
+          );
+        }
 
-    for (const [frameIndex, frame] of frames.entries()) {
-      if (frameIndex === frames.length - 1) {
-        activeBatch.enableResponses();
-      }
-      const publishResult = client
-        .publish(this.topics.command, frame, NON_RETAINED_QOS_ZERO)
-        .then(
-          () => ({ kind: "published" as const }),
-          (error: Error) => ({ kind: "publish_failed" as const, error }),
+        activeBatch = this.createActiveBatch(
+          operationId,
+          requestId,
+          batchIndex,
+          batch,
+          commands,
         );
-      const raceResult = await Promise.race([
-        publishResult,
-        activeBatch.promise.then(() => ({ kind: "settled" as const })),
-      ]);
-      if (raceResult.kind === "settled") {
-        break;
-      }
-      if (raceResult.kind === "publish_failed") {
-        this.emitInteraction({
-          kind: "transport_error",
-          phase: "publish",
-          detail: raceResult.error.message,
-          atMs: this.now(),
-        });
-        activeBatch.settleUnknown("publish_failed");
-        break;
-      }
-      publishedFrames += 1;
-    }
+        this.activeBatches.set(requestId, activeBatch);
+        let publishedFrames = 0;
 
-    if (publishedFrames === frames.length) {
-      this.emitInteraction({
-        kind: "batch_published",
-        operationId,
-        batchIndex,
-        frameCount: frames.length,
-        payloadBytes: frames.reduce(
-          (total, frame) => total + utf8ByteLength(frame),
-          0,
-        ),
-        atMs: this.now(),
+        for (const [frameIndex, frame] of frames.entries()) {
+          if (frameIndex === frames.length - 1) {
+            activeBatch.enableResponses();
+          }
+          const publishResult = client
+            .publish(this.topics.command, frame, NON_RETAINED_QOS_ZERO)
+            .then(
+              () => ({ kind: "published" as const }),
+              (error: Error) => ({
+                kind: "publish_failed" as const,
+                error,
+              }),
+            );
+          const raceResult = await Promise.race([
+            publishResult,
+            activeBatch.promise.then((outcomes) => ({
+              kind: "settled" as const,
+              outcomes,
+            })),
+          ]);
+          if (raceResult.kind === "settled") {
+            if (
+              frameIndex === frames.length - 1 &&
+              raceResult.outcomes.every(
+                ({ status }) => status === "succeeded" || status === "failed",
+              )
+            ) {
+              publishedFrames = frames.length;
+            }
+            break;
+          }
+          if (raceResult.kind === "publish_failed") {
+            this.emitInteraction({
+              kind: "transport_error",
+              phase: "publish",
+              detail: raceResult.error.message,
+              atMs: this.now(),
+            });
+            activeBatch.settleUnknown("publish_failed");
+            break;
+          }
+          publishedFrames += 1;
+        }
+
+        if (publishedFrames === frames.length) {
+          this.emitInteraction({
+            kind: "batch_published",
+            operationId,
+            requestId,
+            targetId,
+            batchIndex,
+            frameCount: frames.length,
+            payloadBytes: frames.reduce(
+              (total, frame) => total + utf8ByteLength(frame),
+              0,
+            ),
+            atMs: this.now(),
+          });
+          activeBatch.armTimeout();
+        }
       });
+    } catch (error) {
+      if (
+        activeBatch === undefined ||
+        !(error instanceof UnsentLegacyMqttOperationError)
+      ) {
+        throw error;
+      }
     }
-    const outcomes = await activeBatch.promise;
-    if (this.activeBatch === activeBatch) {
-      this.activeBatch = undefined;
+    if (activeBatch === undefined) {
+      throw new Error("MQTT batch publication completed without active state");
     }
-    return outcomes;
+    try {
+      return await activeBatch.promise;
+    } finally {
+      if (this.activeBatches.get(requestId) === activeBatch) {
+        this.activeBatches.delete(requestId);
+      }
+    }
   }
 
   private createActiveBatch(
     operationId: string,
+    requestId: string,
     batchIndex: number,
     batch: LegacyCommandBatch,
     commands: readonly NormalizedCommand[],
@@ -907,12 +1205,17 @@ export class LegacyMqttTransport {
       if (command === undefined) {
         throw new RangeError("Protocol batch referenced a missing command");
       }
-      expectations.set(localIndex, { localIndex, originalIndex, command });
+      expectations.set(localIndex, {
+        localIndex,
+        originalIndex: command.originalIndex,
+        command,
+      });
     });
 
     const outcomes = new Map<number, LegacyCommandOutcome>();
     let responsesEnabled = false;
     let settled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
     let resolveOutcomes: (
       outcomes: readonly LegacyCommandOutcome[],
     ) => void = () => undefined;
@@ -924,7 +1227,10 @@ export class LegacyMqttTransport {
         return;
       }
       settled = true;
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle !== null) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
       resolveOutcomes(
         [...outcomes.values()].sort((left, right) => left.index - right.index),
       );
@@ -952,20 +1258,24 @@ export class LegacyMqttTransport {
       }
       finish();
     };
-    const timeoutHandle = setTimeout(
-      () => settleUnknown("timeout"),
-      this.responseTimeoutMs,
-    );
-
     return {
       operationId,
-      requestId: `${this.requestSessionId}-${operationId}-${batchIndex}`,
+      requestId,
       batchIndex,
       expectations,
       outcomes,
       responsesEnabled: () => responsesEnabled,
       enableResponses: () => {
         responsesEnabled = true;
+      },
+      armTimeout: () => {
+        if (settled || timeoutHandle !== null) {
+          return;
+        }
+        timeoutHandle = setTimeout(
+          () => settleUnknown("timeout"),
+          this.responseTimeoutMs,
+        );
       },
       promise,
       settleUnknown,
@@ -975,6 +1285,73 @@ export class LegacyMqttTransport {
         }
       },
     };
+  }
+
+  private nextRequestId(): string {
+    if (this.requestSequence >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError("MQTT request sequence exhausted");
+    }
+    this.requestSequence += 1;
+    return `${this.requestSessionId}-request-${this.requestSequence}`;
+  }
+
+  /**
+   * ESPs may await independent correlated responses concurrently, but each
+   * firmware instance has one chunk assembler. Keep every frame set atomic
+   * without holding the lock during the response timeout.
+   */
+  private async withPublicationLock<Result>(
+    generation: number,
+    task: () => Promise<Result>,
+  ): Promise<Result> {
+    const cancellation = this.publicationCancellationFor(generation);
+    const predecessor = this.publicationTail;
+    let release: () => void = () => undefined;
+    this.publicationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.publicationQueueDepth += 1;
+    await predecessor;
+    try {
+      const cancelledReason = cancellation.reason();
+      if (cancelledReason !== null) {
+        throw publicationCancelledError(cancelledReason);
+      }
+      return await Promise.race([
+        task(),
+        cancellation.promise.then((reason) => {
+          throw publicationCancelledError(reason);
+        }),
+      ]);
+    } finally {
+      this.publicationQueueDepth -= 1;
+      release();
+    }
+  }
+
+  private publicationCancellationFor(
+    generation: number,
+  ): PublicationGeneration {
+    if (this.publicationGeneration.generation === generation) {
+      return this.publicationGeneration;
+    }
+    const cancelled = createPublicationGeneration(generation);
+    cancelled.cancel(this.started ? "disconnected" : "transport_stopped");
+    return cancelled;
+  }
+
+  private rotatePublicationGeneration(
+    reason: PublicationCancellationReason,
+  ): number {
+    for (const activeBatch of this.activeBatches.values()) {
+      activeBatch.settleUnknown(reason);
+    }
+    this.publicationGeneration.cancel(reason);
+    this.connectionGeneration += 1;
+    this.publicationGeneration = createPublicationGeneration(
+      this.connectionGeneration,
+    );
+    return this.connectionGeneration;
   }
 
   private isCurrentConnection(
@@ -989,9 +1366,26 @@ export class LegacyMqttTransport {
   }
 
   private rejectQueued(error: Error): void {
-    for (const queued of this.operationQueue.splice(0)) {
-      queued.reject(error);
+    this.runnableInteractiveDeviceIds.splice(0);
+    this.runnableBackgroundDeviceIds.splice(0);
+    this.runnablePriorityByDevice.clear();
+    for (const [targetId, queue] of this.deviceQueues) {
+      for (const queued of queue.splice(0)) {
+        queued.reject(error);
+      }
+      if (!this.activeDeviceIds.has(targetId)) {
+        this.deviceQueues.delete(targetId);
+      }
     }
+  }
+
+  private hasQueuedOperations(): boolean {
+    for (const queue of this.deviceQueues.values()) {
+      if (queue.length > 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private emitMalformed(
@@ -1077,7 +1471,10 @@ export class LegacyMqttTransport {
   }
 }
 
-function normalizeCommand(command: LegacyWireCommand): NormalizedCommand {
+function normalizeCommand(
+  command: LegacyWireCommand,
+  originalIndex: number,
+): NormalizedCommand {
   assertTargetToken(command.target.id, "target id");
   for (const alias of command.target.aliases ?? []) {
     assertTargetToken(alias, "target alias");
@@ -1100,10 +1497,41 @@ function normalizeCommand(command: LegacyWireCommand): NormalizedCommand {
   }
 
   return {
+    originalIndex,
     command: `${command.target.id}${trimmed.slice(separatorIndex)}`,
     targetId: command.target.id,
     expectedResponse: normalizeExpectedResponse(command.expectedResponse),
   };
+}
+
+function partitionCommandsByDevice(
+  commands: readonly NormalizedCommand[],
+): readonly {
+  readonly targetId: string;
+  readonly commands: readonly NormalizedCommand[];
+}[] {
+  const commandsByDevice = new Map<string, NormalizedCommand[]>();
+  for (const command of commands) {
+    const deviceCommands = commandsByDevice.get(command.targetId) ?? [];
+    deviceCommands.push(command);
+    commandsByDevice.set(command.targetId, deviceCommands);
+  }
+  return [...commandsByDevice].map(([targetId, deviceCommands]) => ({
+    targetId,
+    commands: deviceCommands,
+  }));
+}
+
+function normalizeCommandPriority(
+  priority: LegacyCommandPriority | undefined,
+): LegacyCommandPriority {
+  if (priority === undefined) {
+    return "interactive";
+  }
+  if (priority === "interactive" || priority === "background") {
+    return priority;
+  }
+  throw new TypeError("Unsupported legacy command priority");
 }
 
 function normalizeExpectedResponse(
@@ -1202,10 +1630,10 @@ function addNotAttemptedOutcomes(
   outcomes: Map<number, LegacyCommandOutcome>,
   reason: Extract<LegacyCommandOutcome, { status: "not_attempted" }>["reason"],
 ): void {
-  commands.forEach((command, index) => {
-    if (!outcomes.has(index)) {
-      outcomes.set(index, {
-        index,
+  commands.forEach((command) => {
+    if (!outcomes.has(command.originalIndex)) {
+      outcomes.set(command.originalIndex, {
+        index: command.originalIndex,
         command: command.command,
         targetId: command.targetId,
         status: "not_attempted",
@@ -1293,6 +1721,48 @@ function normalizeRequestSessionId(value: string | undefined): string {
     );
   }
   return sessionId;
+}
+
+function createPublicationGeneration(
+  generation: number,
+): PublicationGeneration {
+  let cancelledReason: PublicationCancellationReason | null = null;
+  let resolveCancellation: (
+    reason: PublicationCancellationReason,
+  ) => void = () => undefined;
+  const promise = new Promise<PublicationCancellationReason>((resolve) => {
+    resolveCancellation = resolve;
+  });
+  return {
+    generation,
+    promise,
+    reason: () => cancelledReason,
+    cancel: (reason) => {
+      if (cancelledReason !== null) {
+        return;
+      }
+      cancelledReason = reason;
+      resolveCancellation(reason);
+    },
+  };
+}
+
+function publicationCancelledError(
+  reason: PublicationCancellationReason,
+): UnsentLegacyMqttOperationError {
+  return new UnsentLegacyMqttOperationError(
+    reason === "disconnected"
+      ? "MQTT disconnected during command publication"
+      : "MQTT transport stopped during command publication",
+    reason,
+  );
+}
+
+function removeArrayValue(values: string[], value: string): void {
+  const index = values.indexOf(value);
+  if (index >= 0) {
+    values.splice(index, 1);
+  }
 }
 
 function preview(payload: string): string {

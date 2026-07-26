@@ -15,6 +15,7 @@ import {
   DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
   deviceOperationRequestSchema,
   deviceOperationResultSchema,
+  type DeviceOperationExecutionOptions,
   type DeviceOperationResult,
 } from "../operations/device-operation-types.js";
 import { compileDeviceScheduleArtifact } from "./schedule-artifact-compiler.js";
@@ -145,6 +146,7 @@ describe("ScheduleReconciliationService", () => {
     );
     expect(document.syncTime).toBe(1_752_192_000);
     expect(request.scheduleJson.endsWith(',"syncTime":1752192000}')).toBe(true);
+    expect(request.priority).toBe("background");
 
     const storedBeforeRestart = await repository.getArtifact("device-a");
     expect(storedBeforeRestart).toMatchObject({
@@ -404,6 +406,7 @@ class RecordingScheduleOperations implements DeviceScheduleOperationPort {
   readonly requests: {
     readonly deviceId: string;
     readonly scheduleJson: string;
+    readonly priority: DeviceOperationExecutionOptions["priority"];
   }[] = [];
   readonly reconciledOperationIds: string[] = [];
   readonly firstOperationStarted: Promise<void>;
@@ -444,13 +447,18 @@ class RecordingScheduleOperations implements DeviceScheduleOperationPort {
   async executeDeviceOperation(
     deviceId: string,
     request: { readonly kind: "schedule"; readonly scheduleJson: string },
+    options: DeviceOperationExecutionOptions = {},
   ): Promise<ScheduleDeliveryOperation> {
     const parsedRequest = deviceOperationRequestSchema.parse(request);
     if (parsedRequest.kind !== "schedule") {
       throw new Error("Expected a schedule operation request");
     }
     const callNumber = this.requests.length + 1;
-    this.requests.push({ deviceId, scheduleJson: parsedRequest.scheduleJson });
+    this.requests.push({
+      deviceId,
+      scheduleJson: parsedRequest.scheduleJson,
+      priority: options.priority,
+    });
     if (callNumber === 1) {
       this.#firstStarted();
       await this.#firstGate;

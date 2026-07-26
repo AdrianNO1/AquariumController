@@ -36,6 +36,7 @@ import {
 import { buildLegacyWireCommand } from "./legacy-command-builders.js";
 import {
   deviceOperationRequestSchema,
+  type DeviceOperationExecutionOptions,
   type DeviceOperationRequest,
   type DeviceOperationResult,
 } from "./device-operation-types.js";
@@ -47,6 +48,7 @@ const MAX_PROTOCOL_FAULT_MESSAGE_CHARACTERS = 256;
 export interface LegacyDeviceCommandExecutor {
   executeCommands(
     commands: readonly LegacyWireCommand[],
+    options?: DeviceOperationExecutionOptions,
   ): Promise<LegacyWireOperationResult>;
 }
 
@@ -124,6 +126,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
   async executeDeviceOperation(
     deviceId: string,
     request: DeviceOperationRequest,
+    options: DeviceOperationExecutionOptions = {},
   ): Promise<StoredDeviceOperation> {
     this.#assertCanCreateOperation();
     const parsedRequest = deviceOperationRequestSchema.parse(request);
@@ -165,7 +168,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       );
     }
     try {
-      return await this.#trackAttempt(operation, command);
+      return await this.#trackAttempt(operation, command, options);
     } finally {
       this.#activeDeviceAttempts.delete(device.id);
     }
@@ -272,7 +275,9 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       throw error;
     }
     if (created.changed) {
-      this.#startBackgroundAttempt(created.operation, command);
+      this.#startBackgroundAttempt(created.operation, command, {
+        priority: "interactive",
+      });
     }
     return mutationResultSchema.parse(created.mutation);
   }
@@ -349,8 +354,9 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
   async #trackAttempt(
     operation: StoredDeviceOperation,
     command: LegacyWireCommand,
+    options: DeviceOperationExecutionOptions,
   ): Promise<StoredDeviceOperation> {
-    const attempt = this.#attempt(operation, command);
+    const attempt = this.#attempt(operation, command, options);
     const settlement = attempt.then(
       () => undefined,
       () => undefined,
@@ -366,8 +372,9 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
   #startBackgroundAttempt(
     operation: StoredDeviceOperation,
     command: LegacyWireCommand,
+    options: DeviceOperationExecutionOptions,
   ): void {
-    const task = this.#attempt(operation, command).then(
+    const task = this.#attempt(operation, command, options).then(
       () => undefined,
       (error) => {
         this.#reportBackgroundError(toError(error));
@@ -382,6 +389,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
   async #attempt(
     operation: StoredDeviceOperation,
     command: LegacyWireCommand,
+    options: DeviceOperationExecutionOptions,
   ): Promise<StoredDeviceOperation> {
     const attemptAtMs = this.#now();
     if (attemptAtMs < operation.requestedAtMs) {
@@ -407,7 +415,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     await this.#repository.markInFlight(operation.id, attemptAtMs);
     let wireResult: LegacyWireOperationResult;
     try {
-      wireResult = await this.#transport.executeCommands([command]);
+      wireResult = await this.#transport.executeCommands([command], options);
     } catch (error) {
       const normalized = toError(error);
       const result: DeviceOperationResult =

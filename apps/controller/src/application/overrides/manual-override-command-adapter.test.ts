@@ -8,6 +8,7 @@ describe("manual override command adapter", () => {
     const executeDeviceOperation = vi.fn(async () => ({
       id: "child-unknown",
       status: "outcome_unknown" as const,
+      result: null,
     }));
     const dispatcher = new ScheduledDeviceOperationDispatcher({
       executeDeviceOperation,
@@ -42,6 +43,17 @@ describe("manual override command adapter", () => {
       operation: { status: "outcome_unknown" },
     });
     expect(executeDeviceOperation).toHaveBeenCalledTimes(2);
+    expect(executeDeviceOperation).toHaveBeenNthCalledWith(
+      1,
+      "device-a",
+      {
+        kind: "set_pwm",
+        pin: 4,
+        value: 200,
+        overwrite: true,
+      },
+      { priority: "interactive" },
+    );
 
     await adapter.reconcileUnknownOutcomes(["child-unknown", "child-unknown"]);
     expect(reconciled).toEqual([["child-unknown", "child-unknown"]]);

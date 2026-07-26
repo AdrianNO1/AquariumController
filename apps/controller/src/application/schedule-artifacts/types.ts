@@ -1,4 +1,5 @@
 import type {
+  DeviceOperationExecutionOptions,
   DeviceOperationResult,
   DeviceOperationTerminalStatus,
 } from "../operations/device-operation-types.js";
@@ -156,6 +157,7 @@ export interface DeviceScheduleOperationPort {
   executeDeviceOperation(
     deviceId: string,
     request: { readonly kind: "schedule"; readonly scheduleJson: string },
+    options?: DeviceOperationExecutionOptions,
   ): Promise<ScheduleDeliveryOperation>;
   acknowledgeScheduleReconciledOutcome(operationId: string): Promise<void>;
 }

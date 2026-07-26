@@ -32,6 +32,7 @@ import {
   ManualOverrideService,
 } from "../overrides/index.js";
 import {
+  ScheduleReconciliationCommandAdapter,
   ScheduleReconciliationService,
   type ScheduleReconciliationTrigger,
 } from "../schedule-artifacts/index.js";
@@ -229,13 +230,16 @@ export class ControllerMqttRuntime
         onBackgroundError: options.onError,
       },
     );
-    this.#scheduleReconciliation = new ScheduleReconciliationService(
-      new DeviceScheduleArtifactRepository(options.stateDatabase),
-      this.#deviceOperations,
-      { nowMs: options.now },
-    );
     this.#scheduledCommands = new ScheduledDeviceOperationDispatcher(
       this.#deviceOperations,
+    );
+    this.#scheduleReconciliation = new ScheduleReconciliationService(
+      new DeviceScheduleArtifactRepository(options.stateDatabase),
+      new ScheduleReconciliationCommandAdapter(
+        this.#scheduledCommands,
+        this.#deviceOperations,
+      ),
+      { nowMs: options.now },
     );
     const manualOverrideRepository = new ManualOverrideRepository(
       options.stateDatabase,

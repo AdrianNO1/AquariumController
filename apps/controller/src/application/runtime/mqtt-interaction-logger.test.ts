@@ -73,6 +73,8 @@ describe("MQTT interaction volume policy", () => {
     await logger.logTransportInteraction({
       kind: "batch_published",
       operationId: "wire-batch",
+      requestId: "session-request-1",
+      targetId: "A1",
       batchIndex: 0,
       frameCount: 1,
       payloadBytes: 4,
@@ -160,6 +162,17 @@ describe("MQTT interaction volume policy", () => {
         retention_class: "audit",
       },
     ]);
+    await expect(
+      database
+        .selectFrom("interactions")
+        .select(["device_id", "correlation_id", "operation_id"])
+        .where("kind", "=", "mqtt.command-batch")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({
+      device_id: "A1",
+      correlation_id: "session-request-1",
+      operation_id: "wire-batch",
+    });
   });
 
   it("logs each active and resolved firmware diagnostic sequence once", async () => {

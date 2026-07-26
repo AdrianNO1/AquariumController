@@ -261,6 +261,7 @@ export class ScheduleReconciliationService {
     const operation = await this.operations.executeDeviceOperation(
       deviceId,
       scheduleRequest,
+      { priority: "background" },
     );
     const result = deviceOperationResultSchema.parse(operation.result);
     if (operation.status !== result.status) {

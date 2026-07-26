@@ -22,6 +22,7 @@ import {
 } from "@aquarium/esp-protocol";
 import { InteractionRepository } from "../../infrastructure/storage/interaction-repository.js";
 import { DeviceOperationService } from "./device-operation-service.js";
+import type { DeviceOperationExecutionOptions } from "./device-operation-types.js";
 
 const openDatabases: ControllerDatabases[] = [];
 
@@ -95,6 +96,26 @@ describe("persistent device operation service", () => {
       byte_count: 17,
     });
     expect(logs[0]?.payload_json).not.toContain("Reef 6000 10");
+  });
+
+  it("forwards command priority to the MQTT executor", async () => {
+    const context = await setup();
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "succeeded",
+      response: "o",
+      analogValue: null,
+    });
+
+    await context.service.executeDeviceOperation(
+      "A1",
+      { kind: "ping" },
+      { priority: "background" },
+    );
+
+    expect(context.executor.options).toEqual([{ priority: "background" }]);
   });
 
   it("cools only the timed-out device until availability is signalled", async () => {
@@ -1134,14 +1155,17 @@ async function setup(
 class FakeCommandExecutor {
   readonly outcomes: LegacyCommandOutcome[] = [];
   readonly calls: LegacyWireCommand[][] = [];
+  readonly options: DeviceOperationExecutionOptions[] = [];
   readonly waits: Promise<void>[] = [];
 
   constructor(readonly now: () => number) {}
 
   async executeCommands(
     commands: readonly LegacyWireCommand[],
+    options: DeviceOperationExecutionOptions = {},
   ): Promise<LegacyWireOperationResult> {
     this.calls.push([...commands]);
+    this.options.push(options);
     const outcome = this.outcomes.shift();
     if (outcome === undefined) {
       throw new Error("Fake command executor requires an explicit outcome");

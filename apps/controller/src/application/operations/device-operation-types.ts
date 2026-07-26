@@ -183,6 +183,11 @@ export type DeviceOperationRequest = z.infer<
 >;
 export type DeviceOperationResult = z.infer<typeof deviceOperationResultSchema>;
 export type DeviceOperationTerminalStatus = DeviceOperationResult["status"];
+export type DeviceOperationPriority = "interactive" | "background";
+
+export interface DeviceOperationExecutionOptions {
+  readonly priority?: DeviceOperationPriority;
+}
 
 export function assertDeviceOperationResultMatchesRequest(
   request: DeviceOperationRequest,

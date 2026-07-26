@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 describe("refresh projection repository", () => {
-  it("isolates online devices and active schedule mappings while reporting malformed graphs", async () => {
+  it("includes enabled retry candidates and reports their malformed graphs", async () => {
     databases = await openControllerDatabases({
       state: { filename: ":memory:" },
       events: { filename: ":memory:" },
@@ -24,7 +24,7 @@ describe("refresh projection repository", () => {
       databases.state,
     ).readActiveOutputs();
 
-    expect(projection.outputs).toHaveLength(2);
+    expect(projection.outputs).toHaveLength(4);
     expect(projection.outputs).toMatchObject([
       {
         deviceId: "device-a",
@@ -42,6 +42,22 @@ describe("refresh projection repository", () => {
         throttlePercent: 50,
         outputGain: 1,
       },
+      {
+        deviceId: "device-stale",
+        mappingId: "mapping-valid-a",
+        channelId: "channel-valid",
+        pin: 1,
+        throttlePercent: 50,
+        outputGain: 0.7,
+      },
+      {
+        deviceId: "device-offline",
+        mappingId: "mapping-valid-a",
+        channelId: "channel-valid",
+        pin: 1,
+        throttlePercent: 50,
+        outputGain: 0.7,
+      },
     ]);
     expect(projection.diagnostics).toMatchObject([
       {
@@ -54,6 +70,34 @@ describe("refresh projection repository", () => {
       {
         code: "invalid_schedule",
         deviceId: "device-a",
+        mappingId: "mapping-missing-schedule-a",
+        channelId: "channel-missing-schedule",
+        issues: [{ code: "empty-schedule" }],
+      },
+      {
+        code: "invalid_schedule",
+        deviceId: "device-stale",
+        mappingId: "mapping-invalid-a",
+        channelId: "channel-invalid",
+        issues: [{ code: "empty-schedule" }],
+      },
+      {
+        code: "invalid_schedule",
+        deviceId: "device-stale",
+        mappingId: "mapping-missing-schedule-a",
+        channelId: "channel-missing-schedule",
+        issues: [{ code: "empty-schedule" }],
+      },
+      {
+        code: "invalid_schedule",
+        deviceId: "device-offline",
+        mappingId: "mapping-invalid-a",
+        channelId: "channel-invalid",
+        issues: [{ code: "empty-schedule" }],
+      },
+      {
+        code: "invalid_schedule",
+        deviceId: "device-offline",
         mappingId: "mapping-missing-schedule-a",
         channelId: "channel-missing-schedule",
         issues: [{ code: "empty-schedule" }],
@@ -154,6 +198,16 @@ async function seedProjection(context: ControllerDatabases): Promise<void> {
     .values([
       device("device-a", "hardware-a", "profile-a", "online", 1, 8, 10, now),
       device("device-b", "hardware-b", "profile-b", "online", 1, 8, 8, now),
+      device(
+        "device-stale",
+        "hardware-stale",
+        "profile-a",
+        "stale",
+        1,
+        8,
+        8,
+        now,
+      ),
       device(
         "device-offline",
         "hardware-offline",
@@ -273,7 +327,7 @@ function device(
   id: string,
   hardwareId: string,
   profileId: string,
-  status: "online" | "offline",
+  status: "online" | "stale" | "offline",
   enabled: 0 | 1,
   desiredResolution: number,
   reportedResolution: number,

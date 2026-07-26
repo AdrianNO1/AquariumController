@@ -26,7 +26,9 @@ import {
   toOperationSummary,
   toOverrideContract,
   type ManualOverrideDeviceCommandPort,
+  type ManualOverrideDeviceDispatchResult,
   type ManualOverrideOperationResult,
+  type ManualOverridePinCommand,
   type ManualOverrideRepositoryPort,
   type PreparedManualOverrideOperation,
   type StoredManualOverrideStateMutation,
@@ -81,11 +83,25 @@ const systemTimer: ManualOverrideTimer = {
   },
 };
 
+interface IndexedManualOverrideCommand {
+  readonly index: number;
+  readonly command: ManualOverridePinCommand;
+}
+
+type ManualOverrideCommandAttempt =
+  | ({
+      readonly index: number;
+    } & ManualOverrideDeviceDispatchResult)
+  | {
+      readonly index: number;
+      readonly kind: "dispatch_failed";
+      readonly error: Error;
+    };
+
 /**
  * Owns the durable manual-override lifecycle. Pin writes are delegated to the
- * same serialized operation dispatcher as scheduler refreshes. Device-level
- * failures are retained as child outcomes while commands for other devices
- * continue through the wire lane.
+ * same per-device operation dispatcher as scheduler refreshes. Each device
+ * remains FIFO while independent devices progress concurrently.
  */
 export class ManualOverrideService implements ManualOverrideCommandService {
   readonly #repository: ManualOverrideRepositoryPort;
@@ -271,10 +287,8 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       prepared.operation.id,
       this.#readNowMs(),
     );
-    const childOperationIds: string[] = [];
-    const unknownChildOperationIds: string[] = [];
-    const failedDeviceIds = new Set<string>();
-    let childOutcomeNotSucceeded = false;
+    let childOperationIds: string[] = [];
+    let unknownChildOperationIds: string[] = [];
     if (this.#readNowMs() >= operation.deadlineAtMs) {
       if (operation.request.kind === "manual_override_start") {
         await this.#repository.completeFailed({
@@ -296,65 +310,111 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       return;
     }
 
-    for (const command of operation.request.commands) {
-      if (failedDeviceIds.has(command.deviceId)) {
-        continue;
+    const commandsByDevice = new Map<string, IndexedManualOverrideCommand[]>();
+    for (const [index, command] of operation.request.commands.entries()) {
+      const deviceCommands = commandsByDevice.get(command.deviceId);
+      const indexed = { index, command };
+      if (deviceCommands === undefined) {
+        commandsByDevice.set(command.deviceId, [indexed]);
+      } else {
+        deviceCommands.push(indexed);
       }
-      let dispatch;
-      try {
-        dispatch = await this.#commands.dispatch(command.deviceId, {
-          kind: "set_pwm",
-          pin: command.pin,
-          value: command.value,
-          overwrite: command.overwrite,
+    }
+    const attempts = (
+      await Promise.all(
+        [...commandsByDevice.values()].map((commands) =>
+          this.#dispatchDeviceCommands(commands),
+        ),
+      )
+    )
+      .flat()
+      .sort((left, right) => left.index - right.index);
+    const completedAttempts = attempts.filter(
+      (
+        attempt,
+      ): attempt is Extract<
+        ManualOverrideCommandAttempt,
+        { readonly kind: "completed" }
+      > => attempt.kind === "completed",
+    );
+    childOperationIds = completedAttempts.map(
+      ({ operation: childOperation }) => childOperation.id,
+    );
+    unknownChildOperationIds = completedAttempts
+      .filter(
+        ({ operation: childOperation }) =>
+          childOperation.status === "outcome_unknown",
+      )
+      .map(({ operation: childOperation }) => childOperation.id);
+
+    const dispatchFailures = attempts.filter(
+      (
+        attempt,
+      ): attempt is Extract<
+        ManualOverrideCommandAttempt,
+        { readonly kind: "dispatch_failed" }
+      > => attempt.kind === "dispatch_failed",
+    );
+    if (dispatchFailures.length > 0) {
+      await this.#recordUnknown(
+        operation.id,
+        childOperationIds,
+        "command_dispatch_failed",
+        unknownChildOperationIds,
+      );
+      throw new Error(
+        `Manual override child dispatch failed for operation ${operation.id}`,
+        {
+          cause:
+            dispatchFailures.length === 1
+              ? dispatchFailures[0]?.error
+              : new AggregateError(
+                  dispatchFailures.map(({ error }) => error),
+                  "Multiple manual override device dispatches failed",
+                ),
+        },
+      );
+    }
+
+    const blockedAttempt = attempts.find(
+      (
+        attempt,
+      ): attempt is Extract<
+        ManualOverrideCommandAttempt,
+        { readonly kind: "blocked" }
+      > => attempt.kind === "blocked",
+    );
+    if (blockedAttempt !== undefined) {
+      if (
+        operation.request.kind === "manual_override_start" &&
+        childOperationIds.length === 0
+      ) {
+        await this.#repository.completeFailed({
+          operationId: operation.id,
+          completedAtMs: this.#readNowMs(),
+          childOperationIds,
+          status: "failed",
+          code: "command_dispatch_blocked",
+          message: `Manual override command dispatch is blocked by ${blockedAttempt.reason}`,
         });
-      } catch (error) {
+      } else {
         await this.#recordUnknown(
           operation.id,
           childOperationIds,
-          "command_dispatch_failed",
+          "command_dispatch_blocked",
           unknownChildOperationIds,
         );
-        throw new Error(
-          `Manual override child dispatch failed for operation ${operation.id}`,
-          { cause: error },
-        );
       }
-      if (dispatch.kind === "blocked") {
-        if (
-          operation.request.kind === "manual_override_start" &&
-          childOperationIds.length === 0
-        ) {
-          await this.#repository.completeFailed({
-            operationId: operation.id,
-            completedAtMs: this.#readNowMs(),
-            childOperationIds,
-            status: "failed",
-            code: "command_dispatch_blocked",
-            message: `Manual override command dispatch is blocked by ${dispatch.reason}`,
-          });
-        } else {
-          await this.#recordUnknown(
-            operation.id,
-            childOperationIds,
-            "command_dispatch_blocked",
-            unknownChildOperationIds,
-          );
-        }
-        return;
-      }
-      childOperationIds.push(dispatch.operation.id);
-      if (dispatch.operation.status !== "succeeded") {
-        childOutcomeNotSucceeded = true;
-        failedDeviceIds.add(command.deviceId);
-        if (dispatch.operation.status === "outcome_unknown") {
-          unknownChildOperationIds.push(dispatch.operation.id);
-        }
-      }
+      return;
     }
 
     const completedAtMs = this.#readNowMs();
-    if (childOutcomeNotSucceeded) {
+    if (
+      completedAttempts.some(
+        ({ operation: childOperation }) =>
+          childOperation.status !== "succeeded",
+      )
+    ) {
       await this.#recordUnknown(
         operation.id,
         childOperationIds,
@@ -382,6 +442,38 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       completedAtMs,
       childOperationIds,
     );
+  }
+
+  async #dispatchDeviceCommands(
+    commands: readonly IndexedManualOverrideCommand[],
+  ): Promise<readonly ManualOverrideCommandAttempt[]> {
+    const attempts: ManualOverrideCommandAttempt[] = [];
+    for (const { index, command } of commands) {
+      let dispatch: ManualOverrideDeviceDispatchResult;
+      try {
+        dispatch = await this.#commands.dispatch(command.deviceId, {
+          kind: "set_pwm",
+          pin: command.pin,
+          value: command.value,
+          overwrite: command.overwrite,
+        });
+      } catch (error) {
+        attempts.push({
+          index,
+          kind: "dispatch_failed",
+          error: toError(error),
+        });
+        break;
+      }
+      attempts.push({ index, ...dispatch });
+      if (
+        dispatch.kind === "blocked" ||
+        dispatch.operation.status !== "succeeded"
+      ) {
+        break;
+      }
+    }
+    return attempts;
   }
 
   async #recordUnknown(
