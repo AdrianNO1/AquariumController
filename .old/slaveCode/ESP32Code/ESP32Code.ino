@@ -27,7 +27,7 @@ const int MAX_PIN = 63;
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "4.0.0";
+const char* VERSION = "4.1.0";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
@@ -35,6 +35,11 @@ const time_t MIN_VALID_UNIX_TIME = 1735689600; // January 1, 2025 UTC
 const unsigned long NTP_SYNC_TIMEOUT_MS = 15000;
 const unsigned long NTP_RETRY_INTERVAL_MS = 60000;
 const unsigned long NTP_RESYNC_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
+const unsigned long TIME_CHECKPOINT_INTERVAL_MS = 60UL * 60UL * 1000UL;
+const unsigned long PERSISTENCE_RETRY_INTERVAL_MS =
+    TIME_CHECKPOINT_INTERVAL_MS;
+const unsigned long DIAGNOSTIC_PERSIST_INTERVAL_MS = 60UL * 60UL * 1000UL;
+const unsigned long DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS = 60UL * 1000UL;
 
 std::atomic<bool> ntpTimeAvailable(false);
 bool ntpSyncInProgress = false;
@@ -74,6 +79,11 @@ ChunkedMessage currentMessage;
 #define NAME_MAX_LENGTH 31
 #define ID_MAX_LENGTH 8
 #define SCHEDULE_UPDATE_INTERVAL 1000  // Check schedule every 1000ms
+#define SCHEDULE_ATTACH_RETRY_INTERVAL 60000
+#define MQTT_PACKET_BUFFER_SIZE 512
+#define MAX_REQUEST_ID_LENGTH 64
+#define MAX_LAST_ERROR_CODE_LENGTH 48
+#define MAX_LAST_ERROR_MESSAGE_LENGTH 160
 
 const unsigned long OVERWRITE_DURATION = 120000; // 120 seconds in milliseconds
 
@@ -96,6 +106,7 @@ int freq;
 int resolution;
 
 unsigned long lastScheduleUpdate = 0;
+unsigned long lastScheduleAttachRetry = 0;
 
 // Fixed-size buffer holding the active schedule JSON; avoids dynamic heap usage
 char currentSchedule[4096] = {0};
@@ -122,10 +133,44 @@ struct TimeInfo {
 };
 TimeInfo timeInfo;
 
-// EEPROM provides only a boot-time estimate. Persisted schedules remain gated
-// until NTP or an explicit MQTT sync confirms the clock during this boot.
-bool scheduleTimeConfirmedThisBoot = false;
+// A valid EEPROM estimate is intentionally trusted for local failover. NTP or
+// an explicit MQTT sync replaces it with fresher time when either is reachable.
+bool scheduleTimeAvailableThisBoot = false;
 bool scheduleTimeGateNoticePrinted = false;
+
+struct FirmwareLastError {
+    String code;
+    String severity;
+    String message;
+    unsigned long sequence;
+    bool active;
+    time_t at;
+};
+
+struct ScheduleAttachResult {
+    int attachFailedCount;
+    int firstAttachFailedPin;
+    int writeFailedCount;
+    int firstWriteFailedPin;
+};
+
+FirmwareLastError lastError = {"", "", "", 0, false, 0};
+bool spiffsAvailable = false;
+bool lastErrorPersistenceDirty = false;
+bool lastErrorPersistedThisBoot = false;
+bool lastErrorPersistenceFailed = false;
+unsigned long lastErrorPersistenceAttemptAt = 0;
+unsigned long lastErrorPersistenceSuccessAt = 0;
+bool diagnosticAnnouncementPending = false;
+bool diagnosticAnnouncementAttempted = false;
+unsigned long diagnosticAnnouncementAttemptAt = 0;
+
+bool timeCheckpointPending = false;
+bool timeCheckpointImmediatePending = false;
+bool freshTimeCheckpointCommittedThisBoot = false;
+bool timeCheckpointFailed = false;
+unsigned long timeCheckpointAttemptAt = 0;
+unsigned long timeCheckpointSuccessAt = 0;
 
 // EEPROM addresses for time management
 #define TIME_INFO_ADDR 200    // Start address for TimeInfo struct
@@ -257,6 +302,230 @@ void initializeEEPROM() {
 	Serial.println("Device ID: " + deviceId);
 	Serial.println("Frequency: " + String(freq) + " Hz");
 	Serial.println("Resolution: " + String(resolution) + " bits");
+}
+
+bool persistLastError() {
+    if (!spiffsAvailable || lastError.code.length() == 0) {
+        return false;
+    }
+
+    JsonDocument doc;
+    doc["code"] = lastError.code;
+    doc["severity"] = lastError.severity;
+    doc["message"] = lastError.message;
+    doc["sequence"] = lastError.sequence;
+    doc["active"] = lastError.active;
+    doc["at"] = static_cast<unsigned long>(lastError.at);
+
+    String payload;
+    serializeJson(doc, payload);
+    const char* currentPath = "/last-error.json";
+    const char* nextPath = "/last-error.next";
+    if (SPIFFS.exists(nextPath) && !SPIFFS.remove(nextPath)) {
+        Serial.println("Failed to remove stale last-error staging file");
+        return false;
+    }
+
+    File file = SPIFFS.open(nextPath, "w");
+    if (!file) {
+        Serial.println("Failed to open last-error staging file");
+        return false;
+    }
+    size_t written = file.print(payload);
+    file.flush();
+    file.close();
+    if (written != payload.length()) {
+        Serial.println("Failed to persist the complete last-error document");
+        SPIFFS.remove(nextPath);
+        return false;
+    }
+    if (SPIFFS.exists(currentPath) && !SPIFFS.remove(currentPath)) {
+        Serial.println("Failed to replace the prior last-error document");
+        SPIFFS.remove(nextPath);
+        return false;
+    }
+    if (!SPIFFS.rename(nextPath, currentPath)) {
+        Serial.println("Failed to publish the last-error document");
+        return false;
+    }
+    return true;
+}
+
+bool isValidLastErrorCode(const String& code) {
+    if (code.length() < 1 || code.length() > MAX_LAST_ERROR_CODE_LENGTH) {
+        return false;
+    }
+    for (size_t index = 0; index < code.length(); index++) {
+        char character = code[index];
+        if (!(
+            (character >= 'a' && character <= 'z') ||
+            (character >= '0' && character <= '9') ||
+            character == '_'
+        )) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void serviceLastErrorPersistence() {
+    if (!lastErrorPersistenceDirty) {
+        return;
+    }
+    unsigned long currentMillis = millis();
+    bool due = false;
+    if (lastErrorPersistenceFailed) {
+        due = currentMillis - lastErrorPersistenceAttemptAt >=
+            PERSISTENCE_RETRY_INTERVAL_MS;
+    } else if (!lastErrorPersistedThisBoot) {
+        due = true;
+    } else {
+        due = currentMillis - lastErrorPersistenceSuccessAt >=
+            DIAGNOSTIC_PERSIST_INTERVAL_MS;
+    }
+    if (!due) {
+        return;
+    }
+
+    lastErrorPersistenceAttemptAt = currentMillis;
+    if (persistLastError()) {
+        lastErrorPersistenceDirty = false;
+        lastErrorPersistedThisBoot = true;
+        lastErrorPersistenceFailed = false;
+        lastErrorPersistenceSuccessAt = currentMillis;
+    } else {
+        lastErrorPersistenceFailed = true;
+    }
+}
+
+void queueLastErrorTransition() {
+    lastErrorPersistenceDirty = true;
+    diagnosticAnnouncementPending = true;
+    diagnosticAnnouncementAttempted = false;
+    serviceLastErrorPersistence();
+}
+
+void loadLastError() {
+    const char* currentPath = "/last-error.json";
+    const char* nextPath = "/last-error.next";
+    if (!SPIFFS.exists(currentPath) && SPIFFS.exists(nextPath)) {
+        if (!SPIFFS.rename(nextPath, currentPath)) {
+            Serial.println("Could not recover the staged last-error document");
+        }
+    }
+    if (!SPIFFS.exists(currentPath)) {
+        return;
+    }
+
+    File file = SPIFFS.open(currentPath, "r");
+    if (!file) {
+        Serial.println("Failed to open the persisted last-error document");
+        return;
+    }
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, file);
+    file.close();
+    JsonVariant codeValue = doc["code"];
+    JsonVariant severityValue = doc["severity"];
+    JsonVariant messageValue = doc["message"];
+    JsonVariant sequenceValue = doc["sequence"];
+    JsonVariant activeValue = doc["active"];
+    JsonVariant atValue = doc["at"];
+    if (error || !codeValue.is<const char*>() ||
+        !severityValue.is<const char*>() || !messageValue.is<const char*>() ||
+        !sequenceValue.is<unsigned long>() || !activeValue.is<bool>() ||
+        !atValue.is<unsigned long>()) {
+        Serial.println("Persisted last-error document is invalid; ignoring it");
+        return;
+    }
+
+    String code = codeValue.as<String>();
+    String severity = severityValue.as<String>();
+    String message = messageValue.as<String>();
+    unsigned long sequence = sequenceValue.as<unsigned long>();
+    unsigned long at = atValue.as<unsigned long>();
+    if (!isValidLastErrorCode(code) ||
+        (severity != "warning" && severity != "error") ||
+        message.length() < 1 || message.length() > MAX_LAST_ERROR_MESSAGE_LENGTH ||
+        sequence < 1 || at > MAX_SYNC_UNIX_TIME) {
+        Serial.println("Persisted last-error fields are invalid; ignoring them");
+        return;
+    }
+
+    lastError = {
+        code,
+        severity,
+        message,
+        sequence,
+        activeValue.as<bool>(),
+        static_cast<time_t>(at)
+    };
+    Serial.println("Loaded persisted firmware diagnostic " + lastError.code);
+}
+
+void recordLastError(
+    const String& code,
+    const String& severity,
+    const String& message
+) {
+    String boundedMessage = message.substring(0, MAX_LAST_ERROR_MESSAGE_LENGTH);
+    if (!isValidLastErrorCode(code) || boundedMessage.length() == 0 ||
+        (severity != "warning" && severity != "error")) {
+        Serial.println("Refusing to record an invalid firmware diagnostic");
+        return;
+    }
+    if (lastError.code == code && lastError.severity == severity &&
+        lastError.message == boundedMessage && lastError.active) {
+        return;
+    }
+
+    unsigned long nextSequence =
+        lastError.sequence == ULONG_MAX ? 1 : lastError.sequence + 1;
+    time_t diagnosticTime = timeInfo.timeInitialized ? getCurrentTime() : 0;
+    if (diagnosticTime < 0 ||
+        static_cast<unsigned long>(diagnosticTime) > MAX_SYNC_UNIX_TIME) {
+        diagnosticTime = 0;
+    }
+    lastError = {
+        code,
+        severity,
+        boundedMessage,
+        nextSequence,
+        true,
+        diagnosticTime
+    };
+    Serial.println(
+        "Firmware diagnostic " + lastError.code + ": " + lastError.message
+    );
+    queueLastErrorTransition();
+}
+
+void resolveLastError(const String& code) {
+    if (lastError.code != code || !lastError.active) {
+        return;
+    }
+    lastError.active = false;
+    lastError.sequence =
+        lastError.sequence == ULONG_MAX ? 1 : lastError.sequence + 1;
+    Serial.println("Firmware diagnostic resolved: " + lastError.code);
+    queueLastErrorTransition();
+}
+
+void resolveLastErrorForPin(const String& code, int pin) {
+    String expectedMessage;
+    if (code == "pin_attach_failed") {
+        expectedMessage = "LEDC attach failed on pin " + String(pin);
+    } else if (code == "pin_write_failed") {
+        expectedMessage = "LEDC write failed on pin " + String(pin);
+    } else if (code == "pin_detach_failed") {
+        expectedMessage = "LEDC detach failed on pin " + String(pin);
+    } else {
+        return;
+    }
+    if (lastError.code == code && lastError.active &&
+        lastError.message == expectedMessage) {
+        resolveLastError(code);
+    }
 }
 
 bool storeSchedule(const String& schedule) {
@@ -416,34 +685,26 @@ bool reattachConfiguredPins(
 ) {
     bool wasAttached[MAX_PIN + 1] = {false};
     int restoreValues[MAX_PIN + 1] = {0};
+    bool detachFailed = false;
     for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
         wasAttached[pin] = attachedPins[pin];
         restoreValues[pin] = lastPinValues[pin];
         if (wasAttached[pin]) {
-            ledcDetach(pin);
-            attachedPins[pin] = false;
+            if (ledcDetach(pin)) {
+                attachedPins[pin] = false;
+                resolveLastErrorForPin("pin_detach_failed", pin);
+            } else {
+                detachFailed = true;
+                recordLastError(
+                    "pin_detach_failed",
+                    "error",
+                    "LEDC detach failed on pin " + String(pin)
+                );
+            }
         }
     }
 
-    bool targetFailed = false;
-    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
-        if (!wasAttached[pin]) {
-            continue;
-        }
-        if (!ledcAttach(pin, targetFrequency, targetResolution)) {
-            targetFailed = true;
-            break;
-        }
-        attachedPins[pin] = true;
-        ledcWrite(
-            pin,
-            rescalePwmValue(
-                restoreValues[pin],
-                rollbackResolution,
-                targetResolution
-            )
-        );
-    }
+    bool targetFailed = detachFailed;
     if (!targetFailed) {
         for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
             if (!wasAttached[pin]) {
@@ -454,12 +715,35 @@ bool reattachConfiguredPins(
                 rollbackResolution,
                 targetResolution
             );
+            if (!ledcAttach(pin, targetFrequency, targetResolution)) {
+                recordLastError(
+                    "pin_attach_failed",
+                    "error",
+                    "LEDC attach failed on pin " + String(pin)
+                );
+                targetFailed = true;
+                break;
+            }
+            attachedPins[pin] = true;
+            resolveLastErrorForPin("pin_attach_failed", pin);
+            if (!ledcWrite(pin, rescaledValue)) {
+                recordLastError(
+                    "pin_write_failed",
+                    "error",
+                    "LEDC write failed on pin " + String(pin)
+                );
+                targetFailed = true;
+                break;
+            }
+            resolveLastErrorForPin("pin_write_failed", pin);
             lastPinValues[pin] = rescaledValue;
             auto pinState = pinStates.find(pin);
             if (pinState != pinStates.end()) {
                 pinState->second.lastValue = rescaledValue;
             }
         }
+    }
+    if (!targetFailed) {
         for (auto& channel : activeChannels) {
             channel.currentValue = -1;
         }
@@ -469,18 +753,55 @@ bool reattachConfiguredPins(
     Serial.println("LEDC configuration failed; rolling every attached pin back");
     for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
         if (attachedPins[pin]) {
-            ledcDetach(pin);
-            attachedPins[pin] = false;
+            if (ledcDetach(pin)) {
+                attachedPins[pin] = false;
+                resolveLastErrorForPin("pin_detach_failed", pin);
+            } else {
+                recordLastError(
+                    "pin_detach_failed",
+                    "error",
+                    "LEDC detach failed on pin " + String(pin)
+                );
+            }
         }
     }
     for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
-        if (!wasAttached[pin]) {
+        if (!wasAttached[pin] || attachedPins[pin]) {
             continue;
         }
         if (ledcAttach(pin, rollbackFrequency, rollbackResolution)) {
             attachedPins[pin] = true;
-            ledcWrite(pin, restoreValues[pin]);
-            continue;
+            resolveLastErrorForPin("pin_attach_failed", pin);
+            if (ledcWrite(pin, restoreValues[pin])) {
+                lastPinValues[pin] = restoreValues[pin];
+                auto restoredPinState = pinStates.find(pin);
+                if (restoredPinState != pinStates.end()) {
+                    restoredPinState->second.lastValue = restoreValues[pin];
+                }
+                resolveLastErrorForPin("pin_write_failed", pin);
+                continue;
+            }
+            recordLastError(
+                "pin_write_failed",
+                "error",
+                "LEDC write failed on pin " + String(pin)
+            );
+            if (!ledcDetach(pin)) {
+                recordLastError(
+                    "pin_detach_failed",
+                    "error",
+                    "LEDC detach failed on pin " + String(pin)
+                );
+                continue;
+            }
+            attachedPins[pin] = false;
+            resolveLastErrorForPin("pin_detach_failed", pin);
+        } else {
+            recordLastError(
+                "pin_attach_failed",
+                "error",
+                "LEDC attach failed on pin " + String(pin)
+            );
         }
 
         pinMode(pin, OUTPUT);
@@ -590,6 +911,41 @@ bool parseEditArguments(
     return *cursor == '\0';
 }
 
+bool isValidRequestId(const String& requestId) {
+    if (requestId.length() < 1 || requestId.length() > MAX_REQUEST_ID_LENGTH) {
+        return false;
+    }
+    for (size_t index = 0; index < requestId.length(); index++) {
+        char character = requestId[index];
+        bool valid =
+            (character >= 'A' && character <= 'Z') ||
+            (character >= 'a' && character <= 'z') ||
+            (character >= '0' && character <= '9') ||
+            character == '_' || character == '-';
+        if (!valid) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool unwrapRequestEnvelope(String& message, String& requestId) {
+    requestId = "";
+    if (!message.startsWith("request:")) {
+        return true;
+    }
+    int separator = message.indexOf('|', 8);
+    if (separator < 0) {
+        return false;
+    }
+    requestId = message.substring(8, separator);
+    if (!isValidRequestId(requestId)) {
+        return false;
+    }
+    message = message.substring(separator + 1);
+    return message.length() > 0;
+}
+
 bool schedulePointIsValid(JsonVariant point) {
     if (!point.is<JsonObject>()) {
         return false;
@@ -652,18 +1008,37 @@ void rollbackNewSchedulePins(bool newlyAttached[MAX_PIN + 1]) {
         if (!newlyAttached[pin]) {
             continue;
         }
-        ledcDetach(pin);
+        if (!ledcWrite(pin, 0)) {
+            recordLastError(
+                "pin_write_failed",
+                "error",
+                "LEDC write failed on pin " + String(pin)
+            );
+        } else {
+            lastPinValues[pin] = 0;
+            resolveLastErrorForPin("pin_write_failed", pin);
+        }
+        if (!ledcDetach(pin)) {
+            recordLastError(
+                "pin_detach_failed",
+                "error",
+                "LEDC detach failed on pin " + String(pin)
+            );
+            continue;
+        }
         attachedPins[pin] = false;
+        resolveLastErrorForPin("pin_detach_failed", pin);
         pinMode(pin, OUTPUT);
         digitalWrite(pin, LOW);
         lastPinValues[pin] = 0;
     }
 }
 
-bool attachMissingSchedulePins(
+ScheduleAttachResult attachMissingSchedulePins(
     JsonArray& channels,
     bool newlyAttached[MAX_PIN + 1]
 ) {
+    ScheduleAttachResult result = {0, -1, 0, -1};
     for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
         newlyAttached[pin] = false;
     }
@@ -676,21 +1051,65 @@ bool attachMissingSchedulePins(
         digitalWrite(pin, LOW);
         if (!ledcAttach(pin, freq, resolution)) {
             Serial.println("Failed to attach scheduled pin " + String(pin));
-            rollbackNewSchedulePins(newlyAttached);
             auto failedPinState = pinStates.find(pin);
             if (failedPinState != pinStates.end()) {
                 failedPinState->second.lastValue = 0;
                 failedPinState->second.isOverwritten = false;
                 failedPinState->second.overwriteStartedAt = 0;
             }
-            return false;
+            if (result.firstAttachFailedPin < 0) {
+                result.firstAttachFailedPin = pin;
+            }
+            result.attachFailedCount++;
+            continue;
         }
         attachedPins[pin] = true;
         newlyAttached[pin] = true;
-        ledcWrite(pin, 0);
+        resolveLastErrorForPin("pin_attach_failed", pin);
+        if (!ledcWrite(pin, 0)) {
+            Serial.println("Failed to initialize scheduled pin " + String(pin));
+            if (!ledcDetach(pin)) {
+                recordLastError(
+                    "pin_detach_failed",
+                    "error",
+                    "LEDC detach failed on pin " + String(pin)
+                );
+            } else {
+                attachedPins[pin] = false;
+                newlyAttached[pin] = false;
+                resolveLastErrorForPin("pin_detach_failed", pin);
+                pinMode(pin, OUTPUT);
+                digitalWrite(pin, LOW);
+            }
+            if (result.firstWriteFailedPin < 0) {
+                result.firstWriteFailedPin = pin;
+            }
+            result.writeFailedCount++;
+            continue;
+        }
         lastPinValues[pin] = 0;
+        resolveLastErrorForPin("pin_write_failed", pin);
     }
-    return true;
+    return result;
+}
+
+void reportScheduleAttachResult(const ScheduleAttachResult& result) {
+    if (result.attachFailedCount > 0) {
+        recordLastError(
+            "pin_attach_failed",
+            "error",
+            "LEDC attach failed on pin " + String(result.firstAttachFailedPin)
+        );
+        return;
+    }
+    if (result.writeFailedCount > 0) {
+        recordLastError(
+            "pin_write_failed",
+            "error",
+            "LEDC write failed on pin " + String(result.firstWriteFailedPin)
+        );
+        return;
+    }
 }
 
 void turnOffRemovedSchedulePins(JsonArray& nextChannels) {
@@ -708,19 +1127,35 @@ void turnOffRemovedSchedulePins(JsonArray& nextChannels) {
 
         int pin = previousChannel.pin;
         if (attachedPins[pin]) {
-            ledcWrite(pin, 0);
-        } else {
+            if (!ledcWrite(pin, 0)) {
+                recordLastError(
+                    "pin_write_failed",
+                    "error",
+                    "LEDC write failed on pin " + String(pin)
+                );
+            } else {
+                resolveLastErrorForPin("pin_write_failed", pin);
+            }
+            if (!ledcDetach(pin)) {
+                recordLastError(
+                    "pin_detach_failed",
+                    "error",
+                    "LEDC detach failed on pin " + String(pin)
+                );
+            } else {
+                attachedPins[pin] = false;
+                resolveLastErrorForPin("pin_detach_failed", pin);
+            }
+        }
+        if (!attachedPins[pin]) {
             pinMode(pin, OUTPUT);
             digitalWrite(pin, LOW);
+            lastPinValues[pin] = 0;
+            pinStates.erase(pin);
         }
-        lastPinValues[pin] = 0;
-        auto pinState = pinStates.find(pin);
-        if (pinState != pinStates.end()) {
-            pinState->second.lastValue = 0;
-            pinState->second.isOverwritten = false;
-            pinState->second.overwriteStartedAt = 0;
-        }
-        Serial.println("Replacement schedule removed pin " + String(pin) + "; output forced off");
+        Serial.println(
+            "Replacement schedule removed and detached pin " + String(pin)
+        );
     }
 }
 
@@ -766,10 +1201,8 @@ void processSchedule(const String& schedule) {
 
     JsonArray channels = doc["c"].as<JsonArray>();
     bool newlyAttached[MAX_PIN + 1] = {false};
-    if (!attachMissingSchedulePins(channels, newlyAttached)) {
-        Serial.println("Persisted schedule could not attach every output; keeping schedule disabled");
-        return;
-    }
+    ScheduleAttachResult attachResult =
+        attachMissingSchedulePins(channels, newlyAttached);
 
     strlcpy(currentSchedule, schedule.c_str(), sizeof(currentSchedule));
     turnOffRemovedSchedulePins(channels);
@@ -788,10 +1221,61 @@ void processSchedule(const String& schedule) {
         // loop to write the physical pin, including a zero target.
         activeChannels.push_back({pin, -1, type});
         
-        // Restored EEPROM time never authorizes output during this boot.
-        ledcWrite(pin, 0);
-        lastPinValues[pin] = 0;
+        // Successfully attached pins were initialized low. Failed pins remain
+        // part of the schedule and are retried without blocking other outputs.
+        if (attachedPins[pin]) {
+            lastPinValues[pin] = 0;
+        }
     }
+    lastScheduleAttachRetry = millis();
+    reportScheduleAttachResult(attachResult);
+}
+
+void retryMissingSchedulePins() {
+    ScheduleAttachResult result = {0, -1, 0, -1};
+    for (auto& channel : activeChannels) {
+        int pin = channel.pin;
+        if (attachedPins[pin]) {
+            continue;
+        }
+
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+        if (!ledcAttach(pin, freq, resolution)) {
+            if (result.firstAttachFailedPin < 0) {
+                result.firstAttachFailedPin = pin;
+            }
+            result.attachFailedCount++;
+            continue;
+        }
+        attachedPins[pin] = true;
+        resolveLastErrorForPin("pin_attach_failed", pin);
+        if (!ledcWrite(pin, 0)) {
+            if (ledcDetach(pin)) {
+                attachedPins[pin] = false;
+                resolveLastErrorForPin("pin_detach_failed", pin);
+                pinMode(pin, OUTPUT);
+                digitalWrite(pin, LOW);
+            } else {
+                recordLastError(
+                    "pin_detach_failed",
+                    "error",
+                    "LEDC detach failed on pin " + String(pin)
+                );
+            }
+            if (result.firstWriteFailedPin < 0) {
+                result.firstWriteFailedPin = pin;
+            }
+            result.writeFailedCount++;
+            continue;
+        }
+
+        lastPinValues[pin] = 0;
+        channel.currentValue = -1;
+        resolveLastErrorForPin("pin_write_failed", pin);
+        Serial.println("Recovered scheduled pin " + String(pin));
+    }
+    reportScheduleAttachResult(result);
 }
 
 const int MAX_RETRIES = 3;
@@ -852,7 +1336,7 @@ unsigned long calculateHash(const String& str) {
     return hash;
 }
 
-void announcePresence() {
+String buildPresenceMessage() {
 	JsonDocument doc;
 	doc["name"] = deviceName;
 	doc["freq"] = freq;
@@ -860,6 +1344,15 @@ void announcePresence() {
 	doc["id"] = deviceId;
 	doc["status"] = "online";
   	doc["version"] = VERSION;
+	if (lastError.code.length() > 0) {
+		JsonObject error = doc["lastError"].to<JsonObject>();
+		error["code"] = lastError.code;
+		error["severity"] = lastError.severity;
+		error["message"] = lastError.message;
+		error["sequence"] = lastError.sequence;
+		error["active"] = lastError.active;
+		error["at"] = static_cast<unsigned long>(lastError.at);
+	}
 	
 	// Calculate and send a hash of the schedule instead of the entire schedule
 	if (strlen(currentSchedule) > 0) {
@@ -885,12 +1378,47 @@ void announcePresence() {
 	
 	String message;
 	serializeJson(doc, message);
-	if (TEST) {
-		publishWithRetry("test/aquarium/announce", message.c_str());
-	} else {
-		publishWithRetry("aquarium/announce", message.c_str());
+	return message;
+}
+
+void announcePresence() {
+	String message = buildPresenceMessage();
+	bool published = TEST
+		? publishWithRetry("test/aquarium/announce", message.c_str())
+		: publishWithRetry("aquarium/announce", message.c_str());
+	if (published) {
+		diagnosticAnnouncementPending = false;
+		diagnosticAnnouncementAttempted = false;
+		Serial.println("Announced presence: " + message);
 	}
-	Serial.println("Announced presence: " + message);
+}
+
+void serviceDiagnosticAnnouncement() {
+	if (!diagnosticAnnouncementPending || !client.connected()) {
+		return;
+	}
+	unsigned long currentMillis = millis();
+	if (
+		diagnosticAnnouncementAttempted &&
+		currentMillis - diagnosticAnnouncementAttemptAt <
+			DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS
+	) {
+		return;
+	}
+
+	diagnosticAnnouncementAttempted = true;
+	diagnosticAnnouncementAttemptAt = currentMillis;
+	String message = buildPresenceMessage();
+	const char* topic = TEST
+		? "test/aquarium/announce"
+		: "aquarium/announce";
+	if (client.publish(topic, message.c_str())) {
+		diagnosticAnnouncementPending = false;
+		diagnosticAnnouncementAttempted = false;
+		Serial.println("Published queued diagnostic announcement: " + message);
+	} else {
+		Serial.println("Queued diagnostic announcement publish failed; retry remains pending");
+	}
 }
 
 String handleScheduleCommand(const String& scheduleJson) {
@@ -909,13 +1437,18 @@ String handleScheduleCommand(const String& scheduleJson) {
     
     JsonArray channels = doc["c"].as<JsonArray>();
     bool newlyAttached[MAX_PIN + 1] = {false};
-    if (!attachMissingSchedulePins(channels, newlyAttached)) {
-        return "E: Schedule output attach failed";
-    }
+    ScheduleAttachResult attachResult =
+        attachMissingSchedulePins(channels, newlyAttached);
     if (!storeSchedule(scheduleJson)) {
         rollbackNewSchedulePins(newlyAttached);
+        recordLastError(
+            "schedule_storage_failed",
+            "error",
+            "Could not persist the replacement schedule"
+        );
         return "E: Schedule storage failed";
     }
+    resolveLastError("schedule_storage_failed");
     strlcpy(currentSchedule, scheduleJson.c_str(), sizeof(currentSchedule));
 
     turnOffRemovedSchedulePins(channels);
@@ -934,8 +1467,11 @@ String handleScheduleCommand(const String& scheduleJson) {
         // zero or matches the previous schedule's cached percentage.
         activeChannels.push_back({pin, -1, type});
         
-        // All new pins were attached and held low before durable publication.
+        // Attached pins were held low before durable publication. Missing pins
+        // remain represented here so the bounded retry can recover them later.
     }
+    lastScheduleAttachRetry = millis();
+    reportScheduleAttachResult(attachResult);
     
     // Return a simple confirmation instead of the entire schedule
     return "schedule_ok";
@@ -954,25 +1490,43 @@ String handleCommand(String command, String args) {
 				response = "E: Invalid pin";
 			} else if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
 				const int pwmValue = scaleNormalizedPwmValue(value, resolution);
+				bool newlyAttached = false;
 				if (!attachedPins[pin]) {
 					if (ledcAttach(pin, freq, resolution)) {
 						attachedPins[pin] = true;
-						ledcWrite(pin, pwmValue);
-						lastPinValues[pin] = pwmValue;
-						
-						// Update pin state with overwrite information
-						if (overwrite == 1) {
-							pinStates[pin] = {pwmValue, true, millis()};
-						} else {
-							pinStates[pin] = {pwmValue, false, 0};
-						}
-						
-						response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+						newlyAttached = true;
 					} else {
+						recordLastError(
+							"pin_attach_failed",
+							"error",
+							"LEDC attach failed on pin " + String(pin)
+						);
 						response = "E: LEDC attach failed";
 					}
-				} else {
-					ledcWrite(pin, pwmValue);
+				}
+				if (attachedPins[pin]) {
+					if (!ledcWrite(pin, pwmValue)) {
+						if (newlyAttached) {
+							if (ledcDetach(pin)) {
+								attachedPins[pin] = false;
+								resolveLastErrorForPin("pin_detach_failed", pin);
+								pinMode(pin, OUTPUT);
+								digitalWrite(pin, LOW);
+							} else {
+								recordLastError(
+									"pin_detach_failed",
+									"error",
+									"LEDC detach failed on pin " + String(pin)
+								);
+							}
+						}
+						recordLastError(
+							"pin_write_failed",
+							"error",
+							"LEDC write failed on pin " + String(pin)
+						);
+						response = "E: LEDC write failed";
+					} else {
 					lastPinValues[pin] = pwmValue;
 					
 					// Update pin state with overwrite information
@@ -983,6 +1537,9 @@ String handleCommand(String command, String args) {
 					}
 					
 					response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+						resolveLastErrorForPin("pin_attach_failed", pin);
+						resolveLastErrorForPin("pin_write_failed", pin);
+					}
 				}
 			} else {
 				response = "E: Invalid value or overwrite parameter";
@@ -1026,6 +1583,11 @@ String handleCommand(String command, String args) {
 			persisted = EEPROM.commit() && persisted;
 			if (!persisted) {
 				Serial.println("Configuration persistence failed; rolling back");
+				recordLastError(
+					"configuration_persistence_failed",
+					"error",
+					"Could not persist the replacement PWM configuration"
+				);
 				writeToEEPROM(NAME_ADDR, oldName, NAME_MAX_LENGTH);
 				EEPROM.put(FREQ_ADDR, oldFreq);
 				EEPROM.put(RES_ADDR, oldRes);
@@ -1039,20 +1601,24 @@ String handleCommand(String command, String args) {
 			deviceName = newName;
 			freq = newFreq;
 			resolution = newRes;
+			resolveLastError("configuration_persistence_failed");
 			response = deviceName + " " + String(freq) + " " + String(resolution);
 		}
 	}
 	else if (command == "sync") {
 		unsigned long serverTime;
-		if (parseSyncTime(args, serverTime)) {
+		if (
+			parseSyncTime(args, serverTime) &&
+			isUsableUnixTime(static_cast<time_t>(serverTime))
+		) {
 			// Update our internal time
 			time_t syncTime = serverTime;
 			timeInfo.lastSyncTime = syncTime;
 			timeInfo.lastSavedTime = syncTime;
 			timeInfo.lastMillis = millis();
 			timeInfo.timeInitialized = true;
-			scheduleTimeConfirmedThisBoot = true;
-			saveTimeInfo();
+			scheduleTimeAvailableThisBoot = true;
+			queueTimeCheckpoint(true);
 			
 			struct tm timeinfo;
 			localtime_r(&syncTime, &timeinfo);
@@ -1131,50 +1697,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
 			return;
 		}
 
-		// Create JSON document for responses
-		JsonDocument responses;
-		responses["id"] = deviceId;
-		responses["name"] = deviceName;
-		JsonArray commands = responses["responses"].to<JsonArray>();
-
-		// Handle multiple commands separated by semicolon
-		int startPos = 0;
-		int endPos;
-		int cmdIndex = 0;
-		while ((endPos = message.indexOf(';', startPos)) != -1) {
-			String response = processCommand(message.substring(startPos, endPos));
-			if (response.length() > 0) {
-				JsonObject cmd = commands.add<JsonObject>();
-				cmd["index"] = cmdIndex;
-				cmd["response"] = response;
-			}
-			startPos = endPos + 1;
-			cmdIndex++;
-		}
-		// Process the last or only command
-		if (startPos < message.length()) {
-			String response = processCommand(message.substring(startPos));
-			if (response.length() > 0) {
-				JsonObject cmd = commands.add<JsonObject>();
-				cmd["index"] = cmdIndex;
-				cmd["response"] = response;
-			}
-		}
-
-		// Publish responses if any commands were processed
-		if (commands.size() > 0) {
-			String responseStr;
-			serializeJson(responses, responseStr);
-			if (TEST) {
-				Serial.println("Publishing response to test/aquarium/response: " + responseStr);
-				publishWithRetry("test/aquarium/response", responseStr.c_str());
-				Serial.println("Published to test/aquarium/response");
-			} else {
-				Serial.println("Publishing response to aquarium/response: " + responseStr);
-				publishWithRetry("aquarium/response", responseStr.c_str());
-				Serial.println("Published to aquarium/response");
-			}
-		}
+		processCompleteMessage(message);
 	} else {
 		Serial.println("Invalid topic, ignoring message");
 	}
@@ -1236,13 +1759,13 @@ void serviceTimeSynchronization() {
         time_t now;
         time(&now);
 
-        if (now >= MIN_VALID_UNIX_TIME) {
+        if (isUsableUnixTime(now)) {
             timeInfo.lastSyncTime = now;
             timeInfo.lastSavedTime = now;
             timeInfo.lastMillis = millis();
             timeInfo.timeInitialized = true;
-            scheduleTimeConfirmedThisBoot = true;
-            saveTimeInfo();
+            scheduleTimeAvailableThisBoot = true;
+            queueTimeCheckpoint(true);
 
             ntpSyncInProgress = false;
             ntpSyncHasCompleted = true;
@@ -1294,20 +1817,94 @@ void initializeTime() {
     }
 }
 
-// Save time information to EEPROM
-void saveTimeInfo() {
-    // Update lastSavedTime before saving
-    if (timeInfo.timeInitialized) {
-        // Calculate current time based on elapsed millis
-        unsigned long elapsed = millis() - timeInfo.lastMillis;
-        timeInfo.lastSavedTime = timeInfo.lastSavedTime + (elapsed / 1000);
-        timeInfo.lastMillis = millis();
+bool isUsableUnixTime(time_t value) {
+    if (value < MIN_VALID_UNIX_TIME ||
+        value > static_cast<time_t>(MAX_SYNC_UNIX_TIME)) {
+        return false;
     }
-    
-    // Save to EEPROM
+    struct tm timeinfo;
+    return localtime_r(&value, &timeinfo) != nullptr;
+}
+
+bool persistTimeCheckpoint() {
+    if (!timeInfo.timeInitialized) {
+        return false;
+    }
+    time_t currentTime = getCurrentTime();
+    if (!isUsableUnixTime(currentTime)) {
+        Serial.println("Refusing to persist an invalid time checkpoint");
+        return false;
+    }
+
+    timeInfo.lastSavedTime = currentTime;
+    timeInfo.lastMillis = millis();
     EEPROM.put(TIME_INFO_ADDR, timeInfo);
-    EEPROM.commit();
-    Serial.println("Time info saved to EEPROM");
+    if (!EEPROM.commit()) {
+        Serial.println("Time checkpoint EEPROM commit failed");
+        return false;
+    }
+    Serial.println("Time checkpoint saved to EEPROM");
+    return true;
+}
+
+void serviceTimeCheckpoint() {
+    if (!timeInfo.timeInitialized) {
+        return;
+    }
+    unsigned long currentMillis = millis();
+    if (
+        !timeCheckpointPending &&
+        currentMillis - timeCheckpointSuccessAt >= TIME_CHECKPOINT_INTERVAL_MS
+    ) {
+        timeCheckpointPending = true;
+    }
+    if (!timeCheckpointPending) {
+        return;
+    }
+
+    bool due = false;
+    if (timeCheckpointFailed) {
+        due = currentMillis - timeCheckpointAttemptAt >=
+            PERSISTENCE_RETRY_INTERVAL_MS;
+    } else if (
+        timeCheckpointImmediatePending &&
+        !freshTimeCheckpointCommittedThisBoot
+    ) {
+        due = true;
+    } else {
+        due = currentMillis - timeCheckpointSuccessAt >=
+            TIME_CHECKPOINT_INTERVAL_MS;
+    }
+    if (!due) {
+        return;
+    }
+
+    timeCheckpointAttemptAt = currentMillis;
+    const bool committingFreshTime = timeCheckpointImmediatePending;
+    if (persistTimeCheckpoint()) {
+        timeCheckpointPending = false;
+        timeCheckpointImmediatePending = false;
+        if (committingFreshTime) {
+            freshTimeCheckpointCommittedThisBoot = true;
+        }
+        timeCheckpointFailed = false;
+        timeCheckpointSuccessAt = currentMillis;
+    } else {
+        timeCheckpointFailed = true;
+    }
+}
+
+void queueTimeCheckpoint(bool immediate) {
+    timeCheckpointPending = true;
+    if (immediate && !freshTimeCheckpointCommittedThisBoot &&
+        !timeCheckpointImmediatePending) {
+        timeCheckpointImmediatePending = true;
+        // A newly available authoritative clock should not wait behind an
+        // earlier failed fallback checkpoint. If this fresh attempt itself
+        // fails, the normal retry backoff applies.
+        timeCheckpointFailed = false;
+    }
+    serviceTimeCheckpoint();
 }
 
 // Load time information from EEPROM
@@ -1315,18 +1912,21 @@ void loadTimeInfo() {
     EEPROM.get(TIME_INFO_ADDR, timeInfo);
     
     // Verify if the loaded data makes sense
-    if (timeInfo.lastSavedTime < MIN_VALID_UNIX_TIME) {
+    if (!isUsableUnixTime(timeInfo.lastSavedTime)) {
         Serial.println("Invalid time data in EEPROM, resetting");
         timeInfo.timeInitialized = false;
+        timeCheckpointSuccessAt = millis();
         return;
     }
     
-    // Update the time based on how long we've been powered off
-    // The difference between current millis() (which is near 0 after reboot)
-    // and lastMillis tells us how long the device was off
+    // Power-off duration is unknowable without an RTC. Resume from the last
+    // hourly checkpoint; this boundedly stale estimate is preferable to
+    // keeping aquarium lights off while both the Pi and NTP are unavailable.
     time_t currentTime = timeInfo.lastSavedTime;
     timeInfo.lastMillis = millis();
     timeInfo.timeInitialized = true;
+    scheduleTimeAvailableThisBoot = true;
+    timeCheckpointSuccessAt = millis();
     
     Serial.println("Time info loaded from EEPROM");
     Serial.print("Current time estimate: ");
@@ -1370,10 +1970,23 @@ void setup() {
 	initializeEEPROM();
 	loadTimeInfo(); // Load time info from EEPROM
 
-    if (!SPIFFS.begin(true)) {
+    spiffsAvailable = SPIFFS.begin(true);
+    if (!spiffsAvailable) {
         Serial.println("SPIFFS initialization failed!");
     } else {
         Serial.println("SPIFFS initialized successfully");
+        loadLastError();
+    }
+
+    if (!client.setBufferSize(MQTT_PACKET_BUFFER_SIZE)) {
+        Serial.println("Failed to allocate the required MQTT packet buffer");
+        recordLastError(
+            "mqtt_buffer_allocation_failed",
+            "error",
+            "Could not allocate the 512-byte MQTT packet buffer"
+        );
+    } else {
+        resolveLastError("mqtt_buffer_allocation_failed");
     }
 
   	// Load saved schedule if it exists
@@ -1459,12 +2072,8 @@ void loop() {
 	// Check for chunked message timeout
 	checkChunkTimeout();
 	
-	// Save time periodically (every hour)
-	static unsigned long lastTimeSave = 0;
-	if (timeInfo.timeInitialized && millis() - lastTimeSave > 3600000) { // 1 hour
-		saveTimeInfo();
-		lastTimeSave = millis();
-	}
+	serviceTimeCheckpoint();
+	serviceLastErrorPersistence();
 
 	static unsigned long lastOverwriteCheck = 0;
 	if (millis() - lastOverwriteCheck >= 200) {
@@ -1475,18 +2084,24 @@ void loop() {
 	// Process schedule if active
 	if (strlen(currentSchedule) > 0) {
 		unsigned long currentMillis = millis();
+		if (currentMillis - lastScheduleAttachRetry >= SCHEDULE_ATTACH_RETRY_INTERVAL) {
+			lastScheduleAttachRetry = currentMillis;
+			retryMissingSchedulePins();
+		}
 		
 		// Only update if SCHEDULE_UPDATE_INTERVAL has passed
 		if (currentMillis - lastScheduleUpdate >= SCHEDULE_UPDATE_INTERVAL) {
 			lastScheduleUpdate = currentMillis;
 
-			if (timeInfo.timeInitialized && scheduleTimeConfirmedThisBoot) {
+			if (timeInfo.timeInitialized && scheduleTimeAvailableThisBoot) {
 				// Get current minute of day (0-1439). Midnight is a valid zero.
 				int currentMinute = getCurrentMinuteOfDay();
 				deserializeJson(globalDoc, currentSchedule);
 				
 				// Process each channel in the array
 				JsonArray channels = globalDoc["c"].as<JsonArray>();
+				int failedWriteCount = 0;
+				int firstFailedWritePin = -1;
 				for (size_t i = 0; i < channels.size(); i++) {
 					JsonVariant channel = channels[i];
 					int pin = channel["o"].as<int>();
@@ -1497,10 +2112,13 @@ void loop() {
 					// Find the matching channel in our active channels
 					for (size_t j = 0; j < activeChannels.size(); j++) {
 						if (activeChannels[j].pin == pin) {
+							if (!attachedPins[pin]) {
+								break;
+							}
 							// Check if pin is currently overwritten
 							auto pinStateIt = pinStates.find(pin);
 							if (pinStateIt != pinStates.end() && pinStateIt->second.isOverwritten) {
-								continue; // Skip schedule update for this pin
+								break; // Skip schedule update for this pin
 							}
 							
 							int targetValue = getScheduledValue(links, currentMinute);
@@ -1511,8 +2129,15 @@ void loop() {
 								Serial.println("Schedule: Setting pin " + String(pin) + " to " + String(pwmValue) + 
 											  " (" + String(targetValue) + "%) at minute " + String(currentMinute) +
 											  " [Type: " + (type == 112 ? "pump" : "light") + "]");
-								ledcWrite(pin, pwmValue);
+								if (!ledcWrite(pin, pwmValue)) {
+									if (firstFailedWritePin < 0) {
+										firstFailedWritePin = pin;
+									}
+									failedWriteCount++;
+									break;
+								}
 								lastPinValues[pin] = pwmValue;
+								resolveLastErrorForPin("pin_write_failed", pin);
 								auto scheduledPinState = pinStates.find(pin);
 								if (scheduledPinState != pinStates.end()) {
 									scheduledPinState->second.lastValue = pwmValue;
@@ -1523,14 +2148,22 @@ void loop() {
 						}
 					}
 				}
+				if (failedWriteCount > 0) {
+					recordLastError(
+						"pin_write_failed",
+						"error",
+						"LEDC write failed on pin " + String(firstFailedWritePin)
+					);
+				}
 			} else if (!scheduleTimeGateNoticePrinted) {
-				Serial.println("Persisted schedule is safely off until time is confirmed this boot");
+				Serial.println("Persisted schedule is off because no usable time is available");
 				scheduleTimeGateNoticePrinted = true;
 			}
 		}
 	}
  
 	client.loop();
+	serviceDiagnosticAnnouncement();
 
     // ------------------------------------------------------------------
     // Daily maintenance: restart WiFi and MQTT at 04:00 to reclaim memory
@@ -1571,7 +2204,6 @@ void checkOverwriteExpiries() {
 
         if (state.isOverwritten && currentMillis - state.overwriteStartedAt >= OVERWRITE_DURATION) {
             Serial.println("Overwrite expired for pin " + String(pin));
-            state.isOverwritten = false;
             
             // Determine if this pin is controlled by the schedule
             bool controlledBySchedule = false;
@@ -1584,14 +2216,29 @@ void checkOverwriteExpiries() {
 				}
             }
 
-            // Without a fresh clock confirmation there is no safe scheduled
-            // value to restore when a manual overwrite expires.
-            if (!controlledBySchedule || !scheduleTimeConfirmedThisBoot) {
-                Serial.println("No confirmed scheduled value for pin " + String(pin) + ", turning off");
-                ledcWrite(pin, 0);
+            // Without a usable EEPROM, NTP, or controller clock there is no
+            // scheduled value to restore when an overwrite expires.
+            if (!controlledBySchedule || !scheduleTimeAvailableThisBoot) {
+                Serial.println("No usable scheduled value for pin " + String(pin) + ", turning off");
+                if (!ledcWrite(pin, 0)) {
+                    recordLastError(
+                        "pin_write_failed",
+                        "error",
+                        "LEDC write failed on pin " + String(pin)
+                    );
+                    // Preserve the overwrite state as a retry marker without
+                    // hammering a failed peripheral every 200 ms.
+                    state.overwriteStartedAt =
+                        currentMillis -
+                        (OVERWRITE_DURATION - SCHEDULE_ATTACH_RETRY_INTERVAL);
+                    continue;
+                }
+                resolveLastErrorForPin("pin_write_failed", pin);
+                state.isOverwritten = false;
                 lastPinValues[pin] = 0;
 				state.lastValue = 0;
 			} else {
+                state.isOverwritten = false;
 				// The cached percentage still describes the value from before the
 				// override. Invalidate it so a flat schedule is physically restored.
 				for (auto& channel : activeChannels) {
@@ -1714,10 +2361,19 @@ void handleChunkedMessage(String chunkData) {
 }
 
 void processCompleteMessage(String message) {
+    String requestId;
+    if (!unwrapRequestEnvelope(message, requestId)) {
+        Serial.println("Invalid request envelope; ignoring message");
+        return;
+    }
+
     // Create JSON document for responses
     JsonDocument responses;
     responses["id"] = deviceId;
     responses["name"] = deviceName;
+    if (requestId.length() > 0) {
+        responses["requestId"] = requestId;
+    }
     JsonArray commands = responses["responses"].to<JsonArray>();
     
     // Handle multiple commands separated by semicolon

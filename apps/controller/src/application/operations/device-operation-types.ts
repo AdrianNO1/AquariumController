@@ -162,7 +162,12 @@ const outcomeUnknownResultSchema = z.strictObject({
 
 const cancelledResultSchema = z.strictObject({
   status: z.literal("cancelled"),
-  reason: z.enum(["controller_restart_before_attempt", "cancelled_by_owner"]),
+  reason: z.enum([
+    "controller_restart_before_attempt",
+    "cancelled_by_owner",
+    "device_command_cooldown",
+    "device_command_in_flight",
+  ]),
 });
 
 export const deviceOperationResultSchema = z.discriminatedUnion("status", [
@@ -178,6 +183,11 @@ export type DeviceOperationRequest = z.infer<
 >;
 export type DeviceOperationResult = z.infer<typeof deviceOperationResultSchema>;
 export type DeviceOperationTerminalStatus = DeviceOperationResult["status"];
+export type DeviceOperationPriority = "interactive" | "background";
+
+export interface DeviceOperationExecutionOptions {
+  readonly priority?: DeviceOperationPriority;
+}
 
 export function assertDeviceOperationResultMatchesRequest(
   request: DeviceOperationRequest,

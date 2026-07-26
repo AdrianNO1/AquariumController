@@ -10,6 +10,7 @@ import type {
   RenameChannelRequest,
   ReplaceMappingProfileRequest,
   ReplaceScheduleRequest,
+  SetDeviceEnabledRequest,
   UpdateThrottleRequest,
 } from "@aquarium/contracts";
 
@@ -87,6 +88,10 @@ export interface ControllerConfigurationService {
   replaceMappingProfile(
     profileId: string,
     request: ReplaceMappingProfileRequest,
+  ): Promise<MutationResult>;
+  setDeviceEnabled(
+    deviceId: string,
+    request: SetDeviceEnabledRequest,
   ): Promise<MutationResult>;
   getOperation(operationId: string): Promise<OperationDetailsResponse>;
   listAlertRules(): Promise<AlertRulesResponse>;

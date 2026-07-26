@@ -73,6 +73,8 @@ describe("MQTT interaction volume policy", () => {
     await logger.logTransportInteraction({
       kind: "batch_published",
       operationId: "wire-batch",
+      requestId: "session-request-1",
+      targetId: "A1",
       batchIndex: 0,
       frameCount: 1,
       payloadBytes: 4,
@@ -160,5 +162,86 @@ describe("MQTT interaction volume policy", () => {
         retention_class: "audit",
       },
     ]);
+    await expect(
+      database
+        .selectFrom("interactions")
+        .select(["device_id", "correlation_id", "operation_id"])
+        .where("kind", "=", "mqtt.command-batch")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({
+      device_id: "A1",
+      correlation_id: "session-request-1",
+      operation_id: "wire-batch",
+    });
+  });
+
+  it("logs each active and resolved firmware diagnostic sequence once", async () => {
+    const database = await openEventsDatabase({ filename: ":memory:" });
+    openDatabases.push(database);
+    const logger = new MqttInteractionLogger(
+      new InteractionRepository(database),
+      createEspTopicSet(true),
+    );
+    const baseAnnouncement = {
+      id: "A1",
+      name: "One",
+      freq: 5_000,
+      res: 8,
+      status: "online",
+      version: "4.1.0",
+      scheduleHash: "0",
+    } as const;
+    const activeDiagnostic = {
+      code: "schedule_pin_attach_failed",
+      severity: "warning" as const,
+      message: "Could not attach schedule pin 4",
+      sequence: 1,
+      active: true,
+      at: 1_752_192_000,
+    };
+
+    for (const receivedAtMs of [100, 200]) {
+      await logger.logAnnouncement({
+        announcement: {
+          ...baseAnnouncement,
+          lastError: activeDiagnostic,
+        },
+        receivedAtMs,
+        payloadBytes: 100,
+      });
+    }
+    for (const receivedAtMs of [300, 400]) {
+      await logger.logAnnouncement({
+        announcement: {
+          ...baseAnnouncement,
+          lastError: {
+            ...activeDiagnostic,
+            sequence: 2,
+            active: false,
+          },
+        },
+        receivedAtMs,
+        payloadBytes: 100,
+      });
+    }
+
+    const diagnostics = await database
+      .selectFrom("interactions")
+      .select(["outcome", "payload_json"])
+      .where("kind", "=", "mqtt.device-diagnostic")
+      .orderBy("occurred_at_ms")
+      .execute();
+    expect(diagnostics.map(({ outcome }) => outcome)).toEqual([
+      "failed",
+      "succeeded",
+    ]);
+    expect(
+      diagnostics.map(({ payload_json: payloadJson }) => {
+        if (payloadJson === null) {
+          throw new Error("Expected device diagnostic payload JSON.");
+        }
+        return JSON.parse(payloadJson);
+      }),
+    ).toMatchObject([{ active: true }, { active: false }]);
   });
 });

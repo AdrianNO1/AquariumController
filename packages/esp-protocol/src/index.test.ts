@@ -5,9 +5,11 @@ import {
   batchLegacyCommands,
   createEspTopicSet,
   CURRENT_ESP_FIRMWARE_VERSION,
+  encodeCorrelatedLegacyRequest,
   encodeLegacyMessage,
   ESP32_PWM_OVERWRITE_DURATION_MS,
   espAnnouncementSchema,
+  espCommandResponseSchema,
   isSupportedEsp32PwmConfiguration,
   isCurrentEspFirmwareVersion,
   LEGACY_CHUNK_DATA_BYTES,
@@ -16,9 +18,10 @@ import {
 
 describe("legacy ESP protocol", () => {
   it("requires the refactored reliability firmware exactly", () => {
-    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("4.0.0");
+    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("4.1.0");
     expect(ESP32_PWM_OVERWRITE_DURATION_MS).toBe(120_000);
-    expect(isCurrentEspFirmwareVersion("4.0.0")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("4.1.0")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("4.0.0")).toBe(false);
     expect(isCurrentEspFirmwareVersion("3.2w")).toBe(false);
     expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);
   });
@@ -30,7 +33,7 @@ describe("legacy ESP protocol", () => {
       freq: 40_000,
       res: 10,
       status: "online",
-      version: "4.0.0",
+      version: "4.1.0",
       scheduleHash: "0",
     };
 
@@ -45,6 +48,27 @@ describe("legacy ESP protocol", () => {
     const payload = "x".repeat(256);
 
     expect(encodeLegacyMessage(payload)).toEqual([payload]);
+  });
+
+  it("correlates command batches and requires the ESP to echo the request", () => {
+    expect(encodeCorrelatedLegacyRequest("wire-1-0", "A1 p")).toBe(
+      "request:wire-1-0|A1 p",
+    );
+    expect(
+      espCommandResponseSchema.safeParse({
+        id: "A1",
+        name: "Main",
+        requestId: "wire-1-0",
+        responses: [{ index: 0, response: "o" }],
+      }).success,
+    ).toBe(true);
+    expect(
+      espCommandResponseSchema.safeParse({
+        id: "A1",
+        name: "Main",
+        responses: [{ index: 0, response: "o" }],
+      }).success,
+    ).toBe(false);
   });
 
   it("uses the deployed chunk framing above 256 bytes", () => {

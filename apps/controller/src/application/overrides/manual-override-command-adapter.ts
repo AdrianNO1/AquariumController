@@ -5,10 +5,10 @@ import type {
 } from "./manual-override-types.js";
 
 export interface UnknownDeviceOperationReconciler {
-  acknowledgeReconciledOutcome(operationId: string): Promise<void>;
+  acknowledgeReconciledOutcomes(operationIds: readonly string[]): Promise<void>;
 }
 
-/** Bridges overrides into the scheduler's one serialized command lane. */
+/** Bridges overrides into the scheduler's per-device command lanes. */
 export class ManualOverrideCommandAdapter implements ManualOverrideDeviceCommandPort {
   constructor(
     private readonly dispatcher: ScheduledDeviceOperationDispatcher,
@@ -24,10 +24,14 @@ export class ManualOverrideCommandAdapter implements ManualOverrideDeviceCommand
       readonly overwrite: boolean;
     },
   ): Promise<ManualOverrideDeviceDispatchResult> {
-    return this.dispatcher.dispatch(deviceId, request);
+    return this.dispatcher.dispatch(deviceId, request, {
+      priority: "interactive",
+    });
   }
 
-  async reconcileUnknownOutcome(operationId: string): Promise<void> {
-    await this.operationReconciler.acknowledgeReconciledOutcome(operationId);
+  async reconcileUnknownOutcomes(
+    operationIds: readonly string[],
+  ): Promise<void> {
+    await this.operationReconciler.acknowledgeReconciledOutcomes(operationIds);
   }
 }

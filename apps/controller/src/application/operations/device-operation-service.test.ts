@@ -17,10 +17,12 @@ import type {
 } from "../../infrastructure/mqtt/index.js";
 import {
   createEspTopicSet,
+  CURRENT_ESP_FIRMWARE_VERSION,
   ESP32_PWM_OVERWRITE_DURATION_MS,
 } from "@aquarium/esp-protocol";
 import { InteractionRepository } from "../../infrastructure/storage/interaction-repository.js";
 import { DeviceOperationService } from "./device-operation-service.js";
+import type { DeviceOperationExecutionOptions } from "./device-operation-types.js";
 
 const openDatabases: ControllerDatabases[] = [];
 
@@ -96,7 +98,27 @@ describe("persistent device operation service", () => {
     expect(logs[0]?.payload_json).not.toContain("Reef 6000 10");
   });
 
-  it("retains desired intent, leaves reported state unchanged, latches unknown, and never retries", async () => {
+  it("forwards command priority to the MQTT executor", async () => {
+    const context = await setup();
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "succeeded",
+      response: "o",
+      analogValue: null,
+    });
+
+    await context.service.executeDeviceOperation(
+      "A1",
+      { kind: "ping" },
+      { priority: "background" },
+    );
+
+    expect(context.executor.options).toEqual([{ priority: "background" }]);
+  });
+
+  it("cools only the timed-out device until availability is signalled", async () => {
     const context = await setup();
     context.executor.outcomes.push({
       index: 0,
@@ -126,30 +148,20 @@ describe("persistent device operation service", () => {
       reported_name: "One",
       reported_pwm_frequency_hz: 5_000,
       last_error_code: "configuration_mismatch",
+      status: "offline",
     });
     await expect(
       context.service.executeDeviceOperation("A1", { kind: "ping" }),
-    ).rejects.toThrow(/unknown outcome/i);
-    await expect(
-      context.service.patchDeviceConfiguration("A1", {
-        expectedRevision: await revisionCount(context.databases.state),
-        name: "Blocked",
-      }),
-    ).rejects.toMatchObject({
-      name: "ConfigurationRelationalConflictError",
-      conflicts: [
-        expect.objectContaining({
-          resource: "operation",
-          relation: "unreconciled_device_operation",
-        }),
-      ],
+    ).resolves.toMatchObject({
+      status: "cancelled",
+      result: {
+        status: "cancelled",
+        reason: "device_command_cooldown",
+      },
     });
     expect(context.executor.calls).toHaveLength(1);
 
-    await context.service.acknowledgeReconciledOutcome(unknown.id);
-    expect(context.executor.acknowledgements).toBe(1);
-    await context.service.acknowledgeReconciledOutcome(unknown.id);
-    expect(context.executor.acknowledgements).toBe(1);
+    context.service.signalDeviceAvailable("A1");
     context.executor.outcomes.push({
       index: 0,
       command: "A1 p",
@@ -164,7 +176,186 @@ describe("persistent device operation service", () => {
     expect(context.executor.calls).toHaveLength(2);
   });
 
-  it("durably reconciles arbitrary unknown operations with revision and global-latch guards", async () => {
+  it("allows one probe after cooldown while other devices continue", async () => {
+    const context = await setup();
+    await context.registry.handleAnnouncement({
+      announcement: {
+        id: "A2",
+        name: "Two",
+        freq: 5_000,
+        res: 8,
+        status: "online",
+        version: CURRENT_ESP_FIRMWARE_VERSION,
+        scheduleHash: "0",
+      },
+      receivedAtMs: 1_100,
+    });
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "outcome_unknown",
+      reason: "timeout",
+    });
+    await context.service.executeDeviceOperation("A1", { kind: "ping" });
+
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A2 p",
+      targetId: "A2",
+      status: "succeeded",
+      response: "o",
+      analogValue: null,
+    });
+    await expect(
+      context.service.executeDeviceOperation("A2", { kind: "ping" }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    await expect(
+      context.service.executeDeviceOperation("A1", { kind: "ping" }),
+    ).resolves.toMatchObject({
+      status: "cancelled",
+      result: { reason: "device_command_cooldown" },
+    });
+
+    context.setNowMs(100_000);
+    let releaseProbe = (): void => undefined;
+    context.executor.waits.push(
+      new Promise<void>((resolve) => {
+        releaseProbe = resolve;
+      }),
+    );
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "succeeded",
+      response: "o",
+      analogValue: null,
+    });
+    const probe = context.service.executeDeviceOperation("A1", {
+      kind: "ping",
+    });
+    await vi.waitFor(() => expect(context.executor.calls).toHaveLength(3));
+    await expect(
+      context.service.executeDeviceOperation("A1", { kind: "ping" }),
+    ).resolves.toMatchObject({
+      status: "cancelled",
+      result: { reason: "device_command_in_flight" },
+    });
+    releaseProbe();
+    await expect(probe).resolves.toMatchObject({ status: "succeeded" });
+  });
+
+  it("reconciles expired routine overwrite uncertainty so offline retries remain bounded", async () => {
+    const context = await setup({ startService: false });
+    await context.repository.createPending({
+      id: "expired-routine-pwm",
+      deviceId: "A1",
+      requestedAtMs: 1_000,
+      deadlineAtMs: 6_000,
+      request: {
+        kind: "set_pwm",
+        pin: 4,
+        value: 128,
+        overwrite: true,
+      },
+    });
+    await context.repository.markInFlight("expired-routine-pwm", 1_010);
+    await context.repository.completeInFlight("expired-routine-pwm", 1_020, {
+      status: "outcome_unknown",
+      wireOperationId: "wire-expired-routine",
+      reason: "timeout",
+      reconciledAtMs: null,
+    });
+    await context.repository.createPending({
+      id: "legacy-non-overwrite-pwm",
+      deviceId: "A1",
+      requestedAtMs: 1_001,
+      deadlineAtMs: 6_001,
+      request: {
+        kind: "set_pwm",
+        pin: 5,
+        value: 64,
+        overwrite: false,
+      },
+    });
+    await context.repository.markInFlight("legacy-non-overwrite-pwm", 1_011);
+    await context.repository.completeInFlight(
+      "legacy-non-overwrite-pwm",
+      1_019,
+      {
+        status: "outcome_unknown",
+        wireOperationId: "wire-legacy-non-overwrite",
+        reason: "timeout",
+        reconciledAtMs: null,
+      },
+    );
+
+    await expect(
+      context.repository.reconcileExpiredRoutinePwmOutcomes("A1", 121_019),
+    ).resolves.toEqual([]);
+    await expect(
+      context.repository.reconcileExpiredRoutinePwmOutcomes("A1", 121_020),
+    ).resolves.toEqual(["expired-routine-pwm"]);
+    await expect(
+      context.repository.getById("expired-routine-pwm"),
+    ).resolves.toMatchObject({
+      result: {
+        status: "outcome_unknown",
+        reconciledAtMs: 121_020,
+      },
+    });
+    await expect(
+      context.repository.getById("legacy-non-overwrite-pwm"),
+    ).resolves.toMatchObject({
+      result: {
+        status: "outcome_unknown",
+        reconciledAtMs: null,
+      },
+    });
+  });
+
+  it("lets an explicit configuration patch bypass response cooldown", async () => {
+    const context = await setup();
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "outcome_unknown",
+      reason: "timeout",
+    });
+    await context.service.executeDeviceOperation("A1", { kind: "ping" });
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 e Desired 5000 8",
+      targetId: "A1",
+      status: "succeeded",
+      response: "Desired 5000 8",
+      analogValue: null,
+    });
+
+    await expect(
+      context.service.patchDeviceConfiguration("A1", {
+        expectedRevision: await revisionCount(context.databases.state),
+        name: "Desired",
+      }),
+    ).resolves.toMatchObject({ changed: true });
+    await context.service.drain();
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "succeeded",
+      response: "o",
+      analogValue: null,
+    });
+    await expect(
+      context.service.executeDeviceOperation("A1", { kind: "ping" }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+    expect(context.executor.calls).toHaveLength(3);
+  });
+
+  it("durably reconciles arbitrary unknown operations with revision guards", async () => {
     const context = await setup({ startService: false });
     for (const [id, requestedAtMs] of [
       ["unknown-one", 1_010],
@@ -187,7 +378,6 @@ describe("persistent device operation service", () => {
     }
     context.setNowMs(2_000);
     await context.service.start();
-    expect(context.unknownOutcomeLatchRestorations.count).toBe(1);
 
     const initialRevision = await revisionCount(context.databases.state);
     await expect(
@@ -200,9 +390,6 @@ describe("persistent device operation service", () => {
         entity: { type: "operation", id: "unknown-one" },
       },
     });
-    expect(context.executor.acknowledgements).toBe(0);
-    expect(context.unknownOutcomeLatchReleases.count).toBe(0);
-
     await expect(
       context.service.reconcileDeviceOperation("unknown-two", initialRevision),
     ).rejects.toMatchObject({
@@ -219,8 +406,6 @@ describe("persistent device operation service", () => {
       changed: true,
       revision: initialRevision + 2,
     });
-    expect(context.executor.acknowledgements).toBe(1);
-    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
     expect(context.executor.calls).toHaveLength(0);
 
     await expect(
@@ -230,11 +415,18 @@ describe("persistent device operation service", () => {
       revision: initialRevision + 2,
       event: null,
     });
-    expect(context.executor.acknowledgements).toBe(1);
-    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
-    expect(await context.repository.listUnresolvedOutcomeUnknownIds()).toEqual(
-      [],
-    );
+    expect(
+      (await context.repository.getById("unknown-one")).result,
+    ).toMatchObject({
+      status: "outcome_unknown",
+      reconciledAtMs: expect.any(Number),
+    });
+    expect(
+      (await context.repository.getById("unknown-two")).result,
+    ).toMatchObject({
+      status: "outcome_unknown",
+      reconciledAtMs: expect.any(Number),
+    });
   });
 
   it("holds unknown firmware overwrites through the complete 120-second safety window", async () => {
@@ -264,7 +456,6 @@ describe("persistent device operation service", () => {
       },
     );
     await context.service.start();
-    expect(context.unknownOutcomeLatchRestorations.count).toBe(1);
     const expectedRevision = await revisionCount(context.databases.state);
 
     context.setNowMs(completedAtMs + ESP32_PWM_OVERWRITE_DURATION_MS - 1 - 10);
@@ -286,8 +477,6 @@ describe("persistent device operation service", () => {
       ],
     });
     expect(await revisionCount(context.databases.state)).toBe(expectedRevision);
-    expect(context.executor.acknowledgements).toBe(0);
-
     context.setNowMs(completedAtMs + ESP32_PWM_OVERWRITE_DURATION_MS - 10);
     await expect(
       context.service.reconcileDeviceOperation(
@@ -298,8 +487,6 @@ describe("persistent device operation service", () => {
       changed: true,
       revision: expectedRevision + 1,
     });
-    expect(context.executor.acknowledgements).toBe(1);
-    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
   });
 
   it("reserves unresolved manual-override children for the safe internal reconciliation path", async () => {
@@ -349,16 +536,16 @@ describe("persistent device operation service", () => {
           valuePercentage: 78,
           expiresAtMs: 121_000,
         }),
-        request_schema_version: 1,
+        request_schema_version: 2,
         result_json: JSON.stringify({
           status: "outcome_unknown",
           childOperationIds: ["owned-unknown-child"],
           reason: "child_outcome_not_succeeded",
-          unknownChildOperationId: "owned-unknown-child",
+          unknownChildOperationIds: ["owned-unknown-child"],
           safetyReconcileAtMs: 121_040,
           reconciledAtMs: null,
         }),
-        result_schema_version: 1,
+        result_schema_version: 2,
       })
       .executeTakeFirstOrThrow();
     context.setNowMs(121_040);
@@ -382,9 +569,6 @@ describe("persistent device operation service", () => {
         },
       ],
     });
-    expect(context.executor.acknowledgements).toBe(0);
-    expect(context.unknownOutcomeLatchReleases.count).toBe(0);
-
     await expect(
       context.service.reconcileDeviceOperation(
         "manual-operation-owner",
@@ -402,8 +586,6 @@ describe("persistent device operation service", () => {
     });
 
     await context.service.acknowledgeReconciledOutcome("owned-unknown-child");
-    expect(context.executor.acknowledgements).toBe(1);
-    expect(context.unknownOutcomeLatchReleases.count).toBe(1);
     expect(context.executor.calls).toHaveLength(0);
   });
 
@@ -447,6 +629,29 @@ describe("persistent device operation service", () => {
     expect(context.executor.calls).toHaveLength(1);
   });
 
+  it("bounds invalid-response diagnostics before quarantining the device", async () => {
+    const context = await setup();
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "failed",
+      response: "x".repeat(5_000),
+      expectedResponse: { kind: "exact", value: "o" },
+    });
+
+    await expect(
+      context.service.executeDeviceOperation("A1", { kind: "ping" }),
+    ).resolves.toMatchObject({ status: "failed" });
+    const device = await readDevice(context.databases.state);
+    expect(device).toMatchObject({
+      enabled: 0,
+      status: "error",
+      last_error_code: "protocol_invalid_response",
+    });
+    expect(device.last_error_message?.length).toBeLessThanOrEqual(256);
+  });
+
   it("guards desired configuration against operator commits without conflicting on routine device operations", async () => {
     const context = await setup();
     const repository = new ControlOperationRepository(context.databases.state);
@@ -457,7 +662,7 @@ describe("persistent device operation service", () => {
         freq: 5_000,
         res: 8,
         status: "online",
-        version: "4.0.0",
+        version: CURRENT_ESP_FIRMWARE_VERSION,
         scheduleHash: "0",
       },
       receivedAtMs: 2_000,
@@ -522,7 +727,7 @@ describe("persistent device operation service", () => {
       expectedRevision: 1,
       currentRevision: 4,
     } satisfies Partial<DeviceOperationRevisionConflictError>);
-    const noOp = await repository.createPendingUserConfiguration({
+    const reapply = await repository.createPendingUserConfiguration({
       id: "same-value-operation",
       deviceId: "A1",
       expectedRevision: 4,
@@ -535,18 +740,21 @@ describe("persistent device operation service", () => {
         pwmResolutionBits: 10,
       },
     });
-    expect(noOp).toEqual({
-      changed: false,
-      operation: null,
-      mutation: { changed: false, revision: 4, event: null },
+    expect(reapply).toMatchObject({
+      changed: true,
+      operation: {
+        id: "same-value-operation",
+        status: "pending",
+      },
+      mutation: { changed: true, revision: 5 },
     });
-    expect(await revisionCount(context.databases.state)).toBe(4);
+    expect(await revisionCount(context.databases.state)).toBe(5);
     expect(
       await context.databases.state
         .selectFrom("control_operations")
         .select(({ fn }) => fn.countAll<number>().as("count"))
         .executeTakeFirstOrThrow(),
-    ).toMatchObject({ count: 2 });
+    ).toMatchObject({ count: 3 });
   });
 
   it("returns a same-value device configuration PATCH as a true no-op without publishing", async () => {
@@ -649,7 +857,7 @@ describe("persistent device operation service", () => {
     expect(context.executor.calls).toHaveLength(0);
   });
 
-  it("recovers pending and in-flight rows without publishing, and restores the unknown latch", async () => {
+  it("recovers pending and in-flight rows without globally blocking new work", async () => {
     const context = await setup({ startService: false });
     const repository = new ControlOperationRepository(context.databases.state);
     await repository.createPending({
@@ -693,10 +901,18 @@ describe("persistent device operation service", () => {
       status: "timed_out",
       result: { reason: "deadline_before_attempt" },
     });
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 p",
+      targetId: "A1",
+      status: "succeeded",
+      response: "o",
+      analogValue: null,
+    });
     await expect(
       context.service.executeDeviceOperation("A1", { kind: "ping" }),
-    ).rejects.toThrow(/unknown outcome/i);
-    expect(context.executor.calls).toHaveLength(0);
+    ).resolves.toMatchObject({ status: "succeeded" });
+    expect(context.executor.calls).toHaveLength(1);
   });
 
   it("restores an unresolved in-flight operation after both databases are reopened", async () => {
@@ -720,7 +936,7 @@ describe("persistent device operation service", () => {
           freq: 5_000,
           res: 8,
           status: "online",
-          version: "4.0.0",
+          version: CURRENT_ESP_FIRMWARE_VERSION,
           scheduleHash: "0",
         },
         receivedAtMs: 1_000,
@@ -760,8 +976,6 @@ describe("persistent device operation service", () => {
           onBackgroundError: (error) => {
             throw error;
           },
-          onUnknownOutcomeLatched: () => undefined,
-          onAllUnknownOutcomesReconciled: async () => undefined,
         },
       );
       await service.start();
@@ -773,10 +987,18 @@ describe("persistent device operation service", () => {
         status: "outcome_unknown",
         result: { reason: "controller_restart", reconciledAtMs: null },
       });
+      executor.outcomes.push({
+        index: 0,
+        command: "A1 p",
+        targetId: "A1",
+        status: "succeeded",
+        response: "o",
+        analogValue: null,
+      });
       await expect(
         service.executeDeviceOperation("A1", { kind: "ping" }),
-      ).rejects.toThrow(/unknown outcome/i);
-      expect(executor.calls).toHaveLength(0);
+      ).resolves.toMatchObject({ status: "succeeded" });
+      expect(executor.calls).toHaveLength(1);
     } finally {
       await Promise.all(
         openDatabases.splice(0).map(async (databases) => {
@@ -853,8 +1075,6 @@ interface TestContext {
   readonly registry: DeviceRegistry;
   readonly repository: ControlOperationRepository;
   readonly service: DeviceOperationService;
-  readonly unknownOutcomeLatchRestorations: { count: number };
-  readonly unknownOutcomeLatchReleases: { count: number };
   readonly setNowMs: (value: number) => void;
 }
 
@@ -882,7 +1102,7 @@ async function setup(
       freq: 5_000,
       res: 8,
       status: "online",
-      version: "4.0.0",
+      version: CURRENT_ESP_FIRMWARE_VERSION,
       scheduleHash: "0",
     },
     receivedAtMs: nowMs,
@@ -891,8 +1111,6 @@ async function setup(
     nowMs += 50;
     return nowMs;
   });
-  const unknownOutcomeLatchReleases = { count: 0 };
-  const unknownOutcomeLatchRestorations = { count: 0 };
   let id = 0;
   const repository = new ControlOperationRepository(databases.state);
   const interactionLogger = new MqttInteractionLogger(
@@ -916,12 +1134,6 @@ async function setup(
         ((error) => {
           throw error;
         }),
-      onUnknownOutcomeLatched: () => {
-        unknownOutcomeLatchRestorations.count += 1;
-      },
-      onAllUnknownOutcomesReconciled: async () => {
-        unknownOutcomeLatchReleases.count += 1;
-      },
     },
   );
   if (options.startService !== false) {
@@ -934,8 +1146,6 @@ async function setup(
     registry,
     repository,
     service,
-    unknownOutcomeLatchRestorations,
-    unknownOutcomeLatchReleases,
     setNowMs: (value) => {
       nowMs = value;
     },
@@ -945,17 +1155,24 @@ async function setup(
 class FakeCommandExecutor {
   readonly outcomes: LegacyCommandOutcome[] = [];
   readonly calls: LegacyWireCommand[][] = [];
-  acknowledgements = 0;
+  readonly options: DeviceOperationExecutionOptions[] = [];
+  readonly waits: Promise<void>[] = [];
 
   constructor(readonly now: () => number) {}
 
   async executeCommands(
     commands: readonly LegacyWireCommand[],
+    options: DeviceOperationExecutionOptions = {},
   ): Promise<LegacyWireOperationResult> {
     this.calls.push([...commands]);
+    this.options.push(options);
     const outcome = this.outcomes.shift();
     if (outcome === undefined) {
       throw new Error("Fake command executor requires an explicit outcome");
+    }
+    const wait = this.waits.shift();
+    if (wait !== undefined) {
+      await wait;
     }
     const startedAtMs = this.now();
     return {
@@ -964,10 +1181,6 @@ class FakeCommandExecutor {
       completedAtMs: this.now(),
       outcomes: [outcome],
     };
-  }
-
-  acknowledgeUnknownOutcome(): void {
-    this.acknowledgements += 1;
   }
 }
 

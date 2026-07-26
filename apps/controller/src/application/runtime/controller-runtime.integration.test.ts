@@ -164,7 +164,7 @@ describe.sequential(
       await waitUntil(
         () =>
           commandPayloads().some(
-            (payload) => payload === `${DEVICE_ID} s 4 ${SCHEDULED_PWM} 0`,
+            (payload) => payload === `${DEVICE_ID} s 4 ${SCHEDULED_PWM} 1`,
           ),
         "scheduled refresh wire command",
       );
@@ -239,7 +239,7 @@ describe.sequential(
       await waitUntil(
         () =>
           actor.session.actor.pinSnapshot(4).outputValue === SCHEDULED_PWM &&
-          !actor.session.actor.pinSnapshot(4).overwritten,
+          actor.session.actor.pinSnapshot(4).overwritten,
         "scheduled output after controller and database restart",
       );
 
@@ -437,7 +437,21 @@ function commandPayloads(): readonly string[] {
   return broker
     .publications()
     .filter(({ topic }) => topic === "test/aquarium/command")
-    .map(({ payload }) => payload);
+    .filter(({ payload }) => payload !== "discover")
+    .map(({ payload }) => correlatedCommandPayload(payload));
+}
+
+function correlatedCommandPayload(envelope: string): string {
+  const prefix = "request:";
+  const separator = envelope.indexOf("|");
+  if (!envelope.startsWith(prefix) || separator <= prefix.length) {
+    throw new Error("Expected a correlated MQTT command envelope");
+  }
+  const payload = envelope.slice(separator + 1);
+  if (payload.length === 0) {
+    throw new Error("Correlated MQTT command envelope had an empty payload");
+  }
+  return payload;
 }
 
 function createTemporaryDirectory(): string {

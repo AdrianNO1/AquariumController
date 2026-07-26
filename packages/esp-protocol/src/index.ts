@@ -12,14 +12,23 @@ import {
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "4.0.0";
+export const CURRENT_ESP_FIRMWARE_VERSION = "4.1.0";
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
   return version === CURRENT_ESP_FIRMWARE_VERSION;
 }
 
+export const espFirmwareDiagnosticSchema = z.strictObject({
+  code: z.string().regex(/^[a-z0-9_]{1,48}$/u),
+  severity: z.enum(["warning", "error"]),
+  message: z.string().min(1).max(160),
+  sequence: z.number().int().min(1).max(0xffff_ffff),
+  active: z.boolean(),
+  at: z.number().int().min(0).max(2_147_483_647),
+});
+
 export const espAnnouncementSchema = z
-  .object({
+  .strictObject({
     id: z.string().min(1),
     name: z.string().min(1),
     freq: z.number().int().min(1).max(40_000),
@@ -27,6 +36,7 @@ export const espAnnouncementSchema = z
     status: z.string().min(1),
     version: z.string().min(1),
     scheduleHash: z.string().regex(/^\d+$/),
+    lastError: espFirmwareDiagnosticSchema.optional(),
   })
   .superRefine((announcement, context) => {
     if (
@@ -43,11 +53,18 @@ export const espAnnouncementSchema = z
 
 export type EspAnnouncement = z.infer<typeof espAnnouncementSchema>;
 
-export const espCommandResponseSchema = z.object({
+export const legacyRequestIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/u);
+
+export const espCommandResponseSchema = z.strictObject({
   id: z.string().min(1),
   name: z.string().min(1),
+  requestId: legacyRequestIdSchema,
   responses: z.array(
-    z.object({
+    z.strictObject({
       index: z.number().int().nonnegative(),
       response: z.string(),
     }),
@@ -66,6 +83,17 @@ export interface LegacyCommandBatch {
   readonly commands: readonly string[];
   readonly originalIndexes: readonly number[];
   readonly payload: string;
+}
+
+export function encodeCorrelatedLegacyRequest(
+  requestId: string,
+  payload: string,
+): string {
+  const parsedRequestId = legacyRequestIdSchema.parse(requestId);
+  if (payload.length === 0 || payload.includes("\0")) {
+    throw new TypeError("Legacy request payload must be non-empty text");
+  }
+  return `request:${parsedRequestId}|${payload}`;
 }
 
 export function createEspTopicSet(testMode: boolean): EspTopicSet {

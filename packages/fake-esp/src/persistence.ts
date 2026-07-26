@@ -2,6 +2,15 @@ export interface FakeEspTimeSnapshot {
   readonly lastSavedEpochSeconds: number;
 }
 
+export interface FakeEspLastError {
+  readonly code: string;
+  readonly severity: "warning" | "error";
+  readonly message: string;
+  readonly sequence: number;
+  readonly active: boolean;
+  readonly at: number;
+}
+
 export interface FakeEspPersistenceSnapshot {
   readonly deviceName?: string;
   readonly deviceId?: string;
@@ -9,13 +18,20 @@ export interface FakeEspPersistenceSnapshot {
   readonly resolution?: number;
   readonly time?: FakeEspTimeSnapshot;
   readonly schedule?: string;
+  readonly lastError?: FakeEspLastError;
 }
+
+export type FakeEspEepromSnapshot = Omit<
+  FakeEspPersistenceSnapshot,
+  "schedule" | "lastError"
+>;
 
 export interface FakeEspPersistence {
   read(): FakeEspPersistenceSnapshot;
-  writeEeprom(values: Omit<FakeEspPersistenceSnapshot, "schedule">): void;
+  writeEeprom(values: FakeEspEepromSnapshot): void;
   clearEeprom(): void;
   writeSchedule(schedule: string): void;
+  writeLastError(lastError: FakeEspLastError): void;
 }
 
 export class MemoryFakeEspPersistence implements FakeEspPersistence {
@@ -25,6 +41,7 @@ export class MemoryFakeEspPersistence implements FakeEspPersistence {
   private resolution: number | undefined;
   private time: FakeEspTimeSnapshot | undefined;
   private schedule: string | undefined;
+  private lastError: FakeEspLastError | undefined;
 
   public constructor(seed: FakeEspPersistenceSnapshot = {}) {
     this.deviceName = seed.deviceName;
@@ -33,6 +50,7 @@ export class MemoryFakeEspPersistence implements FakeEspPersistence {
     this.resolution = seed.resolution;
     this.time = seed.time;
     this.schedule = seed.schedule;
+    this.lastError = seed.lastError;
   }
 
   public read(): FakeEspPersistenceSnapshot {
@@ -43,12 +61,13 @@ export class MemoryFakeEspPersistence implements FakeEspPersistence {
       ...(this.resolution === undefined ? {} : { resolution: this.resolution }),
       ...(this.time === undefined ? {} : { time: { ...this.time } }),
       ...(this.schedule === undefined ? {} : { schedule: this.schedule }),
+      ...(this.lastError === undefined
+        ? {}
+        : { lastError: { ...this.lastError } }),
     };
   }
 
-  public writeEeprom(
-    values: Omit<FakeEspPersistenceSnapshot, "schedule">,
-  ): void {
+  public writeEeprom(values: FakeEspEepromSnapshot): void {
     this.deviceName = values.deviceName;
     this.deviceId = values.deviceId;
     this.frequency = values.frequency;
@@ -66,5 +85,9 @@ export class MemoryFakeEspPersistence implements FakeEspPersistence {
 
   public writeSchedule(schedule: string): void {
     this.schedule = schedule;
+  }
+
+  public writeLastError(lastError: FakeEspLastError): void {
+    this.lastError = { ...lastError };
   }
 }

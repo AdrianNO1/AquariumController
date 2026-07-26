@@ -1,18 +1,18 @@
 # Raspberry Pi production deployment
 
-Updated: 2026-07-25
+Updated: 2026-07-26
 
 This is a supervised deployment and rollback runbook. No repository workflow
 contacts the Pi or deploys the controller. Commands in this document must be
 run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
-[Pi production handoff checklist](pi-production-handoff.md). Local evidence on
-2026-07-25 includes real MQTT 5/5, 97 files/638 unit tests, 82 files/571
-critical tests, and retry-free Playwright 18/18. The protected PR and `master`
-runs passed all six validation jobs, and the selected exact image digest passed
-amd64/ARM64 publication smoke. This runbook does not claim Pi or production
-hardware validation.
+[Pi production handoff checklist](pi-production-handoff.md). The current
+firmware 4.1 and per-device-lane branch must pass protected CI, merge, publish,
+and receive a newly selected immutable digest before any command in this
+runbook is used. Historical pre-4.1 validation is recorded in the
+[readiness report](readiness-report.md); it is not the current deployment
+identity. This runbook does not claim Pi or production hardware validation.
 
 ## 0. Verify the repository release-source gate
 
@@ -26,10 +26,11 @@ deploying the selected image:
 3. resolve the alert as `revoked` only after revocation is confirmed, and keep
    secret scanning and push protection enabled.
 
-The selected source already has fresh trusted runs of all six validation jobs:
+The historical pre-4.1 source passed all six validation jobs in:
 [PR run 30158546118](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
 and
 [`master` run 30158994132](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132).
+Those runs do not replace the required current-branch and post-merge runs.
 
 History rewriting for credential removal must preserve unrelated commits; do
 not replace the repository with a single squashed root. Public clones and caches
@@ -61,22 +62,28 @@ The actual default branch is protected: it requires pull requests, a current
 branch, all six validation jobs, and administrator enforcement; force-pushes
 and deletion are blocked. Immutable Action-SHA enforcement, secret scanning,
 and push protection remain enabled. `AQUARIUM_GHCR_IMAGE` is configured as
-`ghcr.io/adrianno1/aquarium-controller`, and the separately gated publisher has
-completed.
+`ghcr.io/adrianno1/aquarium-controller`, and the separately gated publisher was
+exercised by the historical baseline. Current publication and digest selection
+remain release gates.
 
 ## 1. Record the release inputs
 
-Use this selected release:
+Only after the current protected default-branch run and publisher succeed,
+record the reviewed values:
 
-- source: `886ed05be89a1abed8e076d91ce2802f5d5668dd`;
+- source: `<reviewed-4.1-source-commit>`;
 - repository: `ghcr.io/adrianno1/aquarium-controller`; and
-- digest:
-  `sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
+- digest: `sha256:<published-64-character-manifest-digest>`.
 
 The digest, not its temporary CI tag, is the deployment identity. Record the
 prior image digest and prior storage paths in the change record before an
-upgrade. A later documentation-only merge does not silently replace this
-selection.
+upgrade. Never substitute a mutable tag or an unreviewed later digest.
+
+For historical traceability only, the pre-4.1 source was
+`886ed05be89a1abed8e076d91ce2802f5d5668dd` and its image digest was
+`sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
+They predate firmware 4.1 and the current transport/failover changes; do not use
+them for this deployment.
 
 Load production values into the current shell from an operator-managed secret
 store or a root-owned file outside the checkout. Do not commit credentials and
@@ -89,7 +96,7 @@ print environment values.
 set -Eeuo pipefail
 
 export AQUARIUM_CONTROLLER_IMAGE_REPOSITORY=ghcr.io/adrianno1/aquarium-controller
-export AQUARIUM_CONTROLLER_IMAGE_SHA256=0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc
+export AQUARIUM_CONTROLLER_IMAGE_SHA256=<published-64-character-manifest-digest>
 export COMPOSE_DISABLE_ENV_FILE=1
 export AQUARIUM_HTTP_BIND_ADDRESS=<explicit-Pi-LAN-address>
 export AQUARIUM_HTTP_PORT=3001
@@ -101,9 +108,9 @@ export AQUARIUM_ARCHIVE_HOST_DIRECTORY=/srv/aquarium/archives
 export AQUARIUM_BACKUP_HOST_DIRECTORY=/srv/aquarium/backups
 ```
 
-The selected GHCR package was public and anonymously pullable when this evidence
-was recorded, so the Pi should not need a registry credential. The Pi preflight
-must still prove it can pull this exact digest. If package visibility later
+The historical GHCR package was public and anonymously pullable when its
+evidence was recorded. Verify the newly selected digest the same way; the Pi
+preflight must prove it can pull that exact digest. If package visibility later
 becomes private, authenticate the same unprivileged Pi account that will run the
 Compose commands with a classic personal access token scoped only to
 `read:packages` and an account that can read the package. Read the token without
@@ -514,9 +521,11 @@ docker compose --file compose.production.yaml exec -T controller \
   --events-db /var/lib/aquarium/events/events.db
 ```
 
-Confirm the snapshot and UI, the expected firmware version for every ESP32,
-MQTT discovery, schedules, overrides, alert history, notification destination,
-storage-health readings, and the latest verified backup. Treat readiness,
+Confirm the snapshot and UI, firmware version 4.1.0 for every ESP32, MQTT
+discovery, schedules, overrides, alert history, notification destination,
+storage-health readings, and the latest verified backup. Confirm a
+nonresponding ESP becomes offline without stopping healthy device lanes, and
+that explicit operator exclusion stops further attempts to it. Treat readiness,
 integrity, or an unexplained actuator state as a failed deployment.
 
 ## 5. Roll back without overwriting evidence

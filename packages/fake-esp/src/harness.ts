@@ -18,6 +18,7 @@ export interface FakeEspHarnessActorOptions {
   readonly deviceId: string;
   readonly persistence?: FakeEspPersistence;
   readonly responseFaults?: FakeEspResponseFaults;
+  readonly pinAttachmentFailures?: readonly number[];
 }
 
 interface HarnessActorRegistration {
@@ -114,6 +115,14 @@ export class FakeEspHarness {
     this.actor(key).setResponseFaults(faults);
   }
 
+  public setPinAttachmentFailure(
+    key: string,
+    pin: number,
+    failing: boolean,
+  ): void {
+    this.actor(key).setPinAttachmentFailure(pin, failing);
+  }
+
   private createActor(
     options: FakeEspHarnessActorOptions,
     persistence: FakeEspPersistence,
@@ -128,6 +137,9 @@ export class FakeEspHarness {
       ...(options.responseFaults === undefined
         ? {}
         : { responseFaults: options.responseFaults }),
+      ...(options.pinAttachmentFailures === undefined
+        ? {}
+        : { pinAttachmentFailures: options.pinAttachmentFailures }),
     };
     return new FakeEspActor(actorOptions);
   }

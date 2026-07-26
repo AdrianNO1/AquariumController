@@ -132,10 +132,23 @@ export class ScheduleReconciliationService {
     }
 
     const artifact = persistedArtifact(compiled);
-    const [existing, unresolved] = await Promise.all([
+    const [existing, foundUnresolved] = await Promise.all([
       this.artifacts.getArtifact(deviceId),
       this.artifacts.findUnresolvedDelivery(deviceId),
     ]);
+    let unresolved = foundUnresolved;
+    if (
+      unresolved?.status === "outcome_unknown" &&
+      trigger.kind === "announcement"
+    ) {
+      // The correlated 4.1 announcement provides authoritative schedule-hash
+      // evidence for this device. Resolve its prior uncertainty locally, then
+      // either accept the matching hash or retry only this device.
+      await this.operations.acknowledgeScheduleReconciledOutcome(
+        unresolved.operationId,
+      );
+      unresolved = null;
+    }
     if (unresolved !== null) {
       const delivery: ScheduleArtifactDeliveryState = {
         status: unresolved.status,
@@ -248,6 +261,7 @@ export class ScheduleReconciliationService {
     const operation = await this.operations.executeDeviceOperation(
       deviceId,
       scheduleRequest,
+      { priority: "background" },
     );
     const result = deviceOperationResultSchema.parse(operation.result);
     if (operation.status !== result.status) {

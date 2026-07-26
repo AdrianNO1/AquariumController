@@ -82,15 +82,28 @@ describe("manual override panel state", () => {
     });
 
     const outcomeUnknown = deriveManualOverrideView(
-      override("pending"),
+      override("active"),
       [operation("outcome_unknown")],
       Date.parse("2026-07-13T10:01:00.000Z"),
     );
     expect(outcomeUnknown).toMatchObject({
       phase: "outcome_unknown",
-      canExtend: false,
-      canCancel: false,
+      canExtend: true,
+      canCancel: true,
       canReconcile: true,
+      blocksNewStart: true,
+    });
+
+    const reconciledUnknown = deriveManualOverrideView(
+      override("active"),
+      [operation("outcome_unknown", false)],
+      Date.parse("2026-07-13T10:01:00.000Z"),
+    );
+    expect(reconciledUnknown).toMatchObject({
+      phase: "outcome_unknown",
+      canExtend: true,
+      canCancel: true,
+      canReconcile: false,
       blocksNewStart: true,
     });
 
@@ -142,8 +155,11 @@ function override(status: Override["status"]): Override {
   };
 }
 
-function operation(status: OperationSummary["status"]): OperationSummary {
-  return {
+function operation(
+  status: OperationSummary["status"],
+  outcomeUnresolved?: boolean,
+): OperationSummary {
+  const summary: OperationSummary = {
     id: "operation-one",
     deviceId: null,
     kind: "manual_override_start",
@@ -155,4 +171,7 @@ function operation(status: OperationSummary["status"]): OperationSummary {
         ? null
         : "2026-07-13T10:00:02.000Z",
   };
+  return outcomeUnresolved === undefined
+    ? summary
+    : { ...summary, outcomeUnresolved };
 }

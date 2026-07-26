@@ -53,6 +53,66 @@ afterEach(async () => {
 });
 
 describe("ControllerConfigurationRepository", () => {
+  it("excludes devices reversibly and clears protocol quarantine only on include", async () => {
+    const database = await openDatabase();
+    await database
+      .insertInto("devices")
+      .values({
+        id: "device-main",
+        hardware_id: "hardware-main",
+        name: "Main",
+        desired_pwm_frequency_hz: 5_000,
+        desired_pwm_resolution_bits: 8,
+        status: "error",
+        last_error_code: "protocol_invalid_response",
+        last_error_message: "Invalid correlated response",
+        enabled: 0,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+      })
+      .executeTakeFirstOrThrow();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+
+    await expect(
+      repository.setDeviceEnabled("device-main", {
+        expectedRevision: 0,
+        enabled: true,
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 1 });
+    await expect(
+      database
+        .selectFrom("devices")
+        .select(["enabled", "status", "last_error_code", "last_error_message"])
+        .where("id", "=", "device-main")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({
+      enabled: 1,
+      status: "unknown",
+      last_error_code: null,
+      last_error_message: null,
+    });
+    await expect(
+      repository.setDeviceEnabled("device-main", {
+        expectedRevision: 1,
+        enabled: true,
+      }),
+    ).resolves.toEqual({ changed: false, revision: 1, event: null });
+    await expect(
+      repository.setDeviceEnabled("device-main", {
+        expectedRevision: 1,
+        enabled: false,
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 2 });
+    await expect(
+      repository.setDeviceEnabled("device-main", {
+        expectedRevision: 1,
+        enabled: true,
+      }),
+    ).rejects.toBeInstanceOf(ConfigurationRevisionConflictError);
+  });
+
   it("keeps revision checks, state writes, and outbox writes in one transaction", async () => {
     const database = await openDatabase();
     await database
@@ -168,16 +228,16 @@ describe("ControllerConfigurationRepository", () => {
       requested_at_ms: 100,
       deadline_at_ms: 200,
       completed_at_ms: 150,
-      request_schema_version: 1,
+      request_schema_version: 2,
       result_json: JSON.stringify({
         status: "outcome_unknown",
         childOperationIds: ["child-unknown"],
         reason: "child_outcome_not_succeeded",
-        unknownChildOperationId: "child-unknown",
+        unknownChildOperationIds: ["child-unknown"],
         safetyReconcileAtMs: 120_150,
         reconciledAtMs: null,
       }),
-      result_schema_version: 1,
+      result_schema_version: 2,
     };
     const validRequest = {
       kind: "manual_override_start",
@@ -225,17 +285,17 @@ describe("ControllerConfigurationRepository", () => {
         status: "outcome_unknown",
       },
       request: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         data: {
           kind: "manual_override_start",
           overrideId: "override-main",
         },
       },
       result: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         data: {
           status: "outcome_unknown",
-          unknownChildOperationId: "child-unknown",
+          unknownChildOperationIds: ["child-unknown"],
         },
       },
     });

@@ -140,21 +140,11 @@ describe("ManualOverridePanel", () => {
     expect(refresh).toHaveBeenCalledOnce();
   });
 
-  it("allows only reconciliation for an unknown outcome and adopts the returned failure", async () => {
-    const unknownOverride: Override = {
-      ...activeOverride(),
-      status: "pending",
-      startsAt: null,
-    };
+  it("keeps an unresolved active override controllable while offering reconciliation", async () => {
+    const unknownOverride = activeOverride();
     server.use(
       http.post("http://localhost/api/overrides/override-light/reconcile", () =>
-        HttpResponse.json(
-          stateResponse({
-            ...unknownOverride,
-            status: "failed",
-            completedAt: "2026-07-13T10:03:00.000Z",
-          }),
-        ),
+        HttpResponse.json(stateResponse(unknownOverride)),
       ),
     );
     const refresh = vi.fn();
@@ -168,23 +158,20 @@ describe("ManualOverridePanel", () => {
       screen.getByText(/Outcome unknown: actuator state is not claimed/u),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Extend light-main" }),
-    ).toBeNull();
+      screen.getByRole("button", { name: "Extend light-main" }),
+    ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Cancel light-main" }),
-    ).toBeNull();
+      screen.getByRole("button", { name: "Cancel light-main" }),
+    ).toBeTruthy();
 
     await user.click(
       screen.getByRole("button", { name: "Reconcile unknown outcome" }),
     );
     expect(
       await screen.findByText(
-        "Failed: the controller did not establish a successful override.",
+        /Reconciliation for override-light was recorded as active/u,
       ),
     ).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Reconcile unknown outcome" }),
-    ).toBeNull();
     expect(refresh).toHaveBeenCalledOnce();
   });
 

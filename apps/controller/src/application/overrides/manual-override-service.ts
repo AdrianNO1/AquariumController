@@ -26,7 +26,9 @@ import {
   toOperationSummary,
   toOverrideContract,
   type ManualOverrideDeviceCommandPort,
+  type ManualOverrideDeviceDispatchResult,
   type ManualOverrideOperationResult,
+  type ManualOverridePinCommand,
   type ManualOverrideRepositoryPort,
   type PreparedManualOverrideOperation,
   type StoredManualOverrideStateMutation,
@@ -81,10 +83,25 @@ const systemTimer: ManualOverrideTimer = {
   },
 };
 
+interface IndexedManualOverrideCommand {
+  readonly index: number;
+  readonly command: ManualOverridePinCommand;
+}
+
+type ManualOverrideCommandAttempt =
+  | ({
+      readonly index: number;
+    } & ManualOverrideDeviceDispatchResult)
+  | {
+      readonly index: number;
+      readonly kind: "dispatch_failed";
+      readonly error: Error;
+    };
+
 /**
  * Owns the durable manual-override lifecycle. Pin writes are delegated to the
- * same serialized operation dispatcher as scheduler refreshes, so an unknown
- * child outcome stops both paths and is never retried.
+ * same per-device operation dispatcher as scheduler refreshes. Each device
+ * remains FIFO while independent devices progress concurrently.
  */
 export class ManualOverrideService implements ManualOverrideCommandService {
   readonly #repository: ManualOverrideRepositoryPort;
@@ -270,7 +287,8 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       prepared.operation.id,
       this.#readNowMs(),
     );
-    const childOperationIds: string[] = [];
+    let childOperationIds: string[] = [];
+    let unknownChildOperationIds: string[] = [];
     if (this.#readNowMs() >= operation.deadlineAtMs) {
       if (operation.request.kind === "manual_override_start") {
         await this.#repository.completeFailed({
@@ -286,71 +304,125 @@ export class ManualOverrideService implements ManualOverrideCommandService {
           operation.id,
           childOperationIds,
           "command_dispatch_blocked",
-          null,
+          unknownChildOperationIds,
         );
       }
       return;
     }
 
-    for (const command of operation.request.commands) {
-      let dispatch;
-      try {
-        dispatch = await this.#commands.dispatch(command.deviceId, {
-          kind: "set_pwm",
-          pin: command.pin,
-          value: command.value,
-          overwrite: command.overwrite,
+    const commandsByDevice = new Map<string, IndexedManualOverrideCommand[]>();
+    for (const [index, command] of operation.request.commands.entries()) {
+      const deviceCommands = commandsByDevice.get(command.deviceId);
+      const indexed = { index, command };
+      if (deviceCommands === undefined) {
+        commandsByDevice.set(command.deviceId, [indexed]);
+      } else {
+        deviceCommands.push(indexed);
+      }
+    }
+    const attempts = (
+      await Promise.all(
+        [...commandsByDevice.values()].map((commands) =>
+          this.#dispatchDeviceCommands(commands),
+        ),
+      )
+    )
+      .flat()
+      .sort((left, right) => left.index - right.index);
+    const completedAttempts = attempts.filter(
+      (
+        attempt,
+      ): attempt is Extract<
+        ManualOverrideCommandAttempt,
+        { readonly kind: "completed" }
+      > => attempt.kind === "completed",
+    );
+    childOperationIds = completedAttempts.map(
+      ({ operation: childOperation }) => childOperation.id,
+    );
+    unknownChildOperationIds = completedAttempts
+      .filter(
+        ({ operation: childOperation }) =>
+          childOperation.status === "outcome_unknown",
+      )
+      .map(({ operation: childOperation }) => childOperation.id);
+
+    const dispatchFailures = attempts.filter(
+      (
+        attempt,
+      ): attempt is Extract<
+        ManualOverrideCommandAttempt,
+        { readonly kind: "dispatch_failed" }
+      > => attempt.kind === "dispatch_failed",
+    );
+    if (dispatchFailures.length > 0) {
+      await this.#recordUnknown(
+        operation.id,
+        childOperationIds,
+        "command_dispatch_failed",
+        unknownChildOperationIds,
+      );
+      throw new Error(
+        `Manual override child dispatch failed for operation ${operation.id}`,
+        {
+          cause:
+            dispatchFailures.length === 1
+              ? dispatchFailures[0]?.error
+              : new AggregateError(
+                  dispatchFailures.map(({ error }) => error),
+                  "Multiple manual override device dispatches failed",
+                ),
+        },
+      );
+    }
+
+    const blockedAttempt = attempts.find(
+      (
+        attempt,
+      ): attempt is Extract<
+        ManualOverrideCommandAttempt,
+        { readonly kind: "blocked" }
+      > => attempt.kind === "blocked",
+    );
+    if (blockedAttempt !== undefined) {
+      if (
+        operation.request.kind === "manual_override_start" &&
+        childOperationIds.length === 0
+      ) {
+        await this.#repository.completeFailed({
+          operationId: operation.id,
+          completedAtMs: this.#readNowMs(),
+          childOperationIds,
+          status: "failed",
+          code: "command_dispatch_blocked",
+          message: `Manual override command dispatch is blocked by ${blockedAttempt.reason}`,
         });
-      } catch (error) {
+      } else {
         await this.#recordUnknown(
           operation.id,
           childOperationIds,
-          "command_dispatch_failed",
-          null,
-        );
-        throw new Error(
-          `Manual override child dispatch failed for operation ${operation.id}`,
-          { cause: error },
+          "command_dispatch_blocked",
+          unknownChildOperationIds,
         );
       }
-      if (dispatch.kind === "blocked") {
-        if (
-          operation.request.kind === "manual_override_start" &&
-          childOperationIds.length === 0
-        ) {
-          await this.#repository.completeFailed({
-            operationId: operation.id,
-            completedAtMs: this.#readNowMs(),
-            childOperationIds,
-            status: "failed",
-            code: "command_dispatch_blocked",
-            message: `Manual override command dispatch is blocked by ${dispatch.reason}`,
-          });
-        } else {
-          await this.#recordUnknown(
-            operation.id,
-            childOperationIds,
-            "command_dispatch_blocked",
-            null,
-          );
-        }
-        return;
-      }
-      childOperationIds.push(dispatch.operation.id);
-      if (dispatch.operation.status !== "succeeded") {
-        await this.#recordUnknown(
-          operation.id,
-          childOperationIds,
-          "child_outcome_not_succeeded",
-          dispatch.operation.status === "outcome_unknown"
-            ? dispatch.operation.id
-            : null,
-        );
-        return;
-      }
+      return;
     }
 
     const completedAtMs = this.#readNowMs();
+    if (
+      completedAttempts.some(
+        ({ operation: childOperation }) =>
+          childOperation.status !== "succeeded",
+      )
+    ) {
+      await this.#recordUnknown(
+        operation.id,
+        childOperationIds,
+        "child_outcome_not_succeeded",
+        unknownChildOperationIds,
+      );
+      return;
+    }
     if (
       operation.request.kind === "manual_override_start" &&
       completedAtMs >= operation.request.expiresAtMs
@@ -360,11 +432,8 @@ export class ManualOverrideService implements ManualOverrideCommandService {
         completedAtMs,
         childOperationIds,
         reason: "completed_after_expiry",
-        unknownChildOperationId: null,
-        safetyReconcileAtMs: safeAdd(
-          completedAtMs,
-          MANUAL_OVERRIDE_DURATION_MS,
-        ),
+        unknownChildOperationIds: [],
+        safetyReconcileAtMs: completedAtMs,
       });
       return;
     }
@@ -375,6 +444,38 @@ export class ManualOverrideService implements ManualOverrideCommandService {
     );
   }
 
+  async #dispatchDeviceCommands(
+    commands: readonly IndexedManualOverrideCommand[],
+  ): Promise<readonly ManualOverrideCommandAttempt[]> {
+    const attempts: ManualOverrideCommandAttempt[] = [];
+    for (const { index, command } of commands) {
+      let dispatch: ManualOverrideDeviceDispatchResult;
+      try {
+        dispatch = await this.#commands.dispatch(command.deviceId, {
+          kind: "set_pwm",
+          pin: command.pin,
+          value: command.value,
+          overwrite: command.overwrite,
+        });
+      } catch (error) {
+        attempts.push({
+          index,
+          kind: "dispatch_failed",
+          error: toError(error),
+        });
+        break;
+      }
+      attempts.push({ index, ...dispatch });
+      if (
+        dispatch.kind === "blocked" ||
+        dispatch.operation.status !== "succeeded"
+      ) {
+        break;
+      }
+    }
+    return attempts;
+  }
+
   async #recordUnknown(
     operationId: string,
     childOperationIds: readonly string[],
@@ -382,7 +483,7 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       ManualOverrideOperationResult,
       { readonly status: "outcome_unknown" }
     >["reason"],
-    unknownChildOperationId: string | null,
+    unknownChildOperationIds: readonly string[],
   ): Promise<void> {
     const completedAtMs = this.#readNowMs();
     await this.#repository.completeOutcomeUnknown({
@@ -390,8 +491,11 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       completedAtMs,
       childOperationIds,
       reason,
-      unknownChildOperationId,
-      safetyReconcileAtMs: safeAdd(completedAtMs, MANUAL_OVERRIDE_DURATION_MS),
+      unknownChildOperationIds,
+      safetyReconcileAtMs:
+        unknownChildOperationIds.length === 0
+          ? completedAtMs
+          : safeAdd(completedAtMs, MANUAL_OVERRIDE_DURATION_MS),
     });
   }
 
@@ -421,7 +525,7 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       if (this.#stopping) {
         return;
       }
-      await this.#reconcileOperation(operationId, null, nowMs);
+      await this.#reconcileDueOperation(operationId, nowMs);
     }
 
     const activeOverrideIds =
@@ -445,6 +549,36 @@ export class ManualOverrideService implements ManualOverrideCommandService {
     }
   }
 
+  async #reconcileDueOperation(
+    operationId: string,
+    reconciledAtMs: number,
+  ): Promise<void> {
+    const operation = await this.#repository.getManualOperation(operationId);
+    if (
+      operation.status !== "outcome_unknown" ||
+      operation.result?.status !== "outcome_unknown" ||
+      operation.result.reconciledAtMs !== null
+    ) {
+      return;
+    }
+    try {
+      await this.#reconcileOperation(operationId, null, reconciledAtMs);
+    } catch (error) {
+      if (!(error instanceof InvalidManualOverrideTransitionError)) {
+        throw error;
+      }
+      const refreshed = await this.#repository.getManualOperation(operationId);
+      if (
+        refreshed.status === "outcome_unknown" &&
+        refreshed.result?.status === "outcome_unknown" &&
+        refreshed.result.reconciledAtMs !== null
+      ) {
+        return;
+      }
+      throw error;
+    }
+  }
+
   async #reconcileOperation(
     operationId: string,
     expectedRevision: number | null,
@@ -453,10 +587,11 @@ export class ManualOverrideService implements ManualOverrideCommandService {
     const operation = await this.#repository.getManualOperation(operationId);
     if (
       operation.status !== "outcome_unknown" ||
-      operation.result?.status !== "outcome_unknown"
+      operation.result?.status !== "outcome_unknown" ||
+      operation.result.reconciledAtMs !== null
     ) {
       throw new InvalidManualOverrideTransitionError(
-        `Manual override operation ${operationId} has no unknown outcome`,
+        `Manual override operation ${operationId} has no unresolved unknown outcome`,
       );
     }
     if (reconciledAtMs < operation.result.safetyReconcileAtMs) {
@@ -467,11 +602,9 @@ export class ManualOverrideService implements ManualOverrideCommandService {
         `Override ${operation.request.overrideId} cannot be reconciled before the firmware safety window ends`,
       );
     }
-    if (operation.result.unknownChildOperationId !== null) {
-      await this.#commands.reconcileUnknownOutcome(
-        operation.result.unknownChildOperationId,
-      );
-    }
+    await this.#commands.reconcileUnknownOutcomes(
+      operation.result.unknownChildOperationIds,
+    );
     return this.#repository.finalizeReconciledOutcome({
       operationId,
       expectedRevision,

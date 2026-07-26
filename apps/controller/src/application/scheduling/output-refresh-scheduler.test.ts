@@ -58,11 +58,11 @@ describe("five-second output refresh scheduler", () => {
     expect(port.calls).toEqual([
       {
         deviceId: "device-a",
-        request: { kind: "set_pwm", pin: 1, value: 64, overwrite: false },
+        request: { kind: "set_pwm", pin: 1, value: 64, overwrite: true },
       },
       {
         deviceId: "device-b",
-        request: { kind: "set_pwm", pin: 2, value: 178, overwrite: false },
+        request: { kind: "set_pwm", pin: 2, value: 178, overwrite: true },
       },
     ]);
     expect(reports).toMatchObject([
@@ -81,7 +81,7 @@ describe("five-second output refresh scheduler", () => {
     await scheduler.stop();
   });
 
-  it("skips every missed deadline without overlap or a catch-up burst", async () => {
+  it("coalesces pending refreshes to the newest batch without replaying stale pins", async () => {
     const time = new ManualSchedulingTime("2026-07-13T12:00:00.000Z");
     let finishFirst: (value: ScheduledDeviceOperationCompletion) => void = () =>
       undefined;
@@ -91,11 +91,15 @@ describe("five-second output refresh scheduler", () => {
     const port = new RecordingOperationPort(async (_device, _request, call) =>
       call === 1 ? first : succeeded(call),
     );
+    const reports: OutputRefreshTickReport[] = [];
     const scheduler = createScheduler(
       time,
-      [output({ schedule: flatGraph(50) })],
+      [
+        output({ mappingId: "mapping-first", pin: 1 }),
+        output({ mappingId: "mapping-second", pin: 2 }),
+      ],
       port,
-      [],
+      reports,
     );
 
     scheduler.start();
@@ -106,10 +110,18 @@ describe("five-second output refresh scheduler", () => {
 
     finishFirst(succeeded(1));
     await time.advanceBy(0);
+    expect(
+      port.calls.map(({ request }) =>
+        request.kind === "set_pwm" ? request.pin : null,
+      ),
+    ).toEqual([1, 1, 2]);
+    expect(reports.map(({ operationCount }) => operationCount)).toEqual([
+      1, 0, 0, 2,
+    ]);
     await time.advanceBy(4_999);
-    expect(port.calls).toHaveLength(1);
+    expect(port.calls).toHaveLength(3);
     await time.advanceBy(1);
-    expect(port.calls).toHaveLength(2);
+    expect(port.calls).toHaveLength(5);
     await scheduler.stop();
   });
 
@@ -190,18 +202,36 @@ describe("five-second output refresh scheduler", () => {
     expect(port.calls).toHaveLength(1);
   });
 
-  it("latches outcome unknown before another mapping or later refresh can publish", async () => {
+  it("continues other devices and skips remaining mappings for the failed device", async () => {
     const time = new ManualSchedulingTime("2026-07-13T12:00:00.000Z");
     const reports: OutputRefreshTickReport[] = [];
-    const port = new RecordingOperationPort(async () => ({
-      id: "operation-unknown",
-      status: "outcome_unknown",
-    }));
+    const port = new RecordingOperationPort(async (deviceId, _request, call) =>
+      deviceId === "device-a"
+        ? {
+            id: `operation-unknown-${call}`,
+            status: "outcome_unknown",
+            result: null,
+          }
+        : succeeded(call),
+    );
     const scheduler = createScheduler(
       time,
       [
-        output({ mappingId: "mapping-first", pin: 1 }),
-        output({ mappingId: "mapping-second", pin: 2 }),
+        output({
+          deviceId: "device-a",
+          mappingId: "mapping-a-first",
+          pin: 1,
+        }),
+        output({
+          deviceId: "device-a",
+          mappingId: "mapping-a-second",
+          pin: 2,
+        }),
+        output({
+          deviceId: "device-b",
+          mappingId: "mapping-b",
+          pin: 3,
+        }),
       ],
       port,
       reports,
@@ -209,20 +239,173 @@ describe("five-second output refresh scheduler", () => {
 
     scheduler.start();
     await time.advanceBy(5_000);
-    expect(port.calls).toHaveLength(1);
+    expect(
+      port.calls.map(({ deviceId, request }) => [
+        deviceId,
+        request.kind === "set_pwm" ? request.pin : null,
+      ]),
+    ).toEqual([
+      ["device-a", 1],
+      ["device-b", 3],
+    ]);
     expect(reports[0]?.diagnostics).toMatchObject([
       { code: "scheduled_operation_not_succeeded", status: "outcome_unknown" },
     ]);
 
     await time.advanceBy(5_000);
-    expect(port.calls).toHaveLength(1);
-    expect(reports[1]?.diagnostics).toMatchObject([
-      {
-        code: "scheduled_operation_blocked",
-        reason: "outcome_unknown",
-      },
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+      "device-b",
+    ]);
+    scheduler.signalDeviceAvailable("device-a");
+    await time.advanceBy(5_000);
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+      "device-b",
+      "device-a",
+      "device-b",
     ]);
     await scheduler.stop();
+  });
+
+  it("dispatches a healthy device without waiting for another device's response", async () => {
+    const time = new ManualSchedulingTime("2026-07-13T12:00:00.000Z");
+    let finishDeviceA: (
+      completion: ScheduledDeviceOperationCompletion,
+    ) => void = () => undefined;
+    const pendingDeviceA = new Promise<ScheduledDeviceOperationCompletion>(
+      (resolve) => {
+        finishDeviceA = resolve;
+      },
+    );
+    const port = new RecordingOperationPort(async (deviceId, _request, call) =>
+      deviceId === "device-a" ? pendingDeviceA : succeeded(call),
+    );
+    const reports: OutputRefreshTickReport[] = [];
+    const scheduler = createScheduler(
+      time,
+      [
+        output({
+          deviceId: "device-a",
+          mappingId: "mapping-a",
+          pin: 1,
+        }),
+        output({
+          deviceId: "device-b",
+          mappingId: "mapping-b",
+          pin: 2,
+        }),
+      ],
+      port,
+      reports,
+    );
+
+    scheduler.start();
+    await time.advanceBy(5_000);
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+    ]);
+    expect(reports).toEqual([]);
+
+    await time.advanceBy(10_000);
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+      "device-b",
+      "device-b",
+    ]);
+
+    finishDeviceA({
+      id: "operation-device-a-timeout",
+      status: "outcome_unknown",
+      result: null,
+    });
+    await time.advanceBy(0);
+    expect(reports[0]).toMatchObject({
+      operationCount: 2,
+      diagnostics: [
+        {
+          code: "scheduled_operation_not_succeeded",
+          deviceId: "device-a",
+        },
+      ],
+    });
+    expect(
+      reports.slice(1).map(({ operationCount }) => operationCount),
+    ).toEqual([1, 1]);
+    expect(reports).toHaveLength(3);
+    await scheduler.stop();
+  });
+
+  it("drains every sibling worker before surfacing a fatal dispatch failure", async () => {
+    const time = new ManualSchedulingTime("2026-07-13T12:00:00.000Z");
+    let failDeviceB: (error: Error) => void = () => undefined;
+    const pendingDeviceB = new Promise<ScheduledDeviceOperationCompletion>(
+      (_resolve, reject) => {
+        failDeviceB = reject;
+      },
+    );
+    const port = new RecordingOperationPort(async (deviceId) => {
+      if (deviceId === "device-a") {
+        throw new Error("state persistence failed");
+      }
+      return pendingDeviceB;
+    });
+    const errors: Error[] = [];
+    const scheduler = new OutputRefreshScheduler(
+      new StaticProjection([
+        output({ deviceId: "device-a", mappingId: "mapping-a", pin: 1 }),
+        output({ deviceId: "device-b", mappingId: "mapping-b", pin: 2 }),
+      ]),
+      new ScheduledDeviceOperationDispatcher(port),
+      {
+        clock: time,
+        timer: time,
+        manualOverrideReader: {
+          readActiveManualOverrideOutputs: async () => [],
+        },
+        onTick: () => undefined,
+        onError: (error) => errors.push(error),
+      },
+    );
+
+    scheduler.start();
+    await time.advanceBy(5_000);
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+    ]);
+    expect(scheduler.isReady()).toBe(false);
+    expect(errors).toEqual([]);
+
+    let stopSettled = false;
+    const stopping = scheduler.stop().finally(() => {
+      stopSettled = true;
+    });
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+    expect(errors).toEqual([]);
+
+    failDeviceB(new Error("device-b persistence failed"));
+    let stopError: Error | null = null;
+    try {
+      await stopping;
+    } catch (error) {
+      stopError = error instanceof Error ? error : new Error(String(error));
+    }
+    expect(stopSettled).toBe(true);
+    expect(stopError).toBeInstanceOf(AggregateError);
+    if (!(stopError instanceof AggregateError)) {
+      throw new Error("Expected output refresh failure to be aggregated");
+    }
+    expect(
+      (stopError.errors as readonly Error[]).map(({ message }) => message),
+    ).toEqual(["state persistence failed", "device-b persistence failed"]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toBe(stopError);
   });
 
   it("captures a throwing timer-task error reporter as fatal state", async () => {
@@ -351,5 +534,5 @@ function requireValidGraph(
 }
 
 function succeeded(call: number): ScheduledDeviceOperationCompletion {
-  return { id: `operation-${call}`, status: "succeeded" };
+  return { id: `operation-${call}`, status: "succeeded", result: null };
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { DeviceOperationExecutionOptions } from "../operations/index.js";
 import {
   ScheduledDeviceOperationDispatcher,
   type ScheduledDeviceOperationCompletion,
@@ -7,104 +8,8 @@ import {
   type ScheduledDeviceOperationRequest,
 } from "./scheduled-device-operations.js";
 
-describe("scheduled device operation safety dispatcher", () => {
-  it("restores a persisted unknown-outcome latch before accepting work", async () => {
-    const port = new RecordingOperationPort();
-    port.results.push({
-      id: "operation-after-reconciliation",
-      status: "succeeded",
-    });
-    const dispatcher = new ScheduledDeviceOperationDispatcher(port);
-
-    await dispatcher.restoreUnknownOutcomeLatch();
-    await expect(dispatcher.dispatch("device-a", pwm(1, 10))).resolves.toEqual({
-      kind: "blocked",
-      reason: "outcome_unknown",
-    });
-    expect(port.calls).toHaveLength(0);
-
-    await dispatcher.acknowledgeReconciledOutcome();
-    await expect(
-      dispatcher.dispatch("device-a", pwm(1, 10)),
-    ).resolves.toMatchObject({
-      kind: "completed",
-      operation: { status: "succeeded" },
-    });
-    expect(port.calls).toHaveLength(1);
-  });
-
-  it("accepts a synchronous live latch notification from its own in-flight operation", async () => {
-    const executeDeviceOperation = async () => {
-      dispatcher.latchUnknownOutcome();
-      return { id: "operation-unknown", status: "outcome_unknown" as const };
-    };
-    const dispatcher = new ScheduledDeviceOperationDispatcher({
-      executeDeviceOperation,
-    });
-
-    await expect(
-      dispatcher.dispatch("device-a", pwm(1, 10)),
-    ).resolves.toMatchObject({
-      kind: "completed",
-      operation: { status: "outcome_unknown" },
-    });
-    expect(dispatcher.blockedReason).toBe("outcome_unknown");
-    await expect(dispatcher.dispatch("device-a", pwm(1, 10))).resolves.toEqual({
-      kind: "blocked",
-      reason: "outcome_unknown",
-    });
-  });
-
-  it("does not re-latch the same unknown after reconciliation is queued", async () => {
-    let acknowledgement: Promise<void> | null = null;
-    const executeDeviceOperation = async () => {
-      dispatcher.latchUnknownOutcome();
-      acknowledgement = dispatcher.acknowledgeReconciledOutcome();
-      return { id: "operation-unknown", status: "outcome_unknown" as const };
-    };
-    const dispatcher = new ScheduledDeviceOperationDispatcher({
-      executeDeviceOperation,
-    });
-
-    await expect(
-      dispatcher.dispatch("device-a", pwm(1, 10)),
-    ).resolves.toMatchObject({
-      kind: "completed",
-      operation: { status: "outcome_unknown" },
-    });
-    if (acknowledgement === null) {
-      throw new Error("The in-flight operation did not queue reconciliation");
-    }
-    await acknowledgement;
-
-    expect(dispatcher.blockedReason).toBeNull();
-  });
-
-  it("does not let a queued acknowledgement clear a newer unknown outcome", async () => {
-    let settle: (value: ScheduledDeviceOperationCompletion) => void = () =>
-      undefined;
-    const completion = new Promise<ScheduledDeviceOperationCompletion>(
-      (resolve) => {
-        settle = resolve;
-      },
-    );
-    const port = new RecordingOperationPort();
-    port.results.push(completion);
-    const dispatcher = new ScheduledDeviceOperationDispatcher(port);
-    const inFlight = dispatcher.dispatch("device-a", pwm(1, 10));
-    await Promise.resolve();
-
-    dispatcher.latchUnknownOutcome();
-    const acknowledgement = dispatcher.acknowledgeReconciledOutcome();
-    dispatcher.latchUnknownOutcome();
-    settle({ id: "operation-success", status: "succeeded" });
-    await inFlight;
-    await acknowledgement;
-
-    expect(dispatcher.blockedReason).toBe("outcome_unknown");
-  });
-
-  it("serializes callers and blocks queued work after an outcome becomes unknown", async () => {
+describe("scheduled device operation dispatcher", () => {
+  it("serializes each device while allowing other devices to continue", async () => {
     let settleFirst: (
       completion: ScheduledDeviceOperationCompletion,
     ) => void = () => undefined;
@@ -114,36 +19,124 @@ describe("scheduled device operation safety dispatcher", () => {
       },
     );
     const port = new RecordingOperationPort();
-    port.results.push(firstCompletion, {
-      id: "operation-after-reconciliation",
-      status: "succeeded",
-    });
+    port.results.push(
+      firstCompletion,
+      {
+        id: "operation-other-device",
+        status: "succeeded",
+        result: null,
+      },
+      {
+        id: "operation-same-device-second",
+        status: "succeeded",
+        result: null,
+      },
+    );
     const dispatcher = new ScheduledDeviceOperationDispatcher(port);
 
-    const first = dispatcher.dispatch("device-a", pwm(1, 10));
-    const queued = dispatcher.dispatch("device-b", pwm(2, 20));
+    const first = dispatcher.dispatch("device-a", pwm(1, 10), {
+      priority: "background",
+    });
+    const sameDeviceSecond = dispatcher.dispatch("device-a", pwm(2, 20));
+    const otherDevice = dispatcher.dispatch("device-b", pwm(3, 30));
     await Promise.resolve();
-    expect(port.calls).toHaveLength(1);
+    expect(
+      port.calls.map(({ deviceId, request, options }) => [
+        deviceId,
+        request.kind === "set_pwm" ? request.pin : null,
+        options.priority ?? "interactive",
+      ]),
+    ).toEqual([
+      ["device-a", 1, "background"],
+      ["device-b", 3, "interactive"],
+    ]);
+    await expect(otherDevice).resolves.toMatchObject({
+      kind: "completed",
+      operation: { status: "succeeded" },
+    });
 
-    settleFirst({ id: "operation-unknown", status: "outcome_unknown" });
+    settleFirst({
+      id: "operation-unknown",
+      status: "outcome_unknown",
+      result: null,
+    });
     await expect(first).resolves.toMatchObject({
       kind: "completed",
       operation: { status: "outcome_unknown" },
     });
-    await expect(queued).resolves.toEqual({
-      kind: "blocked",
-      reason: "outcome_unknown",
-    });
-    expect(port.calls).toHaveLength(1);
-
-    await dispatcher.acknowledgeReconciledOutcome();
-    await expect(
-      dispatcher.dispatch("device-b", pwm(2, 20)),
-    ).resolves.toMatchObject({
+    await expect(sameDeviceSecond).resolves.toMatchObject({
       kind: "completed",
       operation: { status: "succeeded" },
     });
-    expect(port.calls).toHaveLength(2);
+    expect(dispatcher.blockedReason).toBeNull();
+    expect(
+      port.calls.map(({ deviceId, request, options }) => [
+        deviceId,
+        request.kind === "set_pwm" ? request.pin : null,
+        options.priority ?? "interactive",
+      ]),
+    ).toEqual([
+      ["device-a", 1, "background"],
+      ["device-b", 3, "interactive"],
+      ["device-a", 2, "interactive"],
+    ]);
+  });
+
+  it("drains every active device lane and its queued work", async () => {
+    let settleDeviceA: (
+      completion: ScheduledDeviceOperationCompletion,
+    ) => void = () => undefined;
+    const deviceACompletion = new Promise<ScheduledDeviceOperationCompletion>(
+      (resolve) => {
+        settleDeviceA = resolve;
+      },
+    );
+    let settleDeviceB: (
+      completion: ScheduledDeviceOperationCompletion,
+    ) => void = () => undefined;
+    const deviceBCompletion = new Promise<ScheduledDeviceOperationCompletion>(
+      (resolve) => {
+        settleDeviceB = resolve;
+      },
+    );
+    const port = new RecordingOperationPort();
+    port.results.push(deviceACompletion, deviceBCompletion, {
+      id: "operation-device-a-second",
+      status: "succeeded",
+      result: null,
+    });
+    const dispatcher = new ScheduledDeviceOperationDispatcher(port);
+    const firstDeviceA = dispatcher.dispatch("device-a", pwm(1, 10));
+    const deviceB = dispatcher.dispatch("device-b", pwm(2, 20));
+    const secondDeviceA = dispatcher.dispatch("device-a", pwm(3, 30));
+    await Promise.resolve();
+
+    let drained = false;
+    const drain = dispatcher.drain().then(() => {
+      drained = true;
+    });
+    settleDeviceA({
+      id: "operation-device-a-first",
+      status: "succeeded",
+      result: null,
+    });
+    await firstDeviceA;
+    await secondDeviceA;
+    expect(drained).toBe(false);
+
+    settleDeviceB({
+      id: "operation-device-b",
+      status: "succeeded",
+      result: null,
+    });
+    await deviceB;
+    await drain;
+    expect(drained).toBe(true);
+    expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+      "device-a",
+      "device-b",
+      "device-a",
+    ]);
   });
 
   it("fails closed when the persistent operation port throws or returns early", async () => {
@@ -159,11 +152,15 @@ describe("scheduled device operation safety dispatcher", () => {
       throwingDispatcher.dispatch("device-a", pwm(1, 10)),
     ).rejects.toThrow(/persistence failed/);
     await expect(
-      throwingDispatcher.dispatch("device-a", pwm(1, 10)),
+      throwingDispatcher.dispatch("device-b", pwm(1, 10)),
     ).resolves.toEqual({ kind: "blocked", reason: "command_error" });
 
     const earlyPort = new RecordingOperationPort();
-    earlyPort.results.push({ id: "operation-pending", status: "in_flight" });
+    earlyPort.results.push({
+      id: "operation-pending",
+      status: "in_flight",
+      result: null,
+    });
     const earlyDispatcher = new ScheduledDeviceOperationDispatcher(earlyPort);
     await expect(
       earlyDispatcher.dispatch("device-a", pwm(1, 10)),
@@ -176,6 +173,7 @@ class RecordingOperationPort implements ScheduledDeviceOperationPort {
   readonly calls: {
     readonly deviceId: string;
     readonly request: ScheduledDeviceOperationRequest;
+    readonly options: DeviceOperationExecutionOptions;
   }[] = [];
   readonly results: (
     | ScheduledDeviceOperationCompletion
@@ -185,8 +183,9 @@ class RecordingOperationPort implements ScheduledDeviceOperationPort {
   async executeDeviceOperation(
     deviceId: string,
     request: ScheduledDeviceOperationRequest,
+    options: DeviceOperationExecutionOptions = {},
   ): Promise<ScheduledDeviceOperationCompletion> {
-    this.calls.push({ deviceId, request });
+    this.calls.push({ deviceId, request, options });
     const result = this.results.shift();
     if (result === undefined) {
       throw new Error("Test operation result is required");
@@ -196,5 +195,5 @@ class RecordingOperationPort implements ScheduledDeviceOperationPort {
 }
 
 function pwm(pin: number, value: number): ScheduledDeviceOperationRequest {
-  return { kind: "set_pwm", pin, value, overwrite: false };
+  return { kind: "set_pwm", pin, value, overwrite: true };
 }

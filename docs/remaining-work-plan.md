@@ -1,13 +1,17 @@
 # AquariumController remaining-work plan
 
-Updated: 2026-07-25
+Updated: 2026-07-26
 
-Purpose: execution record and handoff plan. R0-R14 implementation and local
-validation are complete. Current evidence includes real-Mosquitto 5/5, three
-retry-free Playwright runs at 18/18, 97 files/638 unit tests, 82 files/571
-critical tests, two protected six-job hosted runs, and a published
-integrity-clean amd64/ARM64 image. Production migration, ESP32 flashing, and Pi
-validation remain external.
+Purpose: execution record and handoff plan. R0-R14 repository implementation is
+complete, including firmware 4.1, correlated requests, bounded per-device lanes,
+latest-only routine PWM coalescing, and device-local failure handling. The
+current branch still needs protected CI, merge, default-branch validation, image
+publication, and immutable digest selection. Production migration, ESP32
+flashing, and Pi validation remain external.
+
+Exact counts, commit IDs, and image digests later in this document are
+historical pre-4.1 evidence unless explicitly described as current. They must
+not be used as the current deployment identity.
 
 This document records the completed repository execution plan and hands off the
 remaining external release work. It is deliberately more prescriptive than
@@ -24,21 +28,24 @@ fixtures; the real snapshot must be dry-run during the supervised deployment.
 
 Repository work is complete only when the only remaining actions are:
 
-1. Confirm the exposed credential was revoked, have GitHub Support purge the
+1. Pass all six protected jobs for the current branch, merge through the
+   protected default branch, pass its run, publish the multi-platform image,
+   smoke-test it, and record the newly selected exact digest.
+2. Confirm the exposed credential was revoked, have GitHub Support purge the
    unreachable historical object/cached view, resolve its open alert as
    `revoked`, and keep secret scanning and push protection enabled.
-2. Flash and identify firmware 4.0.0 on every production ESP32, then complete a
+3. Flash and identify firmware 4.1.0 on every production ESP32, then complete a
    controlled hardware/failover soak.
-3. Configure the Pi's production MQTT/database/archive/backup paths and
+4. Configure the Pi's production MQTT/database/archive/backup paths and
    credentials outside the repository.
-4. Preserve the legacy installation and an immutable JSON snapshot, repeat the
+5. Preserve the legacy installation and an immutable JSON snapshot, repeat the
    importer dry-run on the Pi, record the newly calculated fingerprint, review
    the complete report, and commit only that exact snapshot into new storage
    after operator approval. Then create the candidate schema-v2 backup.
-5. Set the separately required production Compose image-repository and
+6. Set the separately required production Compose image-repository and
    `sha256`-digest inputs, deploy the selected verified image by that digest,
    run health/integrity/rollback checks, and perform the controlled cutover.
-6. Configure and prove the selected real alert destination.
+7. Configure and prove the selected real alert destination.
 
 The following stay explicitly deferred:
 
@@ -67,7 +74,7 @@ Every delegated task must follow these rules:
 - Treat legacy Python/templates and historical files under `.old/**` as
   read-only. The user explicitly promoted
   `.old/slaveCode/ESP32Code/ESP32Code.ino` into the refactor and authorized the
-  firmware 4.0.0 reliability changes. Do not flash hardware from repository
+  firmware 4.1.0 reliability changes. Do not flash hardware from repository
   implementation tasks.
 - Never read or modify `.env` files. Document variables by name and ask the
   operator to set values.
@@ -190,9 +197,12 @@ documentation. Public visibility is not a credential-remediation mechanism.
   mapping/device/alert-rule mutation APIs. Channel lifecycle owns its UTC
   schedule atomically and schedule capacity validates the full wire document.
 - R5 persistent device registry, health transitions, durable operation states,
-  exact legacy command builders, guarded MQTT runtime composition, and shutdown.
+  correlated request routing, bounded priority-aware per-device lanes,
+  device-local timeout/protocol-fault handling, guarded MQTT composition, and
+  shutdown.
 - R6 deterministic per-device artifacts, hash no-op, affected-device triggers,
-  coalescing/unknown latches, five-second scheduler, and announce/daily time sync.
+  per-device coalescing/failure isolation, latest-only routine PWM scheduling,
+  and best-effort announce/daily time sync.
 - R7 server-authoritative manual override start/extend/cancel/expire/reconcile,
   persisted exact pin targets, restart initialization, scheduler overlay, and
   typed React commands/countdown/operation states without optimistic success.
@@ -223,16 +233,16 @@ documentation. Public visibility is not a credential-remediation mechanism.
   healthy local controller/broker/two-fake stack, compressed capped logs,
   non-root/read-only hardening, restart persistence, and amd64 plus emulated
   ARM64 HTTP/SQLite evidence.
-- Firmware 4.0.0 resolves the four failover defects, is enforced by the
-  registry/reconciliation/frontend gate, keeps MQTT/manual control startup
-  independent of NTP availability, gates boot-loaded schedules on freshly
-  confirmed time, and compiles warning-free with a pinned Arduino/ESP32/library
-  toolchain. Wire duty stays normalized at 0-255 and firmware scales it across
-  configured 1-16-bit output; resolution reattachment rescales scheduled/current-
-  overwrite caches and physical duty. Frequency/resolution pairs enforce
+- Firmware 4.1.0 retains the 4.0 cache, rollover, normalized-duty, and
+  resolution fixes and adds correlated request IDs, controller-owned overwrite
+  leases, valid-EEPROM-time fallback, best-effort per-pin schedule activation,
+  and wear-limited persistent/MQTT diagnostics. It is enforced by the
+  registry/reconciliation/frontend gate and keeps MQTT/manual control startup
+  independent of NTP availability. Frequency/resolution pairs enforce
   `frequencyHz * 2^resolutionBits <= 80,000,000`, and sync accepts epoch seconds
-  1-2,147,483,647. The pinned compile uses 1,036,431 bytes flash, 63,180 bytes
-  global RAM, and leaves 264,500 bytes local-variable capacity.
+  1-2,147,483,647. The real 4.1 sketch passes the pinned compiler build. The
+  1,036,431-byte flash, 63,180-byte global-RAM, and 264,500-byte remaining
+  figures belong only to the historical 4.0 compile.
 - Migration verification uses deterministic synthetic JSON created in temporary
   directories. `.old/data` is intentionally ignored operator-local production
   input and is absent from Git, Docker build contexts, and CI. The actual source
@@ -242,19 +252,21 @@ documentation. Public visibility is not a credential-remediation mechanism.
 - The exact backup-artifact verifier passed its focused 2026-07-19 selection:
   four files and 21/21 tests.
 
-### Recorded hosted release evidence
+### Historical pre-4.1 hosted release evidence
 
-- Selected source:
+- Historical source:
   `886ed05be89a1abed8e076d91ce2802f5d5668dd`.
 - All six checks passed in protected
   [PR run 30158546118](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
   and protected
   [`master` run 30158994132](https://github.com/AdrianNO1/AquariumController/actions/runs/30158994132).
-- Selected public multi-platform image:
+- Historical public multi-platform image:
   `ghcr.io/adrianno1/aquarium-controller@sha256:0629bacbd1744eafd2c98b7c96890e6bf1a5d891dc44e77bd77702da1fb2becc`.
 - Keep future repository changes inside the same verification boundaries; do
   not broaden durable logging to every debug event, healthy read, or five-second
   healthy tick.
+- Do not deploy the historical source or digest as the 4.1 release. The current
+  merge must produce and select new protected evidence.
 
 ### Verification caveat
 
@@ -275,14 +287,15 @@ Compose, amd64, and emulated ARM64 evidence all run against the real engine.
 Native Mosquitto remains diagnostic-only and was not substituted for required
 container evidence.
 
-### Gate D2: deployed-firmware output-cache and timer defects — resolved in 4.0.0
+### Gate D2: deployed-firmware reliability defects — resolved in 4.1.0
 
-The user explicitly approved firmware work. Version 4.0.0 uses unsigned
-elapsed-time comparison across `millis()` rollover; forces the first write after
-boot/schedule replacement; invalidates scheduled caches after overwrite expiry
-and PWM reattachment; and keeps pin bookkeeping synchronized with schedule
-writes. Independent fake tests cover the exact boundary and rollover cases, and
-the real sketch passes its pinned compiler lane. Old/unexpected firmware is
+The user explicitly approved firmware work. Version 4.1.0 retains the 4.0
+unsigned rollover comparison, first-write, cache invalidation, and pin
+bookkeeping fixes. It also trusts valid persisted time if Pi and NTP are
+unreachable, echoes correlated request IDs, keeps controller writes authoritative
+for the overwrite lease, activates schedule pins best effort, and persists and
+announces wear-limited diagnostics. Independent fake tests cover the behavior,
+and the real sketch passes its pinned compiler lane. Old/unexpected firmware is
 visible as `firmware_outdated` but receives no actuator work. Flashing the new
 firmware is part of the external release checklist.
 
@@ -336,9 +349,10 @@ Safe final-audit parallel lanes:
   Docker-dependent lanes, with one owner for any shared composition fix.
 - Documentation/readiness audit can proceed without Docker but may not invent
   integration, browser, or container results.
-- R8, R12, and R13 are complete. Local, protected PR, and protected `master`
-  no-retry R12 browser runs passed; real production hardware remains separate
-  external evidence.
+- R8, R12, and R13 are implemented. The current local no-retry R12 browser run
+  passed 18/18; the protected PR and `master` 18/18 results are historical
+  pre-4.1 evidence. Current protected confirmation and real production hardware
+  remain separate external evidence.
 
 ## 7. Standard task protocol
 
@@ -368,8 +382,10 @@ Every package must end with:
 ## 8. Work packages
 
 The task lists below preserve the original acceptance scope for traceability.
-Read each package's **Current status** before delegating it: completed bullets
-are audit criteria, not instructions to reimplement working code. The remaining
+Read each package's **Current status** before delegating it. Completed bullets
+are audit criteria, not instructions to reimplement working code. Exact
+validation counts are historical where sections 1-5 say newer release evidence
+is pending; sections 1-5 are authoritative for current state. The remaining
 items are summarized in sections 4 and 10.
 
 ### R0 — Re-establish a clean, reproducible baseline
@@ -634,8 +650,9 @@ Tasks:
 - Convert each hardware mutation into a persistent `control_operations` state
   machine: pending -> in-flight -> succeeded/failed/timed-out/outcome-unknown.
 - On outcome unknown, retain desired intent separately, do not update observed
-  state, latch the legacy wire coordinator, and require explicit reconciliation
-  before further uncertain commands.
+  state, mark the affected device offline, and apply its bounded cooldown.
+  Healthy device lanes remain available; never blindly retry the ambiguous
+  operation.
 - Implement typed command builders/expected responses for `s`, `p`, `e`, `sc`,
   `sync`, and `r`. Bare `clear` remains maintenance-only and is never exposed as
   ordinary UI control because firmware replies are unidentifiable plaintext.
@@ -675,7 +692,8 @@ Tasks:
   legacy exclusion for firmware `0`, `1`, and `2w` as an explicit unsupported
   state/error.
 - Implement the five-second scheduler with injected monotonic/UTC clocks:
-  - no overlapping ticks;
+  - one active device batch and at most one latest-only pending routine batch per
+    device;
   - no catch-up command burst;
   - evaluate every active mapped output at UTC minute;
   - apply throttle and explicit mapping/output gain using half-even rounding;
@@ -687,8 +705,10 @@ Tasks:
     `frequencyHz * 2^resolutionBits > 80,000,000`.
 - Implement time sync after announcement and once daily at 05:00 UTC using the
   persisted daily guard. Schedule `syncTime` must never be mistaken for `sync`.
-- Make schedule/config delivery and refresh operations use the global wire queue
-  and persistent operation states.
+- Make schedule/config delivery and refresh operations use bounded,
+  priority-aware per-device lanes and persistent operation states. Keep one
+  response-waiting operation per ESP, select interactive work before queued
+  background work, and publish each chunk sequence atomically.
 
 Acceptance:
 
@@ -702,11 +722,12 @@ Acceptance:
 
 ### R7 — Manual overrides and failover decision
 
-Current status: **implemented and included in current verification**. Service,
-repository, routes, scheduler overlay, restart, expiry, unknown outcome, typed
+Current status: **implemented with current local 4.1 evidence**. Service, repository,
+routes, scheduler overlay, restart, expiry, unknown outcome, typed
 start/extend/cancel/reconcile UI, authoritative countdown/states, conflict
-refresh, no-optimistic-retry, real-broker, production-browser, and firmware
-4.0.0 failover evidence exist.
+refresh, no-optimistic-retry, and firmware 4.1.0 failover evidence exist.
+Current local full integration and browser coverage pass; protected CI
+confirmation remains pending.
 
 Effort: medium plus decision gate. Dependencies: R2, R5, R6. Suggested mode:
 higher reasoning.
@@ -729,17 +750,17 @@ Acceptance (completed):
 
 - 119999/120000-ms, extension, cancel, scheduled/unscheduled pins, controller
   stop/restart, and unknown outcome tests pass.
-- Old-firmware behavior is pinned by compatibility fixtures; corrected 4.0.0
+- Old-firmware behavior is pinned by compatibility fixtures; corrected 4.1.0
   behavior is pinned separately and compiled from the real sketch.
 - Old/unexpected firmware is visible but excluded from actuator work until the
-  operator flashes 4.0.0.
+  operator flashes 4.1.0.
 
 ### R8 — Real pinned-Mosquitto integration suite
 
-Current status: **implemented; the current real-broker suite passes 5/5**. The
-isolated, digest-pinned Mosquitto harness and five transport/runtime integration
-tests cover the required matrix and capture both allowed and forbidden
-namespaces.
+Current status: **implemented**. The isolated, digest-pinned Mosquitto harness
+covers the required matrix and captures both allowed and forbidden namespaces.
+The current local suite passes 5/5, including cross-device progress and atomic
+chunk publication. Protected CI confirmation remains pending.
 
 Effort: large. Dependencies: D1, R2, R5-R7. Suggested mode: higher reasoning.
 
@@ -763,10 +784,12 @@ Required cases:
   analog read.
 - 256/257 UTF-8 bytes, 200-byte chunks, 50/51 chunks, 4095/4096 schedule
   boundary, partial/duplicate/out-of-order/timeout frames.
-- Global wire non-overlap and canonical name/ID batching.
+- Per-device FIFO ordering, one response wait per ESP, bounded cross-device
+  concurrency, atomic chunk publication, and canonical name/ID batching.
 - Batch-local indexes across multiple devices.
-- Dropped/delayed/duplicate/malformed responses, timeout, unknown-outcome latch,
-  reconciliation, and proof of no actuator retry.
+- Dropped/delayed/duplicate/malformed responses, device-local timeout/cooldown,
+  attributable protocol-fault quarantine, reconciliation, and proof of no
+  actuator retry.
 - Golden compiler/hash and independent fake evaluation.
 - Five-second refresh, override expiry/failover behavior, persistence after
   actor/controller/database restart, and time sync.
@@ -780,10 +803,11 @@ Acceptance:
 
 ### R9 — Functional control frontend for every retained route
 
-Current status: **substantially implemented at component level**. All 11 routes,
+Current status: **implemented**. All 11 routes,
 snapshot/SSE state, schedule/channel/throttle/mapping/device editing, conflicts,
 manual-override mutations/countdown/terminal states, and operation states exist.
-Production-built Playwright evidence remains.
+The current production-built local Playwright suite passes 18/18; protected CI
+confirmation remains pending.
 
 Effort: large. Dependencies: stable R4-R7 contracts. Suggested mode: ordinary,
 split by component rather than route duplication.
@@ -861,7 +885,8 @@ Acceptance:
 
 ### R11 — Runtime operations: retention, backup, restore, and disk alerts
 
-Current status: **implemented and included in settled-tree verification**.
+Current status: **implemented**. Historical settled-tree verification is
+recorded; current protected verification remains part of release selection.
 Retention policies/scheduler/recovery, interaction
 redaction/logging, state-event and routine PWM retention, outbox/orphan-revision
 pruning, durable maintenance diagnostics, archives, usage projection, and the
@@ -916,9 +941,10 @@ Acceptance:
 
 ### R12 — Production-built full-stack Playwright E2E
 
-Current status: **implemented and repeat-validated**. Three consecutive
-retry-free Chromium runs passed 18/18 against production builds, real
-Mosquitto, fresh SQLite files, and two persistent fake actors.
+Current status: **implemented**. The current local branch passes the retry-free
+18/18 Chromium suite against production builds, real Mosquitto, fresh SQLite
+files, and two persistent fake actors. The historical pre-4.1 protected PR and
+`master` runs also passed 18/18; current protected confirmation remains pending.
 
 Effort: large. Dependencies: D1 and R3-R11. Suggested mode: higher reasoning for
 harness, ordinary for cases.
@@ -955,14 +981,13 @@ Acceptance:
 
 ### R13 — Docker, Compose, local stack, and CI
 
-Current status: **implemented and hosted-validated**. The multi-stage image,
-production single-origin serving, fail-closed production template,
-amd64/read-only/restart checks, test-topic capture, and emulated ARM64
-migration/HTTP smoke have current local evidence. The ARM64 image reached
-health as UID/GID 1000 and both SQLite databases passed integrity. Executable
-integration, browser, firmware, container, and guarded immutable-publish CI
-lanes passed on the protected PR and `master`; the selected digest was
-published and smoke-tested on both platforms.
+Current status: **repository implementation complete; current hosted validation
+pending**. The multi-stage image, production single-origin serving, fail-closed
+production template, amd64/read-only/restart checks, test-topic capture, and
+emulated ARM64 migration/HTTP smoke have historical pre-4.1 evidence.
+Executable integration, browser, firmware, container, and guarded
+immutable-publish CI lanes exist. The current branch still needs its protected
+run, merge, new publication, and exact-digest smoke/selection.
 
 Effort: medium/large. Dependencies: D1 and R8/R12. Suggested mode: ordinary
 with careful operations review.
@@ -994,7 +1019,7 @@ Six CI validation jobs:
    namespace-safety assertion.
 4. `browser`: install pinned Chromium, build/start full stack, Playwright + axe,
    upload failure artifacts.
-5. `firmware`: compile firmware 4.0.0 with the pinned Arduino toolchain.
+5. `firmware`: compile firmware 4.1.0 with the pinned Arduino toolchain.
 6. `container`: BuildKit build, local amd64 smoke, ARM64 build/emulation smoke,
    Compose health, non-root/read-only/volume checks.
 
@@ -1019,11 +1044,12 @@ Acceptance:
 
 ### R14 — Migration/operations documentation and final readiness audit
 
-Current status: **repository work complete; external handoff open**. Clean-source
-verification, repeat stability, Compose/preflight checks, ARM64 smoke, and
-evidence consolidation are complete. Hosted CI/GHCR publication is recorded;
-production migration, firmware flashing, and Pi validation remain operator
-actions.
+Current status: **repository implementation and documentation complete; release
+selection open**. Historical clean-source, repeat-stability,
+Compose/preflight, ARM64, and hosted evidence is recorded. Current protected
+CI, merge, publication, and exact-digest selection come next; production
+migration, firmware flashing, and Pi validation remain operator actions after
+that.
 
 Effort: medium. Dependencies: every previous package and D2 resolution.
 Suggested mode: higher reasoning review.
@@ -1092,20 +1118,20 @@ Create `docs/readiness-report.md` containing:
 
 ## 10. Quota-conscious execution order
 
-Execution status from the current working tree:
+Execution status:
 
-1. R8 real-Mosquitto integration passes 5/5 on the current tree.
-2. R12 production-built Playwright passes 18/18 in three consecutive runs with
-   retries disabled.
-3. R13 Docker/Compose and CI lanes are implemented. Compose rendering and
-   preflight syntax are green; the ARM64 image reaches health as UID/GID 1000
-   and passes both SQLite integrity checks.
-4. D2 is resolved by firmware 4.0.0 and exact-version exclusion.
-5. R14 selected-source verification passes 97 files/638 unit tests and 82
-   files/571 critical tests. Documentation consolidation is complete.
-6. Protected PR and `master` validation plus exact-digest GHCR publication are
-   green. Credential/support cleanup, production data, fleet flashing, and Pi
-   work remain external.
+1. R0-R14 repository implementation is complete on the current branch.
+2. Firmware 4.1 and focused transport/scheduler/compiler evidence pass locally.
+3. The pre-4.1 baseline historically passed real-Mosquitto 5/5, Playwright
+   18/18 in three retry-free runs, 97 files/638 unit tests, 82 files/571
+   critical tests, and protected PR/default-branch validation.
+4. D2 is resolved by firmware 4.1.0 and exact-version exclusion; the earlier
+   4.0 cache and rollover fixes remain part of 4.1.
+5. Docker/Compose, the six validation lanes, and immutable publication are
+   implemented. The current branch still needs protected validation, merge,
+   publication, smoke, and selection of a new digest.
+6. Credential/support cleanup, production data, fleet flashing, and Pi work
+   remain external after current release selection.
 
 To minimize wasted turns:
 
@@ -1138,7 +1164,7 @@ npm run test:critical
 npm run test:integration
 npm run test:e2e
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.0.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.1.0 .
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory>
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory> --commit --state-db <explicit-state.db>
 npm run storage -- backup --state-db <existing-state.db> --events-db <existing-events.db> --destination <backup-parent-directory>

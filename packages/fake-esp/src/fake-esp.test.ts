@@ -12,11 +12,32 @@ describe("independent fake ESP actor commands", () => {
 
     harness.connectAll();
     expect(actorPayloads(harness, harness.topics.announce)).toEqual([
-      '{"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"4.0.0","scheduleHash":"0"}',
+      '{"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"4.1.0","scheduleHash":"0"}',
     ]);
 
     harness.publishCommand("discover");
     expect(actorPayloads(harness, harness.topics.announce)).toHaveLength(2);
+  });
+
+  it("echoes a correlated request ID without changing command indexes", () => {
+    const harness = createConnectedHarness();
+    harness.bus.clearPublications();
+
+    harness.publishCommand(
+      `request:operation_1|${DEVICE_ID} p;${DEVICE_ID} s 4 128 1`,
+    );
+
+    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
+      {
+        id: DEVICE_ID,
+        name: "Alpha",
+        requestId: "operation_1",
+        responses: [
+          { index: 0, response: "o" },
+          { index: 1, response: "s 4 128 1" },
+        ],
+      },
+    ]);
   });
 
   it("keeps response indexes local to a multi-actor batch", () => {
@@ -263,10 +284,29 @@ describe("independent fake ESP actor commands", () => {
     });
   });
 
+  it("rejects an EEPROM timestamp outside the firmware time_t range", () => {
+    const persistence = new MemoryFakeEspPersistence({
+      deviceName: "Alpha",
+      deviceId: DEVICE_ID,
+      time: { lastSavedEpochSeconds: 2_147_483_648 },
+    });
+    const harness = new FakeEspHarness([
+      {
+        key: "alpha",
+        deviceName: "Alpha",
+        deviceId: DEVICE_ID,
+        persistence,
+      },
+    ]);
+
+    expect(harness.actor("alpha").currentEpochSeconds()).toBe(0);
+    expect(persistence.read().time).toBeUndefined();
+  });
+
   it("saves elapsed synchronized time to EEPROM on the firmware hourly loop", () => {
     const harness = createConnectedHarness();
     harness.publishCommand(`${DEVICE_ID} sync 1735689600`);
-    harness.clock.advanceBy(3_600_000);
+    harness.clock.advanceBy(3_599_999);
     harness.runLoops();
 
     expect(harness.actor("alpha").persistenceSnapshot().time).toEqual({
@@ -281,6 +321,54 @@ describe("independent fake ESP actor commands", () => {
     expect(harness.restartActor("alpha").currentEpochSeconds()).toBe(
       1_735_693_200,
     );
+  });
+
+  it("immediately checkpoints the first fresh clock after an hourly EEPROM fallback checkpoint", () => {
+    const persistence = new MemoryFakeEspPersistence({
+      deviceName: "Alpha",
+      deviceId: DEVICE_ID,
+      time: { lastSavedEpochSeconds: 1_735_689_600 },
+    });
+    const harness = new FakeEspHarness([
+      {
+        key: "alpha",
+        deviceName: "Alpha",
+        deviceId: DEVICE_ID,
+        persistence,
+      },
+    ]);
+    harness.connectAll();
+    harness.advanceBy(3_600_000);
+    expect(persistence.read().time).toEqual({
+      lastSavedEpochSeconds: 1_735_693_200,
+    });
+
+    harness.publishCommand(`${DEVICE_ID} sync 1735700000`);
+
+    expect(persistence.read().time).toEqual({
+      lastSavedEpochSeconds: 1_735_700_000,
+    });
+  });
+
+  it("retains a backward clock correction in RAM and checkpoints it at the hourly bound", () => {
+    const harness = createConnectedHarness();
+    harness.publishCommand(`${DEVICE_ID} sync 1735693200`);
+    harness.advanceBy(1_000);
+    harness.publishCommand(`${DEVICE_ID} sync 1735689600`);
+
+    expect(harness.actor("alpha").currentEpochSeconds()).toBe(1_735_689_600);
+    expect(harness.actor("alpha").persistenceSnapshot().time).toEqual({
+      lastSavedEpochSeconds: 1_735_693_200,
+    });
+
+    harness.advanceBy(3_598_999);
+    expect(harness.actor("alpha").persistenceSnapshot().time).toEqual({
+      lastSavedEpochSeconds: 1_735_693_200,
+    });
+    harness.advanceBy(1);
+    expect(harness.actor("alpha").persistenceSnapshot().time).toEqual({
+      lastSavedEpochSeconds: 1_735_693_199,
+    });
   });
 
   it("retains SPIFFS schedule while bare clear resets EEPROM and targeted clear stays invalid", () => {

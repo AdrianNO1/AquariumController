@@ -32,6 +32,7 @@ import {
   ManualOverrideService,
 } from "../overrides/index.js";
 import {
+  ScheduleReconciliationCommandAdapter,
   ScheduleReconciliationService,
   type ScheduleReconciliationTrigger,
 } from "../schedule-artifacts/index.js";
@@ -121,8 +122,6 @@ export class ControllerMqttRuntime
   #transportReady = false;
   #readyForCommands = false;
   #transportGeneration = 0;
-  #postReconciliationRecoveryScheduled = false;
-  #postReconciliationRecoveryRequested = false;
   #stopping = false;
   #started = false;
   #stopPromise: Promise<void> | undefined;
@@ -171,6 +170,11 @@ export class ControllerMqttRuntime
             if (this.#stopping) {
               return;
             }
+            if (!(await this.#registry.isCommandEligible(update.deviceId))) {
+              return;
+            }
+            this.#deviceOperations.signalDeviceAvailable(update.deviceId);
+            this.#outputRefresh.signalDeviceAvailable(update.deviceId);
             await this.#ensureSchedulingStarted();
             await this.#timeSync.signalAnnouncement(update.deviceId);
             await this.#reconcileSchedules({
@@ -184,6 +188,22 @@ export class ControllerMqttRuntime
           this.#tasks.run(() =>
             this.#interactionLogger.logTransportInteraction(interaction),
           );
+          if (
+            interaction.kind === "ignored_response" &&
+            (interaction.reason === "wrong_device" ||
+              interaction.reason === "index_out_of_range")
+          ) {
+            this.#tasks.run(async () => {
+              const update = await this.#registry.recordProtocolFault(
+                interaction.responderId,
+                interaction.atMs,
+                `Correlated response violated the protocol (${interaction.reason})`,
+              );
+              if (update !== null) {
+                await this.#evaluateDeviceAlerts(interaction.atMs);
+              }
+            });
+          }
           if (interaction.kind === "lifecycle") {
             this.#transportReady =
               !this.#stopping && interaction.state === "ready";
@@ -208,18 +228,18 @@ export class ControllerMqttRuntime
         now: options.now,
         operationTimeoutMs: options.mqtt.responseTimeoutMs,
         onBackgroundError: options.onError,
-        onUnknownOutcomeLatched: () => this.#handleUnknownOutcomeLatched(),
-        onAllUnknownOutcomesReconciled: () =>
-          this.#releaseScheduledUnknownOutcomeLatch(),
       },
-    );
-    this.#scheduleReconciliation = new ScheduleReconciliationService(
-      new DeviceScheduleArtifactRepository(options.stateDatabase),
-      this.#deviceOperations,
-      { nowMs: options.now },
     );
     this.#scheduledCommands = new ScheduledDeviceOperationDispatcher(
       this.#deviceOperations,
+    );
+    this.#scheduleReconciliation = new ScheduleReconciliationService(
+      new DeviceScheduleArtifactRepository(options.stateDatabase),
+      new ScheduleReconciliationCommandAdapter(
+        this.#scheduledCommands,
+        this.#deviceOperations,
+      ),
+      { nowMs: options.now },
     );
     const manualOverrideRepository = new ManualOverrideRepository(
       options.stateDatabase,
@@ -277,48 +297,6 @@ export class ControllerMqttRuntime
 
   get deviceOperations(): DeviceOperationService {
     return this.#deviceOperations;
-  }
-
-  async #releaseScheduledUnknownOutcomeLatch(): Promise<void> {
-    if (this.#scheduledCommands.blockedReason === "outcome_unknown") {
-      await this.#scheduledCommands.acknowledgeReconciledOutcome();
-    }
-    this.#schedulePostReconciliationRecovery();
-  }
-
-  #schedulePostReconciliationRecovery(): void {
-    if (!this.#started || this.#stopping || !this.#transportReady) {
-      return;
-    }
-    this.#postReconciliationRecoveryRequested = true;
-    if (this.#postReconciliationRecoveryScheduled) {
-      return;
-    }
-    this.#postReconciliationRecoveryScheduled = true;
-    this.#tasks.run(async () => {
-      await Promise.resolve();
-      try {
-        while (
-          this.#postReconciliationRecoveryRequested &&
-          this.#started &&
-          !this.#stopping &&
-          this.#transportReady
-        ) {
-          this.#postReconciliationRecoveryRequested = false;
-          await this.#handleTransportReady(this.#transportGeneration);
-        }
-      } finally {
-        this.#postReconciliationRecoveryScheduled = false;
-        if (this.#postReconciliationRecoveryRequested) {
-          this.#schedulePostReconciliationRecovery();
-        }
-      }
-    });
-  }
-
-  #handleUnknownOutcomeLatched(): void {
-    this.#readyForCommands = false;
-    this.#scheduledCommands.latchUnknownOutcome();
   }
 
   get manualOverrideCommands(): ManualOverrideService {

@@ -1213,6 +1213,33 @@ h2 {
   background: rgba(5, 25, 30, 0.6);
 }
 
+.device-status-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.device-exclude-button {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgba(255, 172, 164, 0.55);
+  border-radius: 999px;
+  color: #ffaca4;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.device-exclude-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .status-pill {
   padding: 5px 8px;
   border-radius: 999px;
@@ -1239,6 +1266,11 @@ h2 {
 .status-error {
   color: #ffb4aa;
   background: rgba(159, 51, 43, 0.24);
+}
+
+.status-excluded {
+  color: #d4c4c2;
+  background: rgba(108, 91, 89, 0.32);
 }
 
 .comparison-list,
@@ -1660,6 +1692,7 @@ h2 {
   .control-page-heading,
   .section-heading,
   .channel-card-heading,
+  .device-card-heading,
   .override-card-heading,
   .override-command-notice,
   .stale-banner,

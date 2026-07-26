@@ -1,11 +1,13 @@
 # Target architecture
 
-Status: implemented architecture, updated 2026-07-25. Selected source
-`886ed05be89a1abed8e076d91ce2802f5d5668dd` passed complete local, protected PR,
-and protected `master` validation. Its selected multi-platform digest is
-recorded in the [readiness report](readiness-report.md). Physical ESP flashing,
-Raspberry Pi deployment, production-data migration, and production
-configuration remain operator-run release steps.
+Status: implemented architecture, updated 2026-07-26. The protected evidence
+for source `886ed05be89a1abed8e076d91ce2802f5d5668dd` and its published digest is a
+historical pre-4.1 baseline recorded in the
+[readiness report](readiness-report.md). The current firmware 4.1 and
+per-device-lane branch requires its own protected CI run, merge, and immutable
+image selection. Physical ESP flashing, Raspberry Pi deployment,
+production-data migration, and production configuration remain operator-run
+release steps.
 
 ## Decision
 
@@ -18,8 +20,10 @@ This is intentionally neither a Next.js application nor a set of microservices.
 The dashboard is local-network software with no SEO or server-rendering need,
 while the MQTT queue, five-second refresh, daily jobs, state revision, and
 shutdown sequence need one predictable owner. The controller must not be
-horizontally scaled: the deployed ESP protocol has no request identifier and
-requires one global wire operation in flight.
+horizontally scaled: per-device command queues, schedules, and state revisions
+need one predictable owner. Firmware 4.1 request identifiers allow bounded
+concurrency inside that owner without making multiple controller processes
+safe.
 
 ## Technology baseline
 
@@ -68,10 +72,11 @@ explicitly enabled—the MQTT runtime. The MQTT runtime owns:
 
 - the persistent device registry, online/stale/offline transitions, and built-in
   not-online alert evaluation for enabled devices;
-- one globally serialized legacy transport and durable operation states;
+- bounded, priority-aware per-device command lanes and durable operation states;
 - deterministic schedule artifact compilation and hash-based reconciliation;
-- five-second output refresh with no overlap or catch-up burst;
-- manual-override overlays and an outcome-unknown latch;
+- five-second output refresh with per-device latest-only coalescing and no
+  catch-up burst;
+- manual-override overlays and device-local unknown-outcome handling;
 - announcement and persisted daily 05:00 UTC time synchronization; and
 - metadata-only MQTT/scheduler interaction logging.
 
@@ -184,18 +189,40 @@ the application:
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `4.0.0` is the exact supported release. Every other announced
+- Firmware `4.1.0` is the exact supported release. Every other announced
   version remains visible but is marked `firmware_outdated`, excluded from
-  actuator work, and shown with an install-4.0.0 message in the frontend.
+  actuator work, and shown with an install-4.1.0 message in the frontend.
 
-There is no request ID in responses and no message ID in chunk frames. Every
-ESP shares one chunk-reassembly buffer. The adapter therefore holds one global
-wire queue. A timeout means actuator outcome is unknown; it is never permission
-to retry an actuator command blindly. Reconciliation is the only route back to
-a known state.
+Firmware 4.1 accepts
+`request:<requestId>|<semicolon-separated commands>` and echoes the request ID
+in its structured response. The transport therefore maintains one FIFO lane
+per ESP, permits one response-waiting operation per ESP, and runs at most four
+device lanes concurrently by default. Interactive configuration and override
+work is selected before queued background schedule, refresh, and time-sync
+work. Responses are routed by request ID and then checked against the expected
+device and local command index, so delayed or out-of-order responses cannot
+settle a newer operation.
+
+Chunk frames still have no separate message identifier, and every subscribed
+ESP has one chunk-reassembly buffer. A short global publication mutex keeps all
+frames of one request contiguous; it is released after the final frame is
+published, not after the ESP response. Response waits for other devices can
+therefore overlap safely. The five-second output scheduler also keeps at most
+one pending refresh batch per device: a newer tick replaces queued routine PWM
+work that has not started, while commands already attempted are never silently
+rewritten.
+
+A timeout still means that device's actuator outcome is unknown; request
+correlation is not proof that an unacknowledged command did or did not run. The
+controller never blindly retries that operation. It marks only the affected
+enabled device offline, applies the device retry cooldown, and continues work
+for other ESPs. Online, stale, and offline enabled devices remain bounded retry
+candidates; `enabled=0` is the explicit operator exclusion. A correlated
+malformed, empty, or otherwise invalid response is attributable to that device
+and quarantines it as a protocol fault.
 
 The five-second host refresh and 120-second firmware overwrite are safety
-behavior. Firmware 4.0.0 uses rollover-safe elapsed-time expiry and invalidates
+behavior. Firmware 4.1.0 uses rollover-safe elapsed-time expiry and invalidates
 its scheduled-output cache after override expiry, PWM reattachment, and
 schedule replacement. The command wire continues to carry normalized 0-255 duty
 values. Firmware scales each value into the configured 1-16-bit LEDC range, and
@@ -205,33 +232,48 @@ Frequency/resolution pairs obey the same joint 80 MHz LEDC bound enforced by the
 controller. Firmware also updates its physical-output bookkeeping on every
 scheduled write. Startup NTP is asynchronous and configured through the ignored
 firmware header, so unavailable DNS/NTP cannot delay MQTT or manual control.
-Boot-loaded schedule pins are held off until either NTP or the controller `sync`
-command confirms time during that boot; restored EEPROM time alone never
-authorizes schedule actuation. Failed NTP attempts retry without blocking.
-Independent fake tests pin the actuator semantics, and the real
-sketch compiles warning-free with Arduino CLI 1.5.0, ESP32 core 3.3.8,
-ArduinoJson 7.4.3, and PubSubClient 2.8. Flashing every deployed ESP remains an
-external release action. The focused 2026-07-19 compile used 1,036,431 bytes of
-flash and 63,180 bytes of global RAM, leaving 264,500 bytes for local variables;
-this targeted result is not a substitute for final settled-tree validation.
+If neither NTP nor the controller is reachable after reboot, a valid persisted
+EEPROM timestamp intentionally authorizes the local schedule from that
+boundedly stale estimate. The first fresh Pi/NTP time checkpoint is persisted
+immediately; subsequent time corrections are coalesced to at most one EEPROM
+commit per hour, and failed commits retry no more than hourly.
+
+Routine host refresh and manual PWM writes set `overwrite=true`. Each successful
+write renews a 120-second controller lease during which the ESP does not apply
+its own schedule to that pin; after Pi silence, local scheduling resumes using
+the ESP's current or persisted time estimate. Schedule activation is
+best-effort per pin. Attach/write/detach failures leave the affected pin safe,
+do not stop healthy pins, and queue a wear-limited diagnostic announcement.
+Diagnostic transitions are persisted in SPIFFS immediately for the first
+transition and then at most hourly, with failed MQTT announcements retried no
+more than once per minute.
+
+Independent fake tests pin these actuator semantics, and the real 4.1 sketch
+passes the pinned Arduino CLI 1.5.0, ESP32 core 3.3.8, ArduinoJson 7.4.3, and
+PubSubClient 2.8 compiler build. Flashing every deployed ESP remains an external
+release action. The exact 1,036,431-byte flash, 63,180-byte global-RAM, and
+264,500-byte remaining-capacity figures recorded for the focused 2026-07-19
+firmware 4.0 build are historical and are not claimed for 4.1.
 
 ## Unknown actuator outcomes and reconciliation
 
-The ESP wire response has no request identifier, so a failure after publication
-cannot prove that an actuator command did not run. The controller therefore
-never retries an ambiguous command. It persists the operation as terminal
+Firmware 4.1 response IDs prevent stale-response misattribution, but a failure
+after QoS 0 publication still cannot prove whether the addressed ESP applied
+the command. The controller therefore never retries that ambiguous operation
+as though it were safely unsent. It persists the operation as terminal
 `outcome_unknown`; reconciliation later records `reconciledAtMs` while leaving
-that status unchanged. Reconciliation is an acknowledgement of verified
-physical state, not a retroactive success or failure claim.
+that status unchanged. Reconciliation acknowledges independently verified
+physical/device state, not retroactive success or failure.
 
-The safety latch is both durable and live. Startup recovery converts an
-interrupted in-flight device operation to `outcome_unknown`, finds every
-unreconciled unknown result, and restores the latch before command readiness.
-A new runtime unknown immediately marks MQTT command readiness false and blocks
-the serialized transport and scheduled dispatcher. Broker reconnection does not
-clear it. Only after every unknown device operation is durably reconciled does
-the controller release both latches and rerun the full transport-ready schedule
-reconciliation before becoming ready again.
+Unknown outcomes are device-local. Startup recovery converts each interrupted
+in-flight operation to `outcome_unknown` without installing a global safety
+latch. A timed-out ESP becomes offline and enters its bounded cooldown while
+healthy device lanes continue. Routine PWM uncertainty is reconciled after the
+complete 120-second overwrite lease before that device's later routine probe;
+manual-override children remain owned by their aggregate, and schedule
+uncertainty remains local to that device until authoritative announcement/hash
+evidence or explicit reconciliation resolves it. Broker reconnection does not
+rewrite an ambiguous outcome.
 
 `POST /api/operations/:operationId/reconcile` is revision checked. A successful
 operator reconciliation updates the versioned result document and atomically
@@ -540,7 +582,7 @@ Executable CI separates failure domains into six validation jobs:
 - `browser`: pinned Chromium, production builds, Playwright/axe, and
   failure-only trace/screenshot/video artifacts;
 - `firmware`: cached pinned Arduino/ESP32 toolchain compilation of firmware
-  4.0.0;
+  4.1.0;
 - `container`: amd64 Compose health/restart/hardening plus an emulated ARM64
   HTTP/SQLite integrity smoke.
 
@@ -562,8 +604,9 @@ literal-loopback broker guard; captured traffic remains under
 Pull-request code never runs on a Pi. No deploy workflow exists. The hosted
 repository is public, reachable branch history contains only redacted
 sentinels, and `master` is protected by all six exact validation contexts.
-GHCR publication is configured and the selected image passed exact-digest smoke
-on both platforms. One unreachable historical object remains directly
+GHCR publication is configured; the historical pre-4.1 image passed
+exact-digest smoke on both platforms, while the current branch needs a new
+publication and digest selection. One unreachable historical object remains directly
 addressable and its secret-scanning alert remains open; independently confirm
 revocation, request GitHub Support cleanup, and resolve the alert only as
 `revoked`. Secret scanning and push protection remain enabled, but they do not

@@ -27,6 +27,7 @@ export interface PersistentOperationInteraction {
 export class MqttInteractionLogger {
   readonly #repository: InteractionRepository;
   readonly #topics: EspTopicSet;
+  readonly #lastDiagnosticSignatures = new Map<string, string>();
 
   constructor(repository: InteractionRepository, topics: EspTopicSet) {
     this.#repository = repository;
@@ -34,7 +35,8 @@ export class MqttInteractionLogger {
   }
 
   async logAnnouncement(event: LegacyAnnouncementEvent): Promise<void> {
-    await this.#repository.log({
+    const diagnostic = event.announcement.lastError;
+    const announcementWrite = this.#repository.log({
       occurredAtMs: event.receivedAtMs,
       direction: "inbound",
       kind: "mqtt.announcement",
@@ -48,9 +50,55 @@ export class MqttInteractionLogger {
         firmwareVersion: event.announcement.version,
         reportedStatus: event.announcement.status,
         scheduleHash: event.announcement.scheduleHash,
+        ...(diagnostic === undefined
+          ? {}
+          : {
+              firmwareDiagnosticCode: diagnostic.code,
+              firmwareDiagnosticSequence: diagnostic.sequence,
+              firmwareDiagnosticActive: diagnostic.active,
+            }),
       },
       payloadSchemaVersion: 1,
     });
+    if (diagnostic === undefined) {
+      this.#lastDiagnosticSignatures.delete(event.announcement.id);
+      await announcementWrite;
+      return;
+    }
+
+    const signature = `${diagnostic.sequence}\0${diagnostic.code}\0${diagnostic.active}`;
+    if (
+      this.#lastDiagnosticSignatures.get(event.announcement.id) === signature
+    ) {
+      await announcementWrite;
+      return;
+    }
+    await Promise.all([
+      announcementWrite,
+      this.#repository.log({
+        occurredAtMs: event.receivedAtMs,
+        direction: "inbound",
+        kind: "mqtt.device-diagnostic",
+        severity: diagnostic.severity,
+        topic: this.#topics.announce,
+        deviceId: event.announcement.id,
+        outcome: diagnostic.active ? "failed" : "succeeded",
+        byteCount: event.payloadBytes,
+        retentionClass:
+          diagnostic.active && diagnostic.severity === "error"
+            ? "critical"
+            : "audit",
+        payload: {
+          code: diagnostic.code,
+          message: diagnostic.message,
+          sequence: diagnostic.sequence,
+          active: diagnostic.active,
+          recordedAtEpochSeconds: diagnostic.at,
+        },
+        payloadSchemaVersion: 1,
+      }),
+    ]);
+    this.#lastDiagnosticSignatures.set(event.announcement.id, signature);
   }
 
   async logTransportInteraction(
@@ -200,7 +248,9 @@ export class MqttInteractionLogger {
           kind: "mqtt.command-batch",
           severity: "debug",
           topic: this.#topics.command,
-          correlationId: interaction.operationId,
+          deviceId: interaction.targetId,
+          correlationId: interaction.requestId,
+          operationId: interaction.operationId,
           outcome: "succeeded",
           byteCount: interaction.payloadBytes,
           retentionClass: "raw",

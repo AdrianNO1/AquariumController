@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ScheduledDeviceOperationDispatcher,
@@ -47,7 +47,7 @@ describe("time-sync coordinator", () => {
         },
       },
     ]);
-    finish({ id: "announcement-sync", status: "succeeded" });
+    finish({ id: "announcement-sync", status: "succeeded", result: null });
     await Promise.all([first, duplicate]);
     expect(port.calls).toHaveLength(1);
     expect(port.calls[0]?.request.kind).not.toBe("schedule");
@@ -60,6 +60,7 @@ describe("time-sync coordinator", () => {
       async (_device, _request, call) => ({
         id: `daily-operation-${call}`,
         status: "succeeded",
+        result: null,
       }),
     );
     const firstTime = new ManualSchedulingTime("2026-10-25T04:59:59.000Z");
@@ -112,13 +113,13 @@ describe("time-sync coordinator", () => {
     await nextDay.stop();
   });
 
-  it("shares the unknown-outcome latch across announcement and scheduled callers", async () => {
+  it("continues syncing other devices after an unknown outcome", async () => {
     const time = new ManualSchedulingTime("2026-07-13T04:00:00.000Z");
     const diagnostics: TimeSyncDiagnostic[] = [];
     const port = new RecordingOperationPort(async (_device, _request, call) =>
       call === 1
-        ? { id: "sync-unknown", status: "outcome_unknown" }
-        : { id: "sync-reconciled", status: "succeeded" },
+        ? { id: "sync-unknown", status: "outcome_unknown", result: null }
+        : { id: "sync-reconciled", status: "succeeded", result: null },
     );
     const dispatcher = new ScheduledDeviceOperationDispatcher(port);
     const coordinator = createCoordinator(
@@ -133,24 +134,145 @@ describe("time-sync coordinator", () => {
 
     await coordinator.signalAnnouncement("device-a");
     await coordinator.signalAnnouncement("device-b");
-    expect(port.calls).toHaveLength(1);
+    expect(port.calls).toHaveLength(2);
     expect(diagnostics).toMatchObject([
       {
         code: "time_sync_operation_not_succeeded",
         deviceId: "device-a",
         status: "outcome_unknown",
       },
-      {
-        code: "time_sync_operation_blocked",
-        deviceId: "device-b",
-        reason: "outcome_unknown",
-      },
     ]);
-
-    await dispatcher.acknowledgeReconciledOutcome();
-    await coordinator.signalAnnouncement("device-b");
-    expect(port.calls).toHaveLength(2);
     await coordinator.stop();
+  });
+
+  it("starts daily syncs for healthy devices while another device is pending", async () => {
+    const time = new ManualSchedulingTime("2026-07-13T12:00:00.000Z");
+    let finishDeviceA: (
+      completion: ScheduledDeviceOperationCompletion,
+    ) => void = () => undefined;
+    const pendingDeviceA = new Promise<ScheduledDeviceOperationCompletion>(
+      (resolve) => {
+        finishDeviceA = resolve;
+      },
+    );
+    const port = new RecordingOperationPort(async (deviceId, _request, call) =>
+      deviceId === "device-a"
+        ? pendingDeviceA
+        : {
+            id: `sync-${call}`,
+            status: "succeeded",
+            result: null,
+          },
+    );
+    const coordinator = createCoordinator(
+      time,
+      new MemoryDailyGuards(),
+      port,
+      [],
+      ["device-a", "device-b"],
+    );
+
+    const starting = coordinator.start();
+    await vi.waitFor(() =>
+      expect(port.calls.map(({ deviceId }) => deviceId)).toEqual([
+        "device-a",
+        "device-b",
+      ]),
+    );
+    finishDeviceA({
+      id: "sync-device-a",
+      status: "outcome_unknown",
+      result: null,
+    });
+    await starting;
+    await coordinator.stop();
+  });
+
+  it("drains launched daily syncs before reporting a later guard failure", async () => {
+    const time = new ManualSchedulingTime("2026-07-13T12:00:00.000Z");
+    const guardFailure = new Error("device B guard failed");
+    const claimedDeviceIds: string[] = [];
+    const guards: DailySchedulerGuardPort = {
+      tryClaimDailyRun: async (input) => {
+        claimedDeviceIds.push(input.scopeKey);
+        if (input.scopeKey === "device-b") {
+          throw guardFailure;
+        }
+        return true;
+      },
+      recordDailyRunResult: async () => true,
+    };
+    let rejectDeviceA: (error: Error) => void = () => undefined;
+    const pendingDeviceA = new Promise<ScheduledDeviceOperationCompletion>(
+      (_resolve, reject) => {
+        rejectDeviceA = reject;
+      },
+    );
+    const operationFailure = new Error("device A sync failed");
+    const port = new RecordingOperationPort(async () => pendingDeviceA);
+    const reportedErrors: Error[] = [];
+    const coordinator = new TimeSyncCoordinator(
+      {
+        listOnlineDeviceIds: async () => ["device-a", "device-b"],
+      },
+      guards,
+      new ScheduledDeviceOperationDispatcher(port),
+      {
+        clock: time,
+        timer: time,
+        onDiagnostic: () => undefined,
+        onError: (error) => {
+          reportedErrors.push(error);
+        },
+      },
+    );
+
+    let startSettled = false;
+    const startResult = coordinator.start().then(
+      () => {
+        startSettled = true;
+        return null;
+      },
+      (error: Error) => {
+        startSettled = true;
+        return error;
+      },
+    );
+    await vi.waitFor(() => {
+      expect(claimedDeviceIds).toEqual(["device-a", "device-b"]);
+      expect(port.calls.map(({ deviceId }) => deviceId)).toEqual(["device-a"]);
+    });
+    expect(startSettled).toBe(false);
+
+    let stopSettled = false;
+    const stopResult = coordinator.stop().then(
+      () => {
+        stopSettled = true;
+        return null;
+      },
+      (error: Error) => {
+        stopSettled = true;
+        return error;
+      },
+    );
+    await Promise.resolve();
+    expect(startSettled).toBe(false);
+    expect(stopSettled).toBe(false);
+
+    rejectDeviceA(operationFailure);
+    const [startError, stopError] = await Promise.all([
+      startResult,
+      stopResult,
+    ]);
+    expect(startError).toBeInstanceOf(AggregateError);
+    expect(startError).toMatchObject({
+      errors: [
+        { message: "device A sync failed" },
+        { message: "device B guard failed" },
+      ],
+    });
+    expect(stopError).toBe(startError);
+    expect(reportedErrors).toEqual([startError]);
   });
 
   it("drains an in-flight announcement sync during stop", async () => {
@@ -182,7 +304,7 @@ describe("time-sync coordinator", () => {
     expect(() => coordinator.signalAnnouncement("device-b")).toThrow(
       /not accepting/,
     );
-    finish({ id: "sync-drained", status: "succeeded" });
+    finish({ id: "sync-drained", status: "succeeded", result: null });
     await stop;
     expect(stopped).toBe(true);
   });
@@ -200,6 +322,7 @@ describe("time-sync coordinator", () => {
         new RecordingOperationPort(async () => ({
           id: "unused-operation",
           status: "succeeded",
+          result: null,
         })),
       ),
       {

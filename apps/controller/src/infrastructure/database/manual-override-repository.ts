@@ -15,7 +15,7 @@ import {
   validateScheduleGraph,
   type SchedulePoint,
 } from "@aquarium/domain";
-import { type Kysely, type Selectable } from "kysely";
+import { sql, type Kysely, type Selectable } from "kysely";
 import { z } from "zod";
 
 import {
@@ -373,12 +373,15 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
             override.operationId,
           );
           const startOperation = parseStoredManualOperation(origin);
+          const acceptedStartOutcome =
+            startOperation.status === "succeeded" ||
+            startOperation.status === "outcome_unknown";
           if (
             startOperation.request.kind !== "manual_override_start" ||
-            startOperation.status !== "succeeded"
+            !acceptedStartOutcome
           ) {
             throw new InvalidManualOverrideTransitionError(
-              `Active override ${parsed.overrideId} does not reference a successful start operation`,
+              `Active override ${parsed.overrideId} does not reference a completed start operation`,
             );
           }
           const commands = await resolveReleaseCommands(
@@ -529,14 +532,14 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
       ManualOverrideOperationResult,
       { readonly status: "outcome_unknown" }
     >["reason"];
-    readonly unknownChildOperationId: string | null;
+    readonly unknownChildOperationIds: readonly string[];
     readonly safetyReconcileAtMs: number;
   }): Promise<void> {
     const result = manualOverrideOperationResultSchema.parse({
       status: "outcome_unknown",
       childOperationIds: input.childOperationIds,
       reason: input.reason,
-      unknownChildOperationId: input.unknownChildOperationId,
+      unknownChildOperationIds: input.unknownChildOperationIds,
       safetyReconcileAtMs: input.safetyReconcileAtMs,
       reconciledAtMs: null,
     });
@@ -700,10 +703,13 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
     const pendingStart =
       operation.status === "pending" &&
       operation.request.kind === "manual_override_start";
-    const interruptedChildOperationId =
+    const interruptedStart =
+      operation.status === "in_flight" &&
+      operation.request.kind === "manual_override_start";
+    const interruptedChildOperationIds =
       operation.status === "in_flight"
-        ? await this.#findInterruptedUnknownChild(operation, nowMs)
-        : null;
+        ? await this.#findInterruptedUnknownChildren(operation, nowMs)
+        : [];
     const status = pendingStart ? "cancelled" : "outcome_unknown";
     const result = pendingStart
       ? manualOverrideOperationResultSchema.parse({
@@ -713,18 +719,22 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
         })
       : manualOverrideOperationResultSchema.parse({
           status: "outcome_unknown",
-          childOperationIds:
-            interruptedChildOperationId === null
-              ? []
-              : [interruptedChildOperationId],
+          childOperationIds: interruptedChildOperationIds,
           reason:
             operation.status === "pending"
               ? "controller_restart_before_release"
               : "controller_restart",
-          unknownChildOperationId: interruptedChildOperationId,
+          unknownChildOperationIds: interruptedChildOperationIds,
           safetyReconcileAtMs: safeAdd(nowMs, MANUAL_OVERRIDE_DURATION_MS),
           reconciledAtMs: null,
         });
+    const recoveredOverrideStatus = pendingStart
+      ? "failed"
+      : interruptedStart
+        ? nowMs >= override.expiresAtMs
+          ? "expired"
+          : "active"
+        : null;
     await commitStateChange(
       this.#database,
       {
@@ -767,10 +777,15 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
             `Operation ${operation.id} changed during recovery`,
           );
         }
-        if (pendingStart) {
+        if (recoveredOverrideStatus !== null) {
           const overrideUpdate = await transaction
             .updateTable("overrides")
-            .set({ status: "failed", completed_at_ms: nowMs })
+            .set({
+              status: recoveredOverrideStatus,
+              ...(interruptedStart ? { starts_at_ms: nowMs } : {}),
+              completed_at_ms:
+                recoveredOverrideStatus === "active" ? null : nowMs,
+            })
             .where("id", "=", override.id)
             .where("status", "=", "pending")
             .where("operation_id", "=", operation.id)
@@ -785,10 +800,10 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
     );
   }
 
-  async #findInterruptedUnknownChild(
+  async #findInterruptedUnknownChildren(
     operation: StoredManualOverrideOperation,
     recoveredAtMs: number,
-  ): Promise<string | null> {
+  ): Promise<readonly string[]> {
     const rows = await this.#database
       .selectFrom("control_operations")
       .selectAll()
@@ -824,12 +839,7 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
           command.overwrite === request.overwrite,
       );
     });
-    if (matches.length > 1) {
-      throw new InvalidManualOverrideTransitionError(
-        `Interrupted manual override operation ${operation.id} matches multiple unresolved child operations`,
-      );
-    }
-    return matches[0]?.id ?? null;
+    return matches.map((row) => row.id);
   }
 
   async listDueActiveOverrideIds(nowMs: number): Promise<readonly string[]> {
@@ -908,20 +918,20 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
         );
       }
       const override = await this.#getOverride(operation.request.overrideId);
+      const nextStatus =
+        operation.request.kind === "manual_override_start"
+          ? await this.#assertStartReconciliationLineage(override, operation)
+          : operation.request.kind === "manual_override_cancel"
+            ? "cancelled"
+            : "expired";
       if (
-        override.status !== "pending" ||
-        override.operationId !== operationId
+        operation.request.kind !== "manual_override_start" &&
+        (override.status !== "pending" || override.operationId !== operationId)
       ) {
         throw new InvalidManualOverrideTransitionError(
           `Override ${override.id} is not waiting for operation ${operationId}`,
         );
       }
-      const nextStatus =
-        operation.request.kind === "manual_override_start"
-          ? "failed"
-          : operation.request.kind === "manual_override_cancel"
-            ? "cancelled"
-            : "expired";
       const result = manualOverrideOperationResultSchema.parse({
         ...operation.result,
         reconciledAtMs,
@@ -963,17 +973,19 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
               `Operation ${operationId} changed during reconciliation`,
             );
           }
-          const overrideUpdate = await transaction
-            .updateTable("overrides")
-            .set({ status: nextStatus, completed_at_ms: reconciledAtMs })
-            .where("id", "=", override.id)
-            .where("status", "=", "pending")
-            .where("operation_id", "=", operationId)
-            .executeTakeFirst();
-          if (overrideUpdate.numUpdatedRows !== 1n) {
-            throw new InvalidManualOverrideTransitionError(
-              `Override ${override.id} changed during reconciliation`,
-            );
+          if (operation.request.kind !== "manual_override_start") {
+            const overrideUpdate = await transaction
+              .updateTable("overrides")
+              .set({ status: nextStatus, completed_at_ms: reconciledAtMs })
+              .where("id", "=", override.id)
+              .where("status", "=", "pending")
+              .where("operation_id", "=", operationId)
+              .executeTakeFirst();
+            if (overrideUpdate.numUpdatedRows !== 1n) {
+              throw new InvalidManualOverrideTransitionError(
+                `Override ${override.id} changed during reconciliation`,
+              );
+            }
           }
           return { changed: true, result: { reconciled: true } };
         },
@@ -994,6 +1006,58 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
         },
       };
     });
+  }
+
+  async #assertStartReconciliationLineage(
+    override: StoredManualOverride,
+    startOperation: StoredManualOverrideOperation,
+  ): Promise<StoredManualOverride["status"]> {
+    if (override.operationId === startOperation.id) {
+      if (!["active", "expired"].includes(override.status)) {
+        throw new InvalidManualOverrideTransitionError(
+          `Override ${override.id} has invalid state ${override.status} for start operation ${startOperation.id}`,
+        );
+      }
+      return override.status;
+    }
+    if (override.operationId === null) {
+      throw new InvalidManualOverrideTransitionError(
+        `Override ${override.id} lost the lineage of start operation ${startOperation.id}`,
+      );
+    }
+    const releaseOperation = await this.#getOperation(override.operationId);
+    if (
+      releaseOperation.request.kind === "manual_override_start" ||
+      releaseOperation.request.overrideId !== override.id ||
+      releaseOperation.request.originStartOperationId !== startOperation.id
+    ) {
+      throw new InvalidManualOverrideTransitionError(
+        `Override ${override.id} does not descend from start operation ${startOperation.id}`,
+      );
+    }
+    const expectedOverrideStatus =
+      releaseOperation.status === "pending" ||
+      releaseOperation.status === "in_flight"
+        ? "pending"
+        : releaseOperation.status === "succeeded" ||
+            (releaseOperation.status === "outcome_unknown" &&
+              releaseOperation.result?.status === "outcome_unknown" &&
+              releaseOperation.result.reconciledAtMs !== null)
+          ? releaseOperation.request.kind === "manual_override_cancel"
+            ? "cancelled"
+            : "expired"
+          : releaseOperation.status === "outcome_unknown"
+            ? "pending"
+            : null;
+    if (
+      expectedOverrideStatus === null ||
+      override.status !== expectedOverrideStatus
+    ) {
+      throw new InvalidManualOverrideTransitionError(
+        `Override ${override.id} state does not match release operation ${releaseOperation.id}`,
+      );
+    }
+    return override.status;
   }
 
   async nextDeadlineMs(): Promise<number | null> {
@@ -1028,13 +1092,22 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
     atMs: number,
   ): Promise<readonly ManualOverrideOverlayOutput[]> {
     const parsedAtMs = nonnegativeSafeIntegerSchema.parse(atMs);
-    const rows = await this.#database
-      .selectFrom("overrides")
-      .selectAll()
-      .where("status", "=", "active")
-      .where("expires_at_ms", ">", parsedAtMs)
-      .orderBy("id", "asc")
-      .execute();
+    const [rows, eligibleDevices] = await Promise.all([
+      this.#database
+        .selectFrom("overrides")
+        .selectAll()
+        .where("status", "=", "active")
+        .where("expires_at_ms", ">", parsedAtMs)
+        .orderBy("id", "asc")
+        .execute(),
+      this.#database
+        .selectFrom("devices")
+        .select("id")
+        .where("enabled", "=", 1)
+        .where("status", "in", ["online", "stale", "offline"])
+        .execute(),
+    ]);
+    const eligibleDeviceIds = new Set(eligibleDevices.map(({ id }) => id));
     const outputs: ManualOverrideOverlayOutput[] = [];
     const mappingKeys = new Set<string>();
     const pinKeys = new Set<string>();
@@ -1048,13 +1121,17 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
         continue;
       }
       const operation = await this.#getOperation(override.operationId);
+      const acceptedStartOutcome =
+        (operation.status === "succeeded" &&
+          operation.result?.status === "succeeded") ||
+        (operation.status === "outcome_unknown" &&
+          operation.result?.status === "outcome_unknown");
       if (
         operation.request.kind !== "manual_override_start" ||
-        operation.status !== "succeeded" ||
-        operation.result?.status !== "succeeded"
+        !acceptedStartOutcome
       ) {
         throw new InvalidManualOverrideTransitionError(
-          `Active override ${override.id} lacks a successful start operation`,
+          `Active override ${override.id} lacks a completed start operation`,
         );
       }
       for (const command of operation.request.commands) {
@@ -1062,6 +1139,9 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
           throw new InvalidManualOverrideTransitionError(
             `Active override ${override.id} contains a non-overwrite start command`,
           );
+        }
+        if (!eligibleDeviceIds.has(command.deviceId)) {
+          continue;
         }
         const mappingKey = `${command.deviceId}\0${command.mappingId}`;
         const pinKey = `${command.deviceId}\0${command.pin}`;
@@ -1207,8 +1287,16 @@ async function resolveStartCommands(
       "output.output_gain as outputGain",
     ])
     .where("device.enabled", "=", 1)
-    .where("device.status", "=", "online")
+    .where("device.status", "in", ["online", "stale", "offline"])
     .where("mapping.enabled", "=", 1)
+    .orderBy(
+      sql<number>`CASE ${sql.ref("device.status")}
+        WHEN 'online' THEN 0
+        WHEN 'stale' THEN 1
+        ELSE 2
+      END`,
+      "asc",
+    )
     .orderBy("device.id", "asc")
     .orderBy("mapping.display_order", "asc")
     .orderBy("mapping.pin", "asc");
@@ -1321,7 +1409,7 @@ async function resolveReleaseCommands(
       mappingId: startCommand.mappingId,
       pin: startCommand.pin,
       value,
-      overwrite: false,
+      overwrite: true,
     });
   }
   return commands;
@@ -1365,6 +1453,20 @@ function terminalOverrideState(
   completedAtMs: number,
 ): Pick<StoredManualOverride, "status" | "startsAtMs" | "completedAtMs"> {
   if (operationStatus === "outcome_unknown") {
+    if (request.kind === "manual_override_start") {
+      if (completedAtMs >= override.expiresAtMs) {
+        return {
+          status: "expired",
+          startsAtMs: completedAtMs,
+          completedAtMs,
+        };
+      }
+      return {
+        status: "active",
+        startsAtMs: completedAtMs,
+        completedAtMs: null,
+      };
+    }
     return {
       status: "pending",
       startsAtMs: override.startsAtMs,

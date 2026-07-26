@@ -61,7 +61,7 @@ export function buildSetPwmCommand(
   overwrite: boolean,
 ): LegacyWireCommand {
   assertIntegerInRange(pin, MIN_PIN, MAX_PIN, "PWM pin");
-  // Firmware 4.0.0 interprets this wire value as normalized 8-bit duty and
+  // Firmware 4.1.0 interprets this wire value as normalized 8-bit duty and
   // scales it to the device's configured LEDC resolution.
   assertIntegerInRange(value, MIN_PWM_VALUE, MAX_PWM_VALUE, "PWM value");
   const overwriteFlag = overwrite ? 1 : 0;

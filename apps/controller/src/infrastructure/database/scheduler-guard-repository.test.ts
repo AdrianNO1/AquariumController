@@ -98,7 +98,7 @@ describe("scheduler guard repository", () => {
     });
   });
 
-  it("retains the daily claim across a database reopen and lists only online enabled devices", async () => {
+  it("retains the daily claim across a database reopen and lists every enabled retry candidate", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "aquarium-scheduler-guard-"),
     );
@@ -111,6 +111,7 @@ describe("scheduler guard repository", () => {
         events: { filename: eventsFilename },
       });
       await insertDeviceAndOperation(databases, "operation-reopen", dayStartMs);
+      await insertDevice(databases, "device-stale", "stale", 1, dayStartMs);
       await insertDevice(databases, "device-offline", "offline", 1, dayStartMs);
       await insertDevice(databases, "device-disabled", "online", 0, dayStartMs);
       await expect(
@@ -138,7 +139,7 @@ describe("scheduler guard repository", () => {
       ).resolves.toBe(false);
       await expect(
         new OnlineDeviceRepository(databases.state).listOnlineDeviceIds(),
-      ).resolves.toEqual(["device-a"]);
+      ).resolves.toEqual(["device-a", "device-stale", "device-offline"]);
     } finally {
       if (databases !== undefined) {
         await closeControllerDatabases(databases);
@@ -161,7 +162,7 @@ async function insertDeviceAndOperation(
 async function insertDevice(
   context: ControllerDatabases,
   id: string,
-  status: "online" | "offline",
+  status: "online" | "stale" | "offline",
   enabled: 0 | 1,
   nowMs: number,
 ): Promise<void> {

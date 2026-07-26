@@ -23,6 +23,7 @@ import {
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   scheduleGraphSchema,
+  setDeviceEnabledRequestSchema,
   unresolvedDeviceOperationsSchema,
 } from "./index.js";
 
@@ -318,6 +319,12 @@ describe("controller contracts", () => {
         .success,
     ).toBe(false);
     expect(
+      operationSummarySchema.safeParse({
+        ...operation,
+        outcomeUnresolved: true,
+      }).success,
+    ).toBe(false);
+    expect(
       overrideSchema.safeParse({
         ...override,
         targetType: "channel",
@@ -335,6 +342,7 @@ describe("controller contracts", () => {
       requestedAt: now,
       deadlineAt: later,
       completedAt: later,
+      outcomeUnresolved: true,
     } as const;
     const window = {
       items: [operation],
@@ -704,6 +712,19 @@ describe("controller contracts", () => {
         pwmResolutionBits: 16,
       }).success,
     ).toBe(true);
+    expect(
+      setDeviceEnabledRequestSchema.safeParse({
+        expectedRevision: 2,
+        enabled: false,
+      }).success,
+    ).toBe(true);
+    expect(
+      setDeviceEnabledRequestSchema.safeParse({
+        expectedRevision: 2,
+        enabled: false,
+        extra: true,
+      }).success,
+    ).toBe(false);
     const device = {
       id: "device_1",
       hardwareId: "A1",

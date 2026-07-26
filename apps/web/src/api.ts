@@ -25,6 +25,7 @@ import {
   renameChannelRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
+  setDeviceEnabledRequestSchema,
   startManualOverrideRequestSchema,
   throttleParamsSchema,
   updateThrottleRequestSchema,
@@ -49,6 +50,7 @@ import {
   type RenameChannelRequest,
   type ReplaceMappingProfileRequest,
   type ReplaceScheduleRequest,
+  type SetDeviceEnabledRequest,
   type StartManualOverrideRequest,
   type UpdateThrottleRequest,
   type CancelManualOverrideRequest,
@@ -248,6 +250,18 @@ export function patchDeviceConfiguration(
     `/api/devices/${encodeURIComponent(params.deviceId)}/configuration`,
     "PATCH",
     patchDeviceConfigurationRequestSchema.parse(request),
+  );
+}
+
+export function setDeviceEnabled(
+  deviceId: string,
+  request: SetDeviceEnabledRequest,
+): Promise<MutationResult> {
+  const params = deviceParamsSchema.parse({ deviceId });
+  return requestConfigurationMutation(
+    `/api/devices/${encodeURIComponent(params.deviceId)}/enabled`,
+    "PATCH",
+    setDeviceEnabledRequestSchema.parse(request),
   );
 }
 

@@ -16,6 +16,7 @@ import {
   renameChannelRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
+  setDeviceEnabledRequestSchema,
   updateThrottleRequestSchema,
   controlTypeKeySchema,
   type AlertRule,
@@ -30,6 +31,7 @@ import {
   type ReplaceMappingProfileRequest,
   type ReplaceScheduleRequest,
   type SchedulePoint,
+  type SetDeviceEnabledRequest,
   type UpdateThrottleRequest,
 } from "@aquarium/contracts";
 import {
@@ -878,6 +880,51 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
     );
   }
 
+  async setDeviceEnabled(
+    rawDeviceId: string,
+    rawRequest: SetDeviceEnabledRequest,
+  ): Promise<MutationResult> {
+    const deviceId = identifierSchema.parse(rawDeviceId);
+    const request = setDeviceEnabledRequestSchema.parse(rawRequest);
+    return this.commitMutation(
+      "device",
+      deviceId,
+      "updated",
+      request.expectedRevision,
+      `${request.enabled ? "Include" : "Exclude"} device ${deviceId}`,
+      async (transaction) => {
+        const device = await transaction
+          .selectFrom("devices")
+          .select(["id", "enabled", "status", "last_error_code"])
+          .where("id", "=", deviceId)
+          .executeTakeFirst();
+        if (device === undefined) {
+          throw new ConfigurationNotFoundError("device", deviceId);
+        }
+        if (device.enabled === (request.enabled ? 1 : 0)) {
+          return false;
+        }
+        await transaction
+          .updateTable("devices")
+          .set({
+            enabled: request.enabled ? 1 : 0,
+            ...(request.enabled &&
+            device.last_error_code === "protocol_invalid_response"
+              ? {
+                  status: "unknown" as const,
+                  last_error_code: null,
+                  last_error_message: null,
+                }
+              : {}),
+            updated_at_ms: assertTime(this.#nowMs()),
+          })
+          .where("id", "=", deviceId)
+          .executeTakeFirstOrThrow();
+        return true;
+      },
+    );
+  }
+
   async getOperation(
     rawOperationId: string,
   ): Promise<OperationDetailsResponse> {
@@ -1191,7 +1238,12 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
 
   private async commitMutation(
     resource:
-      "channel" | "schedule" | "throttle" | "mapping_profile" | "alert_rule",
+      | "channel"
+      | "schedule"
+      | "throttle"
+      | "mapping_profile"
+      | "device"
+      | "alert_rule",
     fallbackEntityId: string,
     action: "created" | "updated" | "deleted" | "replaced",
     expectedRevision: number,

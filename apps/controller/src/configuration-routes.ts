@@ -18,6 +18,7 @@ import {
   renameChannelRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
+  setDeviceEnabledRequestSchema,
   throttleParamsSchema,
   updateThrottleRequestSchema,
 } from "@aquarium/contracts";
@@ -270,6 +271,19 @@ export function registerConfigurationRoutes(
       const result = await configurationService(
         dependencies,
       ).replaceMappingProfile(profileId, body);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.patch(
+    "/api/devices/:deviceId/enabled",
+    safeRoute(app, async (request, reply) => {
+      const { deviceId } = parseRequest(deviceParamsSchema, request.params);
+      const body = parseRequest(setDeviceEnabledRequestSchema, request.body);
+      const result = await configurationService(dependencies).setDeviceEnabled(
+        deviceId,
+        body,
+      );
       return reply.code(200).send(mutationResultSchema.parse(result));
     }),
   );

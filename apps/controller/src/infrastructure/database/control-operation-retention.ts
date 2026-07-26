@@ -2,7 +2,7 @@ import {
   nonnegativeSafeIntegerSchema,
   positiveSafeIntegerSchema,
 } from "@aquarium/contracts";
-import type { Kysely, Transaction } from "kysely";
+import { sql, type Kysely, type Transaction } from "kysely";
 
 import type { StateDatabaseSchema } from "./types.js";
 
@@ -23,9 +23,9 @@ export interface PruneRoutineControlOperationsResult {
 }
 
 /**
- * Bounds high-volume successful PWM operation history in state.db. Durable
- * wire summaries remain in events.db; unresolved, failed, non-PWM, recent,
- * and foreign-key-referenced operations are never selected.
+ * Bounds high-volume routine PWM operation history in state.db. Durable wire
+ * summaries remain in events.db; unresolved, failed, non-PWM, recent, and
+ * foreign-key-referenced operations are never selected.
  */
 export class ControlOperationRetentionRepository {
   constructor(private readonly database: Kysely<StateDatabaseSchema>) {}
@@ -85,7 +85,15 @@ async function deleteRoutineOperationBatch(
     .select("operation.id")
     .distinct()
     .where("operation.kind", "=", "set_pwm")
-    .where("operation.status", "=", "succeeded")
+    .where((expressions) =>
+      expressions.or([
+        expressions("operation.status", "=", "succeeded"),
+        expressions.and([
+          expressions("operation.status", "=", "outcome_unknown"),
+          sql<boolean>`json_extract(${sql.ref("operation.result_json")}, '$.reconciledAtMs') is not null`,
+        ]),
+      ]),
+    )
     .where("operation.completed_at_ms", "<", cutoffMs)
     .where("override.id", "is", null)
     .where("artifact.device_id", "is", null)
