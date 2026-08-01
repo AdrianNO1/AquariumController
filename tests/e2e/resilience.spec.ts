@@ -2,6 +2,7 @@ import { operationDetailsResponseSchema } from "@aquarium/contracts";
 import { z } from "zod";
 
 import { expect, test } from "./fixtures.js";
+import { countCompletedScheduledPwmExchanges } from "./support/production-stack.js";
 
 test.describe.configure({ mode: "serial" });
 
@@ -220,9 +221,8 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
 
     const settled = await stack.waitForSettled();
-    const preReconciliationOperationIds = new Set(
-      settled.operations.items.map((operation) => operation.id),
-    );
+    const completedScheduledPwmExchangesBeforeReconciliation =
+      countCompletedScheduledPwmExchanges(stack.mqttPublications());
     const unknownOperation = settled.operations.items.find(
       (operation) =>
         operation.kind === "edit_configuration" &&
@@ -239,7 +239,7 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
       throw new Error("The unknown configuration operation is not terminal");
     }
 
-    await page.getByRole("link", { name: "Operations" }).click();
+    await page.goto("/operations");
     await expect(
       page.getByRole("heading", {
         level: 1,
@@ -322,15 +322,9 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
 
     await expect
       .poll(
-        async () => {
-          const current = await stack.fetchSnapshot();
-          return current.operations.items.some(
-            (operation) =>
-              operation.kind === "set_pwm" &&
-              operation.status === "succeeded" &&
-              !preReconciliationOperationIds.has(operation.id),
-          );
-        },
+        () =>
+          countCompletedScheduledPwmExchanges(stack.mqttPublications()) >
+          completedScheduledPwmExchangesBeforeReconciliation,
         {
           message:
             "scheduled output delivery should resume after reconciliation",

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { ControllerSnapshot } from "@aquarium/contracts";
+import { espCommandResponseSchema } from "@aquarium/esp-protocol";
 import {
   startFakeEspControlServer,
   startFakeEspLauncher,
@@ -161,8 +162,23 @@ class RunningProductionE2eStack implements ProductionE2eStack {
     const baselineOperationIds = new Set(
       baseline.operations.items.map((operation) => operation.id),
     );
+    const baselineCompletedPwmExchanges = countCompletedScheduledPwmExchanges(
+      this.#broker.publications(),
+    );
     const mappingProfiles = new Map(
       baseline.mappingProfiles.map((profile) => [profile.id, profile]),
+    );
+    const scheduledChannelIds = new Set(
+      baseline.schedules
+        .filter((schedule) => schedule.enabled)
+        .map((schedule) => schedule.channelId),
+    );
+    const activeScheduledChannelIds = new Set(
+      baseline.channels
+        .filter(
+          (channel) => channel.enabled && scheduledChannelIds.has(channel.id),
+        )
+        .map((channel) => channel.id),
     );
     const scheduledOperationCount = baseline.devices.reduce((count, device) => {
       if (!device.enabled || device.mappingProfileId === null) {
@@ -171,7 +187,12 @@ class RunningProductionE2eStack implements ProductionE2eStack {
       const profile = mappingProfiles.get(device.mappingProfileId);
       return (
         count +
-        (profile?.mappings.filter((mapping) => mapping.enabled).length ?? 0)
+        (profile?.mappings.filter(
+          (mapping) =>
+            mapping.enabled &&
+            mapping.target.kind === "channel" &&
+            activeScheduledChannelIds.has(mapping.target.id),
+        ).length ?? 0)
       );
     }, 0);
     if (scheduledOperationCount === 0) {
@@ -179,14 +200,12 @@ class RunningProductionE2eStack implements ProductionE2eStack {
         "Broker restart requires at least one scheduled output operation",
       );
     }
-    await this.waitForSnapshot(
-      (snapshot) =>
-        snapshot.operations.items.filter(
-          (operation) =>
-            operation.kind === "set_pwm" &&
-            !baselineOperationIds.has(operation.id),
-        ).length >= scheduledOperationCount,
-      "a complete fresh scheduled PWM batch before broker restart",
+    await waitUntil(
+      () =>
+        countCompletedScheduledPwmExchanges(this.#broker.publications()) >=
+        baselineCompletedPwmExchanges + scheduledOperationCount,
+      "a complete acknowledged scheduled PWM batch before broker restart",
+      snapshotWaitTimeoutMs,
     );
     const settled = await this.waitForSettled();
     const activeOperationIds = settled.operations.items
@@ -678,6 +697,57 @@ function schedulePoint(
     editorX: null,
     editorY: null,
   };
+}
+
+export function countCompletedScheduledPwmExchanges(
+  publications: readonly CapturedMqttPublication[],
+): number {
+  const requestIds = new Set<string>();
+  const responseIds = new Set<string>();
+  for (const publication of publications) {
+    if (publication.topic === "test/aquarium/command") {
+      const request = correlatedRequest(publication.payload);
+      if (
+        request !== null &&
+        scheduledPwmCommandPattern.test(request.command)
+      ) {
+        requestIds.add(request.id);
+      }
+      continue;
+    }
+    if (publication.topic !== "test/aquarium/response") {
+      continue;
+    }
+    try {
+      const response = espCommandResponseSchema.safeParse(
+        JSON.parse(publication.payload) as object,
+      );
+      if (response.success) {
+        responseIds.add(response.data.requestId);
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+    }
+  }
+  return [...requestIds].filter((requestId) => responseIds.has(requestId))
+    .length;
+}
+
+const scheduledPwmCommandPattern = /^[^;\s]+ s \d{1,2} \d{1,3} 1$/u;
+
+function correlatedRequest(
+  payload: string,
+): { readonly id: string; readonly command: string } | null {
+  const prefix = "request:";
+  const separator = payload.indexOf("|");
+  if (!payload.startsWith(prefix) || separator <= prefix.length) {
+    return null;
+  }
+  const id = payload.slice(prefix.length, separator);
+  const command = payload.slice(separator + 1);
+  return id.length > 0 && command.length > 0 ? { id, command } : null;
 }
 
 async function reserveLoopbackPort(): Promise<number> {

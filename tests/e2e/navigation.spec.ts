@@ -3,7 +3,7 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "./fixtures.js";
 
 const combinedScheduleChartName =
-  "All channel output percentages across a UTC day";
+  "All channel output percentages across a local day";
 
 const controlAreaRoutes = [
   {
@@ -39,27 +39,27 @@ const controlAreaRoutes = [
   {
     path: "/control/frag",
     linkName: /^Frag tank\b/u,
-    heading: "Frag",
+    heading: "Frag tank",
   },
   {
     path: "/control/qt1",
     linkName: /^Quarantine 1\b/u,
-    heading: "QT1",
+    heading: "Quarantine 1",
   },
   {
     path: "/control/qt2",
     linkName: /^Quarantine 2\b/u,
-    heading: "QT2",
+    heading: "Quarantine 2",
   },
   {
     path: "/control/qt3",
     linkName: /^Quarantine 3\b/u,
-    heading: "QT3",
+    heading: "Quarantine 3",
   },
   {
     path: "/control/qt4",
     linkName: /^Quarantine 4\b/u,
-    heading: "QT4",
+    heading: "Quarantine 4",
   },
 ] as const;
 

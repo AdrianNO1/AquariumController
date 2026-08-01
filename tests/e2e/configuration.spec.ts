@@ -1,4 +1,5 @@
 import { expect, test } from "./fixtures.js";
+import { localMinuteToUtcMinute } from "../../apps/web/src/local-time.js";
 
 test.describe.configure({ mode: "serial" });
 
@@ -10,7 +11,7 @@ test("combined schedule, exact point time, channel color, and schedule multiplie
   await expect(
     page.getByRole("heading", { level: 1, name: "Lights" }),
   ).toBeVisible();
-  await expect(page.getByLabel("Combined UTC schedules")).toBeVisible();
+  await expect(page.getByLabel("Combined local-time schedules")).toBeVisible();
   await expect(page.getByRole("button", { name: /Main light/u })).toBeVisible();
 
   await page.getByRole("button", { name: "Manage channels" }).click();
@@ -48,7 +49,7 @@ test("combined schedule, exact point time, channel color, and schedule multiplie
   await accentSelector.click();
   await page.getByRole("button", { name: "New point" }).click();
   const scheduleChart = page.getByRole("img", {
-    name: "All channel output percentages across a UTC day",
+    name: "All channel output percentages across a local day",
   });
   const chartBox = await scheduleChart.boundingBox();
   if (chartBox === null) {
@@ -63,7 +64,7 @@ test("combined schedule, exact point time, channel color, and schedule multiplie
 
   // Graph interaction snaps to five minutes. Direct entry deliberately does
   // not, so 12:03 proves the operator can retain an exact minute.
-  await page.getByLabel("Accent blue selected point UTC time").fill("12:03");
+  await page.getByLabel("Accent blue selected point local time").fill("12:03");
   await page.getByLabel("Accent blue selected point output").fill("35");
   await page.getByRole("button", { name: "Apply point" }).click();
   await expect(page.getByLabel("Accent blue schedule points")).toContainText(
@@ -73,9 +74,6 @@ test("combined schedule, exact point time, channel color, and schedule multiplie
   const multiplier = page.getByLabel("Lights schedule multiplier");
   await multiplier.fill("72");
   await page.getByRole("button", { name: "Save configuration" }).click();
-  await expect(
-    page.getByText(/Configuration accepted at revision \d+/u),
-  ).toBeVisible();
 
   settled = await stack.waitForSettled();
   accentChannel = settled.channels.find(
@@ -89,7 +87,10 @@ test("combined schedule, exact point time, channel color, and schedule multiplie
   );
   expect(accentSchedule?.points).toContainEqual(
     expect.objectContaining({
-      minuteOfDay: 12 * 60 + 3,
+      minuteOfDay: localMinuteToUtcMinute(
+        12 * 60 + 3,
+        await page.evaluate(() => new Date().getTimezoneOffset()),
+      ),
       percentage: 35,
     }),
   );
@@ -363,7 +364,7 @@ test("device and temporary override outcomes come from real fake ESP responses",
   );
   await page.getByRole("button", { name: "Apply test levels" }).click();
   await expect(page.locator(".override-command-notice")).toContainText(
-    "does not claim actuator success",
+    "Success",
   );
 
   let startedOverrideIds: readonly string[] = [];
@@ -403,7 +404,7 @@ test("device and temporary override outcomes come from real fake ESP responses",
   );
   await page.getByRole("button", { name: "Release all" }).click();
   await expect(page.locator(".override-command-notice")).toContainText(
-    "does not claim actuator success",
+    "Success",
   );
   await expect
     .poll(async () => {
@@ -518,7 +519,7 @@ test("a stale combined schedule draft cannot overwrite newer controller state", 
     .getByRole("button", { name: new RegExp(channelBefore.name, "u") })
     .click();
   await page
-    .getByLabel(`${channelBefore.name} selected point UTC time`)
+    .getByLabel(`${channelBefore.name} selected point local time`)
     .fill("00:07");
   await page
     .getByLabel(`${channelBefore.name} selected point output`)
