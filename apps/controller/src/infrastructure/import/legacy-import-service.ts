@@ -192,24 +192,84 @@ async function insertImportPlan(
   plan: LegacyImportPlan,
   nowMs: number,
 ): Promise<void> {
-  const throttleIds = new Map(
-    plan.throttles.map((throttle) => [
-      throttle.typeKey,
-      stableId("throttle", throttle.typeKey),
-    ]),
+  const existingThrottles =
+    plan.throttles.length === 0
+      ? []
+      : await transaction
+          .selectFrom("throttles")
+          .selectAll()
+          .where(
+            "type_key",
+            "in",
+            plan.throttles.map((throttle) => throttle.typeKey),
+          )
+          .execute();
+  const referencedThrottleIds =
+    existingThrottles.length === 0
+      ? new Set<string>()
+      : new Set(
+          (
+            await transaction
+              .selectFrom("channels")
+              .select("throttle_id")
+              .where(
+                "throttle_id",
+                "in",
+                existingThrottles.map((throttle) => throttle.id),
+              )
+              .execute()
+          ).map((channel) => channel.throttle_id),
+        );
+  const existingThrottleByTypeKey = new Map(
+    existingThrottles.map((throttle) => [throttle.type_key, throttle]),
   );
-  await transaction
-    .insertInto("throttles")
-    .values(
-      plan.throttles.map((throttle) => ({
-        id: requiredMapValue(throttleIds, throttle.typeKey),
-        type_key: throttle.typeKey,
-        percentage: throttle.percentage,
-        created_at_ms: nowMs,
-        updated_at_ms: nowMs,
-      })),
-    )
-    .execute();
+  const throttleIds = new Map<string, string>();
+  const throttlesToInsert: Array<{
+    id: string;
+    type_key: string;
+    percentage: number;
+    created_at_ms: number;
+    updated_at_ms: number;
+  }> = [];
+  for (const throttle of plan.throttles) {
+    const existing = existingThrottleByTypeKey.get(throttle.typeKey);
+    if (
+      existing !== undefined &&
+      existing.id === `throttle-${throttle.typeKey}` &&
+      existing.percentage === 100 &&
+      existing.created_at_ms === 0 &&
+      existing.updated_at_ms === 0 &&
+      !referencedThrottleIds.has(existing.id)
+    ) {
+      throttleIds.set(throttle.typeKey, existing.id);
+      await transaction
+        .updateTable("throttles")
+        .set({
+          percentage: throttle.percentage,
+          created_at_ms: nowMs,
+          updated_at_ms: nowMs,
+        })
+        .where("id", "=", existing.id)
+        .executeTakeFirstOrThrow();
+      continue;
+    }
+
+    const id = stableId("throttle", throttle.typeKey);
+    throttleIds.set(throttle.typeKey, id);
+    throttlesToInsert.push({
+      id,
+      type_key: throttle.typeKey,
+      percentage: throttle.percentage,
+      created_at_ms: nowMs,
+      updated_at_ms: nowMs,
+    });
+  }
+  if (throttlesToInsert.length > 0) {
+    await transaction
+      .insertInto("throttles")
+      .values(throttlesToInsert)
+      .execute();
+  }
 
   const channelIds = new Map(
     plan.channels.map((channel) => [

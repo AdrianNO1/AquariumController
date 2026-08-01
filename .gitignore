@@ -1,6 +1,7 @@
 .vscode/
 .env
 .env.*
+!.env.example
 .old/slaveCode/ESP32Code/firmware-config.h
 firmware/esp32/ESP32Code/firmware-config.h
 node_modules/

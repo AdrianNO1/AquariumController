@@ -160,8 +160,8 @@ describe("maintainer overview", () => {
             pwmResolutionBits: sourceDevice.desired.pwmResolutionBits,
           },
           lastError: {
-            code: "firmware_outdated",
-            message: "Firmware update available",
+            code: "firmware_unsupported",
+            message: "Firmware version is unsupported",
           },
         },
       ],

@@ -34,7 +34,7 @@ const int MAX_PIN = 63;
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "5.0.0";
+const char* VERSION = "5.0.2";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
@@ -2021,6 +2021,8 @@ String handleCommand(String command, String args) {
 					}
 				}
 				if (attachedPins[pin]) {
+					const bool outputStateChanged =
+						newlyAttached || lastPinValues[pin] != pwmValue;
 					if (!ledcWrite(pin, pwmValue)) {
 						if (newlyAttached) {
 							if (ledcDetach(pin)) {
@@ -2043,17 +2045,19 @@ String handleCommand(String command, String args) {
 						);
 						response = "E: LEDC write failed";
 					} else {
-					lastPinValues[pin] = pwmValue;
-					queueOutputAnnouncement();
+						lastPinValues[pin] = pwmValue;
+						if (outputStateChanged) {
+							queueOutputAnnouncement();
+						}
 					
-					// Update pin state with overwrite information
-					if (overwrite == 1) {
-						pinStates[pin] = {pwmValue, true, millis()};
-					} else {
-						pinStates[pin] = {pwmValue, false, 0};
-					}
+						// Update pin state with overwrite information
+						if (overwrite == 1) {
+							pinStates[pin] = {pwmValue, true, millis()};
+						} else {
+							pinStates[pin] = {pwmValue, false, 0};
+						}
 					
-					response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+						response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
 						resolveLastErrorForPin("pin_attach_failed", pin);
 						resolveLastErrorForPin("pin_write_failed", pin);
 					}

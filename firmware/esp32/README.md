@@ -74,12 +74,12 @@ request ID so a delayed response cannot settle a newer operation.
 Build the pinned generic image from the repository root:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.2 .
 ```
 
 The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
 ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
 target using only the safe example configuration. The resulting application
-binary is `firmware/esp32/artifacts/ESP32Code-5.0.0.bin`; its exact size and
+binary is `firmware/esp32/artifacts/ESP32Code-5.0.2.bin`; its exact size and
 SHA-256 are pinned in `@aquarium/esp-protocol` and revalidated by the controller
 at startup.

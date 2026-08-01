@@ -3,6 +3,7 @@ import type {
   FirmwareDeployment,
   FirmwareUpdateMode,
   MappingProfile,
+  OperationSummary,
   PatchDeviceConfigurationRequest,
 } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
@@ -22,9 +23,12 @@ import { ModalBackdrop } from "./ModalBackdrop.js";
 import { UnsavedChangesDialog } from "./UnsavedChangesDialog.js";
 import { FirmwareUpdateDialog } from "./FirmwareUpdateDialog.js";
 
+const SUCCEEDED_FIRMWARE_UPDATE_VISIBLE_MS = 10 * 60 * 1_000;
+
 export interface DevicesPanelProps {
   readonly devices: readonly Device[];
   readonly mappingProfiles: readonly MappingProfile[];
+  readonly operations: readonly OperationSummary[];
   readonly firmware: FirmwareDeployment;
   readonly expectedRevision: number;
   readonly refresh: () => void;
@@ -38,6 +42,7 @@ interface EditingDevice {
 export function DevicesPanel({
   devices,
   mappingProfiles,
+  operations,
   firmware,
   expectedRevision,
   refresh,
@@ -120,6 +125,17 @@ export function DevicesPanel({
               device.reported.firmwareVersion !== null &&
               device.reported.firmwareVersion !== firmware.currentVersion;
             const wirelessUpdateSupported = supportsWirelessUpdate(device);
+            const showFirmwareUpdate =
+              device.firmwareUpdate !== null &&
+              (device.firmwareUpdate.status !== "succeeded" ||
+                nowMs - Date.parse(device.firmwareUpdate.updatedAt) <
+                  SUCCEEDED_FIRMWARE_UPDATE_VISIBLE_MS);
+            const configurationUpdatePending = operations.some(
+              (operation) =>
+                operation.deviceId === device.id &&
+                operation.kind === "edit_configuration" &&
+                ["pending", "in_flight"].includes(operation.status),
+            );
             const mappingProfile =
               device.mappingProfileId === null
                 ? "Unmapped"
@@ -198,10 +214,14 @@ export function DevicesPanel({
                 </dl>
                 {configurationMatches(device) ? null : (
                   <p className="device-card-warning">
-                    Desired and reported configuration differ.
+                    {configurationUpdatePending
+                      ? "Update pending…"
+                      : "Desired and reported configuration differ."}
                   </p>
                 )}
-                {device.lastError === null ? null : (
+                {device.lastError === null ||
+                (configurationUpdatePending &&
+                  device.lastError.code === "configuration_mismatch") ? null : (
                   <p
                     className="device-card-error"
                     title={device.lastError.message}
@@ -209,7 +229,8 @@ export function DevicesPanel({
                     {device.lastError.message}
                   </p>
                 )}
-                {device.firmwareUpdate === null ? null : (
+                {!showFirmwareUpdate ||
+                device.firmwareUpdate === null ? null : (
                   <p
                     className={`firmware-update-state firmware-update-${device.firmwareUpdate.status}`}
                     role="status"
@@ -466,10 +487,6 @@ function DeviceConfigurationDialog({
             </button>
           </div>
         </form>
-        <p className="dialog-note">
-          Saving records controller intent. Reported values update only after
-          this ESP confirms them.
-        </p>
         <UnsavedChangesDialog
           open={closeRequested && fieldsChanged}
           saving={mutation.isPending}

@@ -57,6 +57,20 @@ export function OperationsPage(): React.JSX.Element {
   const showConnectionWarning =
     controller.status !== "connected" && controller.status !== "loading";
   const unresolved = controller.snapshot.unresolvedDeviceOperations;
+  const currentFirmwareVersion = controller.snapshot.firmware.currentVersion;
+  const outdatedDevices = controller.snapshot.devices
+    .filter(
+      (device) =>
+        device.enabled &&
+        device.reported.firmwareVersion !== currentFirmwareVersion,
+    )
+    .map((device) => ({
+      id: device.id,
+      name: device.reported.name ?? device.desired.name,
+      firmwareVersion: device.reported.firmwareVersion,
+      status: device.status,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
 
   return (
     <main className="page control-page">
@@ -101,15 +115,17 @@ export function OperationsPage(): React.JSX.Element {
           <h2 id="firmware-fleet-heading">Firmware updates</h2>
           <p>
             Current release: {controller.snapshot.firmware.currentVersion}. An
-            update-all choice stays active for outdated ESPs that reconnect
-            later.
+            update-all choice stays active for known or newly discovered
+            outdated ESPs that reconnect later.
           </p>
           {controller.snapshot.firmware.fleetPolicy === null ? null : (
             <p className="firmware-fleet-policy" role="status">
-              Active rollout:{" "}
+              Active rollout for firmware{" "}
+              {controller.snapshot.firmware.fleetPolicy.targetVersion}:{" "}
               {controller.snapshot.firmware.fleetPolicy.mode === "when_off"
                 ? "update when outputs are off"
                 : "update immediately"}
+              . Currently outdated: {outdatedDevices.length}.
             </p>
           )}
         </div>
@@ -140,6 +156,8 @@ export function OperationsPage(): React.JSX.Element {
         <FirmwareUpdateDialog
           subject="all ESP32 devices"
           targetVersion={controller.snapshot.firmware.currentVersion}
+          targets={outdatedDevices}
+          immediateDanger
           pending={firmwareMutation.isPending}
           onConfirm={(mode) => firmwareMutation.mutate(mode)}
           onClose={() => setFirmwareDialogOpen(false)}

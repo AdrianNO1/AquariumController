@@ -7,6 +7,7 @@ export interface UnsavedChangesDialogProps {
   readonly open: boolean;
   readonly saving: boolean;
   readonly saveDisabled?: boolean;
+  readonly heading?: string;
   readonly onSave: () => void;
   readonly onDiscard: () => void;
   readonly onKeepEditing: () => void;
@@ -16,6 +17,7 @@ export function UnsavedChangesDialog({
   open,
   saving,
   saveDisabled = false,
+  heading = "Save changes before closing?",
   onSave,
   onDiscard,
   onKeepEditing,
@@ -37,7 +39,7 @@ export function UnsavedChangesDialog({
         onClose={onKeepEditing}
         role="alertdialog"
       >
-        <h3 id={headingId}>Save changes before closing?</h3>
+        <h3 id={headingId}>{heading}</h3>
         <p id={descriptionId}>This editor has unsaved changes.</p>
         <div className="button-row">
           <button

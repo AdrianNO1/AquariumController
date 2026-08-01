@@ -516,6 +516,9 @@ function scheduleTriggersFor(
             },
           ];
         case "device":
+          if (event.type.startsWith("firmware.")) {
+            return [];
+          }
           return [{ kind: "device_configuration", deviceId: invalidation.id }];
         case "controller":
         case "control_area":

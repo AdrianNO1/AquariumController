@@ -1,4 +1,5 @@
 import { controllerSnapshotSchema } from "@aquarium/contracts";
+import { ESP_FIRMWARE_ARTIFACT } from "@aquarium/esp-protocol";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
@@ -152,6 +153,40 @@ describe("controller snapshot repository", () => {
     expect(snapshot.alerts).toEqual([]);
   });
 
+  it("hides a rollout policy targeting an obsolete firmware artifact", async () => {
+    const database = await openDatabase(":memory:");
+    await database
+      .updateTable("firmware_rollout_policy")
+      .set({
+        enabled: 1,
+        target_version: "5.0.0",
+        mode: "when_off",
+        requested_at_ms: BASE_TIME_MS,
+        updated_at_ms: BASE_TIME_MS,
+      })
+      .where("singleton_key", "=", 1)
+      .executeTakeFirstOrThrow();
+
+    const repository = createRepository(database);
+    await expect(repository.read()).resolves.toMatchObject({
+      firmware: { fleetPolicy: null },
+    });
+
+    await database
+      .updateTable("firmware_rollout_policy")
+      .set({ target_version: ESP_FIRMWARE_ARTIFACT.version })
+      .where("singleton_key", "=", 1)
+      .executeTakeFirstOrThrow();
+    await expect(repository.read()).resolves.toMatchObject({
+      firmware: {
+        fleetPolicy: {
+          targetVersion: ESP_FIRMWARE_ARTIFACT.version,
+          mode: "when_off",
+        },
+      },
+    });
+  });
+
   it("projects populated normalized state, nested JSON, and current lifecycle records", async () => {
     const database = await openDatabase(":memory:");
     await seedPopulatedState(database);
@@ -203,7 +238,7 @@ describe("controller snapshot repository", () => {
       status: "online",
     });
     expect(snapshot.firmware).toMatchObject({
-      currentVersion: "5.0.0",
+      currentVersion: "5.0.2",
       sizeBytes: 1_174_576,
       fleetPolicy: null,
     });
@@ -473,7 +508,7 @@ describe("controller snapshot repository", () => {
     await firstDatabase.destroy();
     openDatabases.delete(firstDatabase);
 
-    const reopenedDatabase = await openDatabase(filename);
+    const reopenedDatabase = await openDatabase(filename, false);
     const after = await createRepository(reopenedDatabase).read();
 
     expect(after).toEqual(before);
@@ -563,8 +598,12 @@ class RecordingSink implements StateEventStreamSink {
 
 async function openDatabase(
   filename: string,
+  clearThrottles = true,
 ): Promise<Kysely<StateDatabaseSchema>> {
   const database = await openStateDatabase({ filename });
+  if (clearThrottles) {
+    await database.deleteFrom("throttles").execute();
+  }
   openDatabases.add(database);
   return database;
 }

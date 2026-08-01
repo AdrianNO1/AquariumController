@@ -6,12 +6,16 @@ import { ModalDialog } from "./ModalDialog.js";
 export function FirmwareUpdateDialog({
   subject,
   targetVersion,
+  targets,
+  immediateDanger = false,
   pending,
   onConfirm,
   onClose,
 }: {
   readonly subject: string;
   readonly targetVersion: string;
+  readonly targets?: readonly FirmwareUpdateTarget[];
+  readonly immediateDanger?: boolean;
   readonly pending: boolean;
   readonly onConfirm: (mode: FirmwareUpdateMode) => void;
   readonly onClose: () => void;
@@ -42,13 +46,43 @@ export function FirmwareUpdateDialog({
             Install firmware {targetVersion}. Outputs continue running while the
             image downloads, but the ESP restarts briefly to activate it.
           </p>
+          {targets === undefined ? null : (
+            <section
+              className="firmware-update-targets"
+              aria-labelledby="firmware-update-targets-heading"
+            >
+              <h3 id="firmware-update-targets-heading">
+                Outdated ESPs ({targets.length})
+              </h3>
+              {targets.length === 0 ? (
+                <p>
+                  No enabled ESP is currently outdated. The selected rollout
+                  mode will apply if an outdated ESP reconnects later.
+                </p>
+              ) : (
+                <ul>
+                  {targets.map((target) => (
+                    <li key={target.id}>
+                      <strong>{target.name}</strong>
+                      <span>
+                        {target.firmwareVersion === null
+                          ? "Firmware version unknown"
+                          : `Firmware ${target.firmwareVersion}`}{" "}
+                        {"\u00b7"} {target.status.replaceAll("_", " ")}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
           <button
-            className="primary-button"
+            className={immediateDanger ? "danger-button" : "primary-button"}
             type="button"
             disabled={pending}
             onClick={() => onConfirm("immediate")}
           >
-            Update now
+            Update now (restart)
             <small>Download immediately, then restart.</small>
           </button>
           <button
@@ -72,4 +106,11 @@ export function FirmwareUpdateDialog({
       </ModalDialog>
     </ModalBackdrop>
   );
+}
+
+interface FirmwareUpdateTarget {
+  readonly id: string;
+  readonly name: string;
+  readonly firmwareVersion: string | null;
+  readonly status: string;
 }

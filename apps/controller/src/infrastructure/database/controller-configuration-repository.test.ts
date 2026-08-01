@@ -29,6 +29,7 @@ async function openDatabase(
   filename = ":memory:",
 ): Promise<Kysely<StateDatabaseSchema>> {
   const database = await openStateDatabase({ filename });
+  await database.deleteFrom("throttles").execute();
   openDatabases.add(database);
   return database;
 }

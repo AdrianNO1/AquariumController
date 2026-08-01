@@ -20,7 +20,7 @@ import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { createElement } from "react";
-import { MemoryRouter } from "react-router";
+import { createMemoryRouter, RouterProvider } from "react-router";
 import {
   afterAll,
   afterEach,
@@ -98,9 +98,11 @@ function renderApp(
       client: queryClient,
       children: createElement(ControllerStateContext.Provider, {
         value,
-        children: createElement(MemoryRouter, {
-          initialEntries: [path],
-          children: createElement(App),
+        children: createElement(RouterProvider, {
+          router: createMemoryRouter(
+            [{ path: "*", element: createElement(App) }],
+            { initialEntries: [path] },
+          ),
         }),
       }),
     });
@@ -567,16 +569,49 @@ describe("operations route", () => {
       ),
     );
     const refresh = vi.fn();
-    const user = renderApp(
-      "/operations",
-      controllerState(createTestControlSnapshot(8), refresh),
-    );
+    const base = createTestControlSnapshot(8);
+    const snapshot = controllerSnapshotSchema.parse({
+      ...base,
+      devices: base.devices.map((device, index) => ({
+        ...device,
+        reported: {
+          ...device.reported,
+          firmwareVersion: index === 0 ? "5.0.0" : null,
+        },
+      })),
+      firmware: {
+        ...base.firmware,
+        fleetPolicy: {
+          targetVersion: base.firmware.currentVersion,
+          mode: "when_off",
+          requestedAt: "2026-07-13T09:55:00.000Z",
+        },
+      },
+    });
+    const user = renderApp("/operations", controllerState(snapshot, refresh));
+
+    expect(
+      screen.getByText(
+        "Active rollout for firmware 5.0.2: update when outputs are off. Currently outdated: 2.",
+      ),
+    ).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Update all ESPs" }));
     expect(
       screen.getByRole("dialog", { name: "Update all ESP32 devices?" }),
     ).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: /Update now/u }));
+    expect(
+      screen.getByRole("heading", { name: "Outdated ESPs (2)" }),
+    ).toBeTruthy();
+    expect(screen.getByText("main-a")).toBeTruthy();
+    expect(screen.getByText("Firmware 5.0.0 · stale")).toBeTruthy();
+    expect(screen.getByText("device-backup")).toBeTruthy();
+    expect(screen.getByText("Firmware version unknown · offline")).toBeTruthy();
+    const updateNow = screen.getByRole("button", {
+      name: /^Update now \(restart\)/u,
+    });
+    expect(updateNow.classList.contains("danger-button")).toBe(true);
+    await user.click(updateNow);
 
     await waitFor(() =>
       expect(requestBodies).toEqual([

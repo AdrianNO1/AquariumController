@@ -850,7 +850,9 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
           sha256: ESP_FIRMWARE_ARTIFACT.sha256,
           sizeBytes: ESP_FIRMWARE_ARTIFACT.sizeBytes,
           fleetPolicy:
-            firmwareRolloutPolicy.enabled === 0
+            firmwareRolloutPolicy.enabled === 0 ||
+            firmwareRolloutPolicy.target_version !==
+              ESP_FIRMWARE_ARTIFACT.version
               ? null
               : {
                   targetVersion: firmwareRolloutPolicy.target_version,

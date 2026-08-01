@@ -17,6 +17,7 @@ import {
   parseStoredStateOutboxEnvelope,
   STATE_CHANNEL_COLOR_MIGRATION_NAME,
   STATE_CONTROL_AREA_MIGRATION_NAME,
+  STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
   STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
   STATE_INITIAL_MIGRATION_NAME,
   STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
@@ -91,6 +92,7 @@ describe("runtime migrations", () => {
       STATE_CHANNEL_COLOR_MIGRATION_NAME,
       STATE_CONTROL_AREA_MIGRATION_NAME,
       STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+      STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
     ]);
     expect(eventsResults.map((result) => result.migrationName)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -106,6 +108,7 @@ describe("runtime migrations", () => {
       STATE_CHANNEL_COLOR_MIGRATION_NAME,
       STATE_CONTROL_AREA_MIGRATION_NAME,
       STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+      STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
     ]);
     expect(await readMigrationNames(events)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -175,6 +178,63 @@ describe("runtime migrations", () => {
     await expect(migrateEventsDatabase(events)).resolves.toEqual([]);
   });
 
+  it("repairs missing control-area multipliers without replacing existing values", async () => {
+    const state = await createStateDatabase();
+    await migrateStateDatabaseTo(state, STATE_FIRMWARE_UPDATE_MIGRATION_NAME);
+    await state
+      .insertInto("throttles")
+      .values({
+        id: "existing-light-multiplier",
+        type_key: "light",
+        percentage: 73,
+        created_at_ms: 10,
+        updated_at_ms: 11,
+      })
+      .executeTakeFirstOrThrow();
+
+    await expect(migrateStateDatabase(state)).resolves.toMatchObject([
+      {
+        migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+    ]);
+
+    const areas = await state
+      .selectFrom("control_areas")
+      .select(["type_key", "display_order"])
+      .orderBy("display_order")
+      .execute();
+    const multipliers = await state
+      .selectFrom("throttles")
+      .select(["id", "type_key", "percentage"])
+      .execute();
+    const multiplierByTypeKey = new Map(
+      multipliers.map((multiplier) => [multiplier.type_key, multiplier]),
+    );
+
+    expect(multipliers).toHaveLength(areas.length);
+    expect(multiplierByTypeKey.get("light")).toEqual({
+      id: "existing-light-multiplier",
+      type_key: "light",
+      percentage: 73,
+    });
+    for (const area of areas) {
+      const multiplier = multiplierByTypeKey.get(area.type_key);
+      expect(
+        multiplier,
+        `${area.type_key} should have a multiplier`,
+      ).toBeDefined();
+      if (area.type_key !== "light") {
+        expect(multiplier).toEqual({
+          id: `throttle-${area.type_key}`,
+          type_key: area.type_key,
+          percentage: 100,
+        });
+      }
+    }
+  });
+
   it("seeds the operator concurrency floor from the latest existing state revision", async () => {
     const state = await createStateDatabase();
     await migrateStateDatabaseTo(
@@ -217,6 +277,11 @@ describe("runtime migrations", () => {
       },
       {
         migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -294,6 +359,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -318,6 +388,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
         direction: "Down",
@@ -436,6 +511,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -457,6 +537,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_RUNTIME_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
         direction: "Down",
@@ -629,6 +714,11 @@ describe("runtime migrations", () => {
       EVENTS_INITIAL_MIGRATION_NAME,
     );
     expect(stateDown).toMatchObject([
+      {
+        migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
         direction: "Down",

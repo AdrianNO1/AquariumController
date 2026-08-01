@@ -5,6 +5,7 @@ import { basename, join, resolve, sep } from "node:path";
 import {
   CURRENT_ESP_FIRMWARE_VERSION,
   legacyScheduleDocumentSchema,
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   serializeLegacyScheduleCore,
 } from "@aquarium/esp-protocol";
 import type { Kysely } from "kysely";
@@ -116,7 +117,7 @@ describe("schedule artifact affected-device projection", () => {
 });
 
 describe("ScheduleReconciliationService", () => {
-  it("dispatches current syncTime, stores the core hash, and persists across restart", async () => {
+  it("dispatches to supported non-current firmware and persists across restart", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "aquarium-schedule-artifact-"),
     );
@@ -124,6 +125,11 @@ describe("ScheduleReconciliationService", () => {
     const filename = join(directory, "state.sqlite");
     let database = await createDatabase(filename);
     await seedNormalizedState(database);
+    await database
+      .updateTable("devices")
+      .set({ firmware_version: MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION })
+      .where("id", "=", "device-a")
+      .executeTakeFirstOrThrow();
     let repository = new DeviceScheduleArtifactRepository(database);
     const operations = new RecordingScheduleOperations(database);
     const service = new ScheduleReconciliationService(repository, operations, {
@@ -166,7 +172,7 @@ describe("ScheduleReconciliationService", () => {
     );
 
     await closeDatabase(database);
-    database = await createDatabase(filename);
+    database = await createDatabase(filename, false);
     repository = new DeviceScheduleArtifactRepository(database);
     expect(await repository.getArtifact("device-a")).toEqual(
       storedBeforeRestart,
@@ -263,7 +269,7 @@ describe("ScheduleReconciliationService", () => {
         delivery: {
           status: "unsupported",
           operationId: null,
-          errorCode: "firmware_outdated",
+          errorCode: "firmware_unsupported",
         },
       });
     },
@@ -500,8 +506,12 @@ class RecordingScheduleOperations implements DeviceScheduleOperationPort {
 
 async function createDatabase(
   filename = ":memory:",
+  clearThrottles = true,
 ): Promise<Kysely<StateDatabaseSchema>> {
   const database = await openStateDatabase({ filename });
+  if (clearThrottles) {
+    await database.deleteFrom("throttles").execute();
+  }
   openDatabases.add(database);
   return database;
 }

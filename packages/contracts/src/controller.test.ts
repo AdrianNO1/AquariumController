@@ -33,8 +33,8 @@ import {
 const now = "2026-07-13T08:00:00.000Z";
 const later = "2026-07-13T08:02:00.000Z";
 const firmware = {
-  currentVersion: "5.0.0",
-  sha256: "f655a0a1bc067c24ebec9578c2f638d1221bfbf6d3c4679785dd6e8851bfbee5",
+  currentVersion: "5.0.2",
+  sha256: "bb78b1f6eed36a5bedc08557f328b9875f940f39be993394545a734f09035787",
   sizeBytes: 1_174_576,
   fleetPolicy: null,
 } as const;

@@ -1,7 +1,7 @@
 import type { ControlArea } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useBeforeUnload, useBlocker } from "react-router";
 
 import { replaceSchedule, updateThrottle } from "./api.js";
 import { ChannelManagementDialog } from "./ChannelManagementDialog.js";
@@ -19,6 +19,7 @@ import { DevicesPanel } from "./DevicesPanel.js";
 import { ManualOverridePanel } from "./ManualOverridePanel.js";
 import { MappingProfilesDialog } from "./MappingProfilesDialog.js";
 import { ScheduleMultiplier } from "./ScheduleMultiplier.js";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog.js";
 import { useControllerState } from "./use-controller-state.js";
 import { useDraftRevision } from "./use-draft-revision.js";
 
@@ -83,9 +84,7 @@ export function ControlAreaPage({
       allChannels={controller.snapshot.channels}
       allOutputs={controller.snapshot.outputs}
       allAreas={controller.snapshot.controlAreas}
-      liveStateUnavailable={
-        controller.dataStale || controller.status !== "connected"
-      }
+      liveStateUnavailable={controller.status !== "connected"}
       showConnectionWarning={controller.status !== "connected"}
       connectionStatus={controller.status}
       channelsOpen={channelsOpen}
@@ -295,6 +294,35 @@ function LoadedControlArea({
   const multiplierConflictUnresolved =
     multiplierConflictRevision !== null &&
     model.revision < multiplierConflictRevision;
+  const navigationBlocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      configurationDirty && currentLocation.pathname !== nextLocation.pathname,
+  );
+  const handleBeforeUnload = useCallback(
+    (event: BeforeUnloadEvent) => {
+      if (!configurationDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    },
+    [configurationDirty],
+  );
+  useBeforeUnload(handleBeforeUnload);
+
+  useEffect(() => {
+    if (navigationBlocker.state === "blocked" && !configurationDirty) {
+      navigationBlocker.proceed();
+    }
+  }, [configurationDirty, navigationBlocker]);
+
+  const saveBeforeLeaving = (): void => {
+    save.mutate(undefined, {
+      onSuccess: () => {
+        if (navigationBlocker.state === "blocked") {
+          navigationBlocker.proceed();
+        }
+      },
+    });
+  };
 
   return (
     <main className="page control-page">
@@ -426,6 +454,7 @@ function LoadedControlArea({
         devices={model.devices}
         firmware={model.firmware}
         mappingProfiles={model.mappingProfiles}
+        operations={model.operations}
         expectedRevision={model.revision}
         refresh={refresh}
       />
@@ -450,6 +479,23 @@ function LoadedControlArea({
         currentTypeKey={model.area.typeKey}
         expectedRevision={model.revision}
         refresh={refresh}
+      />
+      <UnsavedChangesDialog
+        open={navigationBlocker.state === "blocked"}
+        saving={saving}
+        saveDisabled={multiplierConflictRevision !== null}
+        heading="Save changes before leaving?"
+        onSave={saveBeforeLeaving}
+        onDiscard={() => {
+          if (navigationBlocker.state === "blocked") {
+            navigationBlocker.proceed();
+          }
+        }}
+        onKeepEditing={() => {
+          if (navigationBlocker.state === "blocked") {
+            navigationBlocker.reset();
+          }
+        }}
       />
     </main>
   );

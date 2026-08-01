@@ -182,7 +182,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
         "Firmware update request unexpectedly produced no change",
       );
     }
-    this.#schedule(() => this.#reconcileDevice(deviceId));
+    void this.#schedule(() => this.#reconcileDevice(deviceId));
     return mutationResultSchema.parse({
       changed: true,
       revision: committed.revision,
@@ -286,7 +286,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
     if (!committed.changed) {
       throw new Error("Fleet firmware request unexpectedly produced no change");
     }
-    this.#schedule(() => this.#reconcileAll());
+    void this.#schedule(() => this.#reconcileAll());
     return mutationResultSchema.parse({
       changed: true,
       revision: committed.revision,
@@ -294,19 +294,20 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
     });
   }
 
-  signalDeviceAnnouncement(deviceId: string): void {
-    if (!this.#accepting) return;
-    this.#schedule(async () => {
+  signalDeviceAnnouncement(deviceId: string): Promise<void> {
+    if (!this.#accepting) return Promise.resolve();
+    return this.#schedule(async () => {
       await this.#ensureFleetRequest(deviceId);
       await this.#reconcileDevice(deviceId);
     });
   }
 
-  #schedule(task: () => Promise<void>): void {
+  #schedule(task: () => Promise<void>): Promise<void> {
     const run = this.#tail.then(task, task);
     this.#tail = run.catch((error) => {
       this.#onBackgroundError(toError(error));
     });
+    return this.#tail;
   }
 
   async #reconcileAll(): Promise<void> {

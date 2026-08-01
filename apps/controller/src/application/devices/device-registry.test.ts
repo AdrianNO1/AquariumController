@@ -267,7 +267,23 @@ describe("persistent device registry", () => {
     expect(await revisionAndOutboxCounts(database)).toEqual([4, 4]);
   });
 
-  it("marks old firmware as an explicit error until version 4 announces", async () => {
+  it("accepts supported outdated firmware without turning the device into an error", async () => {
+    const database = await openTestDatabase();
+    const registry = createRegistry(database);
+
+    await registry.handleAnnouncement({
+      announcement: announcement({ version: "5.0.0" }),
+      receivedAtMs: 10_000,
+    });
+    expect(await readDevice(database)).toMatchObject({
+      status: "online",
+      firmware_version: "5.0.0",
+      last_error_code: null,
+      last_error_message: null,
+    });
+  });
+
+  it("marks firmware below 5.0.0 unsupported until supported firmware announces", async () => {
     const database = await openTestDatabase();
     const registry = createRegistry(database);
 
@@ -278,8 +294,9 @@ describe("persistent device registry", () => {
     expect(await readDevice(database)).toMatchObject({
       status: "error",
       firmware_version: "3.2w",
-      last_error_code: "firmware_outdated",
-      last_error_message: `Firmware 3.2w is outdated; install ${CURRENT_ESP_FIRMWARE_VERSION}`,
+      last_error_code: "firmware_unsupported",
+      last_error_message:
+        "Firmware 3.2w is unsupported; install 5.0.0 or newer",
     });
 
     await expect(

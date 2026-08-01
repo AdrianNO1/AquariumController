@@ -783,14 +783,14 @@ describe("persistent device operation service", () => {
     expect(Number(operationCount.count)).toBe(0);
   });
 
-  it("reapplies an actual configuration mismatch when another device warning masks its error code", async () => {
+  it("reapplies an actual configuration mismatch when another device error masks its error code", async () => {
     const context = await setup();
     await context.databases.state
       .updateTable("devices")
       .set({
         name: "Desired",
-        last_error_code: "firmware_outdated",
-        last_error_message: "Firmware update available",
+        last_error_code: "firmware_unsupported",
+        last_error_message: "Firmware version is unsupported",
       })
       .where("id", "=", "A1")
       .executeTakeFirstOrThrow();

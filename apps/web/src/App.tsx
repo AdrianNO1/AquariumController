@@ -401,7 +401,7 @@ function ControlArea(): React.JSX.Element {
   if (!parsedArea.success) {
     return <NotFound />;
   }
-  return <ControlAreaPage slug={parsedArea.data} />;
+  return <ControlAreaPage key={parsedArea.data} slug={parsedArea.data} />;
 }
 
 function NotFound(): React.JSX.Element {

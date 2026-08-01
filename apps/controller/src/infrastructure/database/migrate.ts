@@ -8,6 +8,7 @@ import {
 
 import { channelColorMigration } from "./channel-color-migration.js";
 import { controlAreaMigration } from "./control-area-migration.js";
+import { controlAreaThrottleMigration } from "./control-area-throttle-migration.js";
 import { eventsQueryMigration } from "./events-query-migration.js";
 import { eventsRetentionMigration } from "./events-retention-migration.js";
 import { eventsNotificationOutcomeMigration } from "./events-notification-outcome-migration.js";
@@ -28,6 +29,8 @@ export const STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME =
 export const STATE_CHANNEL_COLOR_MIGRATION_NAME = "005_channel_color";
 export const STATE_CONTROL_AREA_MIGRATION_NAME = "006_control_areas";
 export const STATE_FIRMWARE_UPDATE_MIGRATION_NAME = "007_firmware_updates";
+export const STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME =
+  "008_control_area_throttles";
 export const EVENTS_INITIAL_MIGRATION_NAME = "001_initial_events";
 export const EVENTS_QUERY_MIGRATION_NAME = "002_log_query_indexes";
 export const EVENTS_RETENTION_MIGRATION_NAME =
@@ -42,7 +45,8 @@ export type StateMigrationTarget =
   | typeof STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME
   | typeof STATE_CHANNEL_COLOR_MIGRATION_NAME
   | typeof STATE_CONTROL_AREA_MIGRATION_NAME
-  | typeof STATE_FIRMWARE_UPDATE_MIGRATION_NAME;
+  | typeof STATE_FIRMWARE_UPDATE_MIGRATION_NAME
+  | typeof STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME;
 export type EventsMigrationTarget =
   | typeof EVENTS_INITIAL_MIGRATION_NAME
   | typeof EVENTS_QUERY_MIGRATION_NAME
@@ -70,6 +74,7 @@ const stateMigrationProvider = new EmbeddedMigrationProvider({
   [STATE_CHANNEL_COLOR_MIGRATION_NAME]: channelColorMigration,
   [STATE_CONTROL_AREA_MIGRATION_NAME]: controlAreaMigration,
   [STATE_FIRMWARE_UPDATE_MIGRATION_NAME]: firmwareUpdateMigration,
+  [STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME]: controlAreaThrottleMigration,
 });
 
 const eventsMigrationProvider = new EmbeddedMigrationProvider({

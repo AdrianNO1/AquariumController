@@ -22,6 +22,7 @@ async function createDatabases(): Promise<ControllerDatabases> {
     state: { filename: ":memory:" },
     events: { filename: ":memory:" },
   });
+  await databases.state.deleteFrom("throttles").execute();
   openDatabases.push(databases);
   return databases;
 }

@@ -192,7 +192,12 @@ export class ControllerMqttRuntime
             this.#tasks.run(() =>
               this.#evaluateDeviceAlerts(event.receivedAtMs),
             );
-            this.#firmwareUpdates.signalDeviceAnnouncement(update.deviceId);
+            if (update.reason === "connection_recovered") {
+              this.#timeSync.signalDeviceUnavailable(update.deviceId);
+            }
+            await this.#firmwareUpdates.signalDeviceAnnouncement(
+              update.deviceId,
+            );
             if (this.#stopping) {
               return;
             }
@@ -437,7 +442,11 @@ export class ControllerMqttRuntime
     await this.#deviceOperations.start();
     this.#firmwareUpdates.start();
     const startedAtMs = this.#now();
-    await this.#registry.refreshConnectionStatuses(startedAtMs);
+    const startupTransitions =
+      await this.#registry.refreshConnectionStatuses(startedAtMs);
+    for (const transition of startupTransitions) {
+      this.#timeSync.signalDeviceUnavailable(transition.deviceId);
+    }
     await this.#evaluateDeviceAlerts(startedAtMs);
     this.#transport.start();
     this.#healthTimer = setInterval(
@@ -529,7 +538,11 @@ export class ControllerMqttRuntime
     this.#tasks.run(async () => {
       try {
         const observedAtMs = this.#now();
-        await this.#registry.refreshConnectionStatuses(observedAtMs);
+        const transitions =
+          await this.#registry.refreshConnectionStatuses(observedAtMs);
+        for (const transition of transitions) {
+          this.#timeSync.signalDeviceUnavailable(transition.deviceId);
+        }
         await this.#evaluateDeviceAlerts(observedAtMs);
       } finally {
         this.#healthTickRunning = false;

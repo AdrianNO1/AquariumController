@@ -56,8 +56,7 @@ describe("FirmwareUpdateService", () => {
     expect(operations.requests).toEqual([]);
 
     await setOutputState(database, "device-a", true);
-    service.signalDeviceAnnouncement("device-a");
-    await service.drain();
+    await service.signalDeviceAnnouncement("device-a");
 
     expect(operations.requests).toEqual([
       {
@@ -82,8 +81,7 @@ describe("FirmwareUpdateService", () => {
       targetVersion: CURRENT_ESP_FIRMWARE_VERSION,
       progress: 60,
     });
-    service.signalDeviceAnnouncement("device-a");
-    await service.drain();
+    await service.signalDeviceAnnouncement("device-a");
     await expect(readUpdate(database, "device-a")).resolves.toMatchObject({
       status: "downloading",
       progress: 60,
@@ -94,8 +92,7 @@ describe("FirmwareUpdateService", () => {
       .set({ firmware_version: CURRENT_ESP_FIRMWARE_VERSION })
       .where("id", "=", "device-a")
       .executeTakeFirstOrThrow();
-    service.signalDeviceAnnouncement("device-a");
-    await service.drain();
+    await service.signalDeviceAnnouncement("device-a");
     await expect(readUpdate(database, "device-a")).resolves.toMatchObject({
       status: "succeeded",
       progress: 100,
@@ -146,15 +143,13 @@ describe("FirmwareUpdateService", () => {
       progress: 0,
       error: "sha256_mismatch",
     });
-    service.signalDeviceAnnouncement("device-a");
-    await service.drain();
+    await service.signalDeviceAnnouncement("device-a");
 
     await expect(readUpdate(database, "device-a")).resolves.toMatchObject({
       status: "failed",
       error_message: "sha256_mismatch",
     });
-    service.signalDeviceAnnouncement("device-a");
-    await service.drain();
+    await service.signalDeviceAnnouncement("device-a");
     expect(operations.requests).toHaveLength(1);
 
     await service.requestDeviceUpdate("device-a", {
@@ -191,8 +186,7 @@ describe("FirmwareUpdateService", () => {
       firmwareVersion: "5.0.0-beta.1",
       outputsOff: true,
     });
-    service.signalDeviceAnnouncement("late-device");
-    await service.drain();
+    await service.signalDeviceAnnouncement("late-device");
 
     await expect(
       database

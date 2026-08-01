@@ -19,7 +19,7 @@ import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
 import { createElement } from "react";
-import { MemoryRouter } from "react-router";
+import { createMemoryRouter, RouterProvider } from "react-router";
 import {
   afterAll,
   afterEach,
@@ -107,10 +107,7 @@ describe("control area routes", () => {
                 ...device.reported,
                 firmwareVersion: "5.0.0-beta.1",
               },
-              lastError: {
-                code: "firmware_outdated",
-                message: "Firmware 5.0.0 can be updated",
-              },
+              lastError: null,
             }
           : {
               ...device,
@@ -241,6 +238,49 @@ describe("control area routes", () => {
     expect(refresh).toHaveBeenCalledOnce();
   });
 
+  it("protects unsaved configuration from route changes and page unloads", async () => {
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(createTestControlSnapshot(), vi.fn()),
+    );
+
+    fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
+      target: { value: "75" },
+    });
+
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+
+    const overviewLinks = screen.getAllByRole("link", { name: "Overview" });
+    const overviewLink = overviewLinks.at(-1);
+    if (overviewLink === undefined) {
+      throw new Error("Control area did not render its overview link");
+    }
+    await user.click(overviewLink);
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Save changes before leaving?",
+    });
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Lights" }),
+    ).toBeTruthy();
+
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Keep editing" }),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    await user.click(overviewLink);
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Discard changes",
+      }),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Overview" }),
+    ).toBeTruthy();
+  });
+
   it("keeps revision-protected configuration saves available while live state is stale", async () => {
     const snapshot = createTestControlSnapshot();
     const user = renderControlArea(
@@ -271,7 +311,7 @@ describe("control area routes", () => {
     expect(screen.getByText(/Controller state is stale/u)).toBeTruthy();
   });
 
-  it("does not flash a connection warning during a normal live snapshot refresh", () => {
+  it("keeps live controls available during a normal snapshot refresh", () => {
     const snapshot = createTestControlSnapshot();
     renderControlArea("/control/lights", {
       ...controllerState(snapshot, vi.fn()),
@@ -285,7 +325,7 @@ describe("control area routes", () => {
           name: "Main light temporary override",
         }) as HTMLInputElement
       ).disabled,
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("uses unsaved graph points as the scheduled baseline for test sliders", async () => {
@@ -711,14 +751,22 @@ function renderControlArea(
       mutations: { retry: false },
     },
   });
+  const router = createMemoryRouter(
+    [
+      {
+        path: "*",
+        element: createElement(App),
+      },
+    ],
+    { initialEntries: [path] },
+  );
   const renderTree = (value: ControllerStateContextValue) =>
     createElement(QueryClientProvider, {
       client: queryClient,
       children: createElement(ControllerStateContext.Provider, {
         value,
-        children: createElement(MemoryRouter, {
-          initialEntries: [path],
-          children: createElement(App),
+        children: createElement(RouterProvider, {
+          router,
         }),
       }),
     });

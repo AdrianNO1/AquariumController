@@ -5,6 +5,7 @@ import type {
   Device,
   FirmwareDeployment,
   MappingProfile,
+  OperationSummary,
 } from "@aquarium/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -33,7 +34,7 @@ import { DevicesPanel } from "./DevicesPanel.js";
 
 const timestamp = "2026-07-13T10:00:00.000Z";
 const firmware: FirmwareDeployment = {
-  currentVersion: "5.0.0",
+  currentVersion: "5.0.2",
   sha256: "0000000000000000000000000000000000000000000000000000000000000000",
   sizeBytes: 1,
   fleetPolicy: null,
@@ -53,7 +54,7 @@ const devices: readonly Device[] = [
     name: "Online rack",
     hardwareId: "A1B2C3D4",
     status: "online",
-    firmwareVersion: "5.0.0",
+    firmwareVersion: "5.0.2",
     lastError: null,
   }),
   device({
@@ -62,10 +63,7 @@ const devices: readonly Device[] = [
     hardwareId: "B2C3D4E5",
     status: "stale",
     firmwareVersion: "5.0.0-beta.1",
-    lastError: {
-      code: "firmware_outdated",
-      message: "Firmware 4.1.0 is available",
-    },
+    lastError: null,
   }),
   device({
     id: "device-offline",
@@ -114,7 +112,7 @@ describe("DevicesPanel", () => {
     expect(screen.getByText("ID: A1B2C3D4")).toBeTruthy();
     expect(screen.getByText("ID: B2C3D4E5")).toBeTruthy();
     expect(screen.getByText("ID: C3D4E5F6")).toBeTruthy();
-    expect(screen.getByText(/5\.0\.0 .* current/u)).toBeTruthy();
+    expect(screen.getByText(/5\.0\.2 .* current/u)).toBeTruthy();
     expect(
       screen.getByText(/5\.0\.0-beta\.1 .* update available/u),
     ).toBeTruthy();
@@ -226,7 +224,7 @@ describe("DevicesPanel", () => {
     ).toBeTruthy();
   });
 
-  it("allows a reported configuration mismatch to be reapplied when a firmware warning masks its error code", async () => {
+  it("allows a reported configuration mismatch to be reapplied when an unsupported-firmware error masks it", async () => {
     let requestBody: object | null = null;
     server.use(
       http.patch(
@@ -259,8 +257,8 @@ describe("DevicesPanel", () => {
           pwmFrequencyHz: 500,
         },
         lastError: {
-          code: "firmware_outdated",
-          message: "Firmware 4.1.0 is available",
+          code: "firmware_unsupported",
+          message: "Firmware 4.1.0 is unsupported",
         },
       },
     ]);
@@ -278,6 +276,83 @@ describe("DevicesPanel", () => {
         pwmResolutionBits: 8,
       }),
     );
+  });
+
+  it("presents an in-flight configuration mismatch as an update pending", () => {
+    const sourceDevice = devices[0];
+    if (sourceDevice === undefined) {
+      throw new Error("Test devices are missing the online ESP32");
+    }
+    const pendingOperation: OperationSummary = {
+      id: "operation-edit-online",
+      deviceId: sourceDevice.id,
+      kind: "edit_configuration",
+      status: "in_flight",
+      requestedAt: timestamp,
+      deadlineAt: "2026-07-13T10:00:05.000Z",
+      completedAt: null,
+    };
+
+    renderPanel(
+      vi.fn(),
+      [
+        {
+          ...sourceDevice,
+          desired: { ...sourceDevice.desired, name: "Renamed rack" },
+          lastError: {
+            code: "configuration_mismatch",
+            message:
+              "Reported configuration differs from desired configuration",
+          },
+        },
+      ],
+      [pendingOperation],
+    );
+
+    expect(screen.getByText("Update pending…")).toBeTruthy();
+    expect(
+      screen.queryByText("Desired and reported configuration differ."),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "Reported configuration differs from desired configuration",
+      ),
+    ).toBeNull();
+  });
+
+  it("hides a successful firmware update after ten minutes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(timestamp));
+    try {
+      const sourceDevice = devices[0];
+      if (sourceDevice === undefined) {
+        throw new Error("Test devices are missing the online ESP32");
+      }
+      renderPanel(vi.fn(), [
+        {
+          ...sourceDevice,
+          firmwareUpdate: {
+            targetVersion: firmware.currentVersion,
+            mode: "immediate",
+            status: "succeeded",
+            progress: 100,
+            operationId: "operation-firmware-online",
+            error: null,
+            requestedAt: timestamp,
+            updatedAt: timestamp,
+          },
+        },
+      ]);
+
+      expect(screen.getByText("Update: succeeded · 100%")).toBeTruthy();
+      act(() => vi.advanceTimersByTime(10 * 60 * 1_000 - 1));
+      expect(screen.getByText("Update: succeeded · 100%")).toBeTruthy();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByText("Update: succeeded · 100%")).toBeNull();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   it("confirms whether an available firmware update runs now or waits for outputs off", async () => {
@@ -299,7 +374,7 @@ describe("DevicesPanel", () => {
     const user = userEvent.setup();
     renderPanel(refresh);
 
-    await user.click(screen.getByRole("button", { name: "Update to 5.0.0" }));
+    await user.click(screen.getByRole("button", { name: "Update to 5.0.2" }));
     expect(
       screen.getByRole("dialog", { name: "Update Stale rack?" }),
     ).toBeTruthy();
@@ -325,6 +400,11 @@ describe("DevicesPanel", () => {
         { name: "Edit" },
       ),
     );
+    expect(
+      screen.queryByText(
+        /Saving records controller intent\. Reported values update only/u,
+      ),
+    ).toBeNull();
     const name = screen.getByRole("textbox", { name: "Device name" });
     await user.clear(name);
     await user.type(name, "Renamed-rack");
@@ -353,6 +433,7 @@ describe("DevicesPanel", () => {
 function renderPanel(
   refresh = vi.fn(),
   renderedDevices: readonly Device[] = devices,
+  operations: readonly OperationSummary[] = [],
 ): void {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -367,6 +448,7 @@ function renderPanel(
       createElement(DevicesPanel, {
         devices: renderedDevices,
         mappingProfiles: [profile],
+        operations,
         firmware,
         expectedRevision: 8,
         refresh,

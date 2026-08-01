@@ -12,22 +12,28 @@ import {
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.0";
-export const MINIMUM_PULL_OTA_FIRMWARE_VERSION = "5.0.0";
+export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.2";
+export const MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION = "5.0.0";
+export const MINIMUM_PULL_OTA_FIRMWARE_VERSION =
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION;
 export const ESP_FIRMWARE_ARTIFACT = {
   version: CURRENT_ESP_FIRMWARE_VERSION,
-  fileName: "ESP32Code-5.0.0.bin",
+  fileName: "ESP32Code-5.0.2.bin",
   sizeBytes: 1_174_576,
-  sha256: "f655a0a1bc067c24ebec9578c2f638d1221bfbf6d3c4679785dd6e8851bfbee5",
+  sha256: "49f8549bafec5ff58fb3b485909c316986cc52fc0efbef47fc2f8b2ca9b159e3",
 } as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
   return version === CURRENT_ESP_FIRMWARE_VERSION;
 }
 
-export function supportsPullOta(version: string): boolean {
+export function isSupportedEspFirmwareVersion(version: string): boolean {
   const [major] = version.split(".");
   return /^\d+$/u.test(major ?? "") && Number(major) >= 5;
+}
+
+export function supportsPullOta(version: string): boolean {
+  return isSupportedEspFirmwareVersion(version);
 }
 
 export const espOtaStatusSchema = z.strictObject({

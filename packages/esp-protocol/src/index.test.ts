@@ -11,8 +11,10 @@ import {
   ESP32_PWM_OVERWRITE_DURATION_MS,
   espAnnouncementSchema,
   espCommandResponseSchema,
+  isSupportedEspFirmwareVersion,
   isSupportedEsp32PwmConfiguration,
   isCurrentEspFirmwareVersion,
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   supportsPullOta,
   LEGACY_CHUNK_DATA_BYTES,
   utf8ByteLength,
@@ -20,15 +22,20 @@ import {
 
 describe("legacy ESP protocol", () => {
   it("requires the pull-OTA firmware exactly", () => {
-    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("5.0.0");
+    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("5.0.2");
     expect(ESP_FIRMWARE_ARTIFACT).toMatchObject({
-      version: "5.0.0",
+      version: "5.0.2",
       sizeBytes: 1_174_576,
       sha256:
-        "f655a0a1bc067c24ebec9578c2f638d1221bfbf6d3c4679785dd6e8851bfbee5",
+        "49f8549bafec5ff58fb3b485909c316986cc52fc0efbef47fc2f8b2ca9b159e3",
     });
     expect(ESP32_PWM_OVERWRITE_DURATION_MS).toBe(120_000);
-    expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("5.0.2")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);
+    expect(MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION).toBe("5.0.0");
+    expect(isSupportedEspFirmwareVersion("5.0.0")).toBe(true);
+    expect(isSupportedEspFirmwareVersion("5.0.2")).toBe(true);
+    expect(isSupportedEspFirmwareVersion("4.2.1")).toBe(false);
     expect(supportsPullOta("5.0.0")).toBe(true);
     expect(supportsPullOta("6.1.0")).toBe(true);
     expect(supportsPullOta("4.2.1")).toBe(false);
@@ -43,7 +50,7 @@ describe("legacy ESP protocol", () => {
       freq: 5_000,
       res: 8,
       status: "online",
-      version: "5.0.0",
+      version: "5.0.2",
       scheduleHash: "0",
     };
 
@@ -58,7 +65,7 @@ describe("legacy ESP protocol", () => {
         ],
         ota: {
           status: "downloading",
-          targetVersion: "5.0.1",
+          targetVersion: "5.0.2",
           progress: 48,
         },
       }).success,

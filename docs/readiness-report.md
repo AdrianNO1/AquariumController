@@ -166,8 +166,8 @@ cache invalidation, and normalized 0-255 duty scaling. It adds correlated
 request IDs, wear-limited diagnostics, controller-owned overwrite behavior, and
 valid-EEPROM-time fallback when neither Pi nor NTP is reachable. Per-pin
 schedule activation is best effort and reports failures without stopping
-healthy pins. The controller marks every other version `firmware_outdated` and
-excludes it from actuator work.
+healthy pins. The controller supports firmware 5.0.0 and newer; older versions
+are marked `firmware_unsupported` and excluded from actuator work.
 
 Compilation and fake-firmware tests cannot prove physical pin assignments,
 power-loss behavior, Wi-Fi quality, NTP reachability, or deployed output.

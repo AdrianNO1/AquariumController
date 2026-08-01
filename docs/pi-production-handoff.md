@@ -127,8 +127,8 @@ future firmware work and physical validation.
 - [ ] Build firmware 4.1.0 with an ignored local configuration containing the
       intended Wi-Fi, MQTT username/password, and NTP host.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports exactly `4.1.0`; older/unexpected firmware is
-      intentionally marked `firmware_outdated` and receives no actuator work.
+- [ ] Confirm every device reports firmware 5.0.0 or newer; older firmware is
+      intentionally marked `firmware_unsupported` and receives no actuator work.
 - [ ] Bench-test pin assignments, normalized PWM at configured resolutions,
       override expiry, schedule restoration, resolution reattachment, NTP/DNS
       loss, EEPROM-time fallback, broker/Wi-Fi loss, reboot, power cycling,

@@ -3,7 +3,7 @@
 This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
 controller. The previous Python and Flask application remains under `.old/` as
 migration evidence. The supported ESP32 source is
-`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.0 is compiled and bundled
+`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.2 is compiled and bundled
 with the controller release.
 
 Historical pre-4.1 release evidence dated 2026-07-25 includes 97 files/638 unit
@@ -175,7 +175,7 @@ npm run test:integration
 npm run test:e2e
 npm run build
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.2 .
 ```
 
 CI defines six validation jobs: static/unit, critical, real-Mosquitto
@@ -286,9 +286,10 @@ separate verified database/archive backup procedure.
   push protection enabled.
 - Flash firmware 5.0.0 to every deployed ESP32 once to bootstrap wireless
   updates and persist its device-specific network configuration in NVS.
-  Older or unexpected versions remain visible but are marked
-  `firmware_outdated`, excluded from schedule/override commands, and identified
-  on the frontend. Firmware 5.0.0 adds correlated response IDs, wear-limited
+  Versions older than 5.0.0 remain visible but are marked
+  `firmware_unsupported`, excluded from schedule/override commands, and
+  identified on the frontend. Supported 5.0.0+ firmware remains online when an
+  update is available. Firmware 5.0.0 adds correlated response IDs, wear-limited
   persisted diagnostics, best-effort per-pin schedule activation, and
   rollover-safe override expiry. Routine controller and manual PWM writes use
   `overwrite=true`, so the ESP suppresses its local schedule while the Pi is

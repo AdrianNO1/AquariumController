@@ -5,12 +5,12 @@ import {
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
 import {
-  CURRENT_ESP_FIRMWARE_VERSION,
   espFirmwareDiagnosticSchema,
   espOtaStatusSchema,
   espOutputStateSchema,
-  isCurrentEspFirmwareVersion,
+  isSupportedEspFirmwareVersion,
   isSupportedEsp32PwmConfiguration,
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   type EspAnnouncement,
 } from "@aquarium/esp-protocol";
 import { sql, type Kysely, type Selectable, type Transaction } from "kysely";
@@ -291,7 +291,7 @@ export class DeviceRegistry {
               ota_status_json: otaStatusJson,
               status:
                 announcement.status === "online" &&
-                error?.code !== "firmware_outdated"
+                error?.code !== "firmware_unsupported"
                   ? "online"
                   : "error",
               last_seen_at_ms: event.receivedAtMs,
@@ -340,7 +340,7 @@ export class DeviceRegistry {
         const nextStatus: DeviceStatus = quarantinedForProtocolFault
           ? "error"
           : announcement.status === "online" &&
-              error?.code !== "firmware_outdated"
+              error?.code !== "firmware_unsupported"
             ? "online"
             : "error";
         const reportedStateChanged =
@@ -767,10 +767,10 @@ function announcementError(
       message: `Device reported status ${announcement.status}`,
     };
   }
-  if (!isCurrentEspFirmwareVersion(announcement.version)) {
+  if (!isSupportedEspFirmwareVersion(announcement.version)) {
     return {
-      code: "firmware_outdated",
-      message: `Firmware ${announcement.version} is outdated; install ${CURRENT_ESP_FIRMWARE_VERSION}`,
+      code: "firmware_unsupported",
+      message: `Firmware ${announcement.version} is unsupported; install ${MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION} or newer`,
     };
   }
   if (

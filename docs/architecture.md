@@ -189,10 +189,11 @@ the application:
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `5.0.0` is the exact supported release. Every other announced
-  version remains visible but is marked `firmware_outdated`, excluded from
-  actuator work, and shown with an update or USB-bootstrap message in the
-  frontend.
+- Firmware `5.0.2` is the current release, while firmware `5.0.0` and newer is
+  controller-compatible. A supported older release remains online with an
+  update available. Firmware below `5.0.0` remains visible but is marked
+  `firmware_unsupported`, excluded from actuator work, and shown with a
+  USB-bootstrap message in the frontend.
 
 Firmware 5.0 accepts
 `request:<requestId>|<semicolon-separated commands>` and echoes the request ID

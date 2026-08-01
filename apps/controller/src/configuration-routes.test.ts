@@ -22,6 +22,7 @@ async function createRepository(): Promise<{
   readonly repository: ControllerConfigurationRepository;
 }> {
   const database = await openStateDatabase({ filename: ":memory:" });
+  await database.deleteFrom("throttles").execute();
   openDatabases.add(database);
   return {
     database,

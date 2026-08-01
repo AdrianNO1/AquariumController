@@ -295,9 +295,9 @@ bookkeeping fixes. It also trusts valid persisted time if Pi and NTP are
 unreachable, echoes correlated request IDs, keeps controller writes authoritative
 for the overwrite lease, activates schedule pins best effort, and persists and
 announces wear-limited diagnostics. Independent fake tests cover the behavior,
-and the real sketch passes its pinned compiler lane. Old/unexpected firmware is
-visible as `firmware_outdated` but receives no actuator work. Flashing the new
-firmware is part of the external release checklist.
+and the real sketch passes its pinned compiler lane. Firmware older than 5.0.0
+is visible as `firmware_unsupported` but receives no actuator work. Flashing a
+supported firmware is part of the external release checklist.
 
 ### Gate D3: production legacy snapshot — external deployment gate
 

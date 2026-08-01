@@ -15,7 +15,7 @@ import {
 } from "./time-sync-coordinator.js";
 
 describe("time-sync coordinator", () => {
-  it("coalesces announcement signals into the distinct legacy sync command", async () => {
+  it("coalesces announcements and syncs once until the device becomes unavailable", async () => {
     const time = new ManualSchedulingTime("2026-07-13T04:00:00.000Z");
     let finish: (completion: ScheduledDeviceOperationCompletion) => void = () =>
       undefined;
@@ -51,6 +51,44 @@ describe("time-sync coordinator", () => {
     await Promise.all([first, duplicate]);
     expect(port.calls).toHaveLength(1);
     expect(port.calls[0]?.request.kind).not.toBe("schedule");
+
+    await coordinator.signalAnnouncement("device-a");
+    expect(port.calls).toHaveLength(1);
+
+    coordinator.signalDeviceUnavailable("device-a");
+    await coordinator.signalAnnouncement("device-a");
+    expect(port.calls).toHaveLength(2);
+    await coordinator.stop();
+  });
+
+  it("retries announcement sync after a non-succeeded operation", async () => {
+    const time = new ManualSchedulingTime("2026-07-13T04:00:00.000Z");
+    const diagnostics: TimeSyncDiagnostic[] = [];
+    const port = new RecordingOperationPort(async (_device, _request, call) =>
+      call === 1
+        ? { id: "sync-unknown", status: "outcome_unknown", result: null }
+        : { id: "sync-succeeded", status: "succeeded", result: null },
+    );
+    const coordinator = createCoordinator(
+      time,
+      new MemoryDailyGuards(),
+      port,
+      diagnostics,
+    );
+    await coordinator.start();
+
+    await coordinator.signalAnnouncement("device-a");
+    await coordinator.signalAnnouncement("device-a");
+    await coordinator.signalAnnouncement("device-a");
+
+    expect(port.calls).toHaveLength(2);
+    expect(diagnostics).toMatchObject([
+      {
+        code: "time_sync_operation_not_succeeded",
+        deviceId: "device-a",
+        status: "outcome_unknown",
+      },
+    ]);
     await coordinator.stop();
   });
 
