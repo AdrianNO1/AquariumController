@@ -5,9 +5,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { ControllerSnapshot } from "@aquarium/contracts";
+import { espCommandResponseSchema } from "@aquarium/esp-protocol";
 import {
+  startFakeEspControlServer,
   startFakeEspLauncher,
   type FakeEspResponseFaults,
+  type RunningFakeEspControlServer,
   type RunningFakeEspLauncher,
 } from "@aquarium/fake-esp";
 
@@ -34,6 +37,7 @@ export interface ProductionE2eStack {
   readonly baseUrl: string;
   readonly brokerUrl: string;
   readonly controllerLog: string;
+  readonly fakeEspConsoleUrl: string;
   fetchSnapshot(): Promise<ControllerSnapshot>;
   mqttPublications(): readonly CapturedMqttPublication[];
   pauseFakeDevices(): Promise<void>;
@@ -41,6 +45,14 @@ export interface ProductionE2eStack {
   restartBroker(): Promise<void>;
   restartController(): Promise<void>;
   restartFakeDevices(): Promise<void>;
+  setFakeDeviceNetworkEnabled(
+    deviceKey: (typeof fakeDevices)[number]["key"],
+    enabled: boolean,
+  ): void;
+  setFakeDevicePower(
+    deviceKey: (typeof fakeDevices)[number]["key"],
+    powered: boolean,
+  ): Promise<void>;
   setFakeResponseFaults(
     deviceKey: (typeof fakeDevices)[number]["key"],
     faults: FakeEspResponseFaults,
@@ -62,8 +74,10 @@ class RunningProductionE2eStack implements ProductionE2eStack {
   readonly #paths: E2ePaths;
   readonly #broker: MosquittoTestHarness;
   readonly #controllerPort: number;
+  readonly #fakeControlPort: number;
   #controller: ChildProcess | null = null;
   #fakeLauncher: RunningFakeEspLauncher | null = null;
+  #fakeControlServer: RunningFakeEspControlServer | null = null;
   #controllerLogLines: string[] = [];
   #stopped = false;
 
@@ -71,10 +85,12 @@ class RunningProductionE2eStack implements ProductionE2eStack {
     paths: E2ePaths,
     broker: MosquittoTestHarness,
     controllerPort: number,
+    fakeControlPort: number,
   ) {
     this.#paths = paths;
     this.#broker = broker;
     this.#controllerPort = controllerPort;
+    this.#fakeControlPort = fakeControlPort;
   }
 
   public get baseUrl(): string {
@@ -87,6 +103,10 @@ class RunningProductionE2eStack implements ProductionE2eStack {
 
   public get controllerLog(): string {
     return this.#controllerLogLines.join("\n");
+  }
+
+  public get fakeEspConsoleUrl(): string {
+    return `http://127.0.0.1:${this.#fakeControlPort}`;
   }
 
   public async start(): Promise<void> {
@@ -142,8 +162,23 @@ class RunningProductionE2eStack implements ProductionE2eStack {
     const baselineOperationIds = new Set(
       baseline.operations.items.map((operation) => operation.id),
     );
+    const baselineCompletedPwmExchanges = countCompletedScheduledPwmExchanges(
+      this.#broker.publications(),
+    );
     const mappingProfiles = new Map(
       baseline.mappingProfiles.map((profile) => [profile.id, profile]),
+    );
+    const scheduledChannelIds = new Set(
+      baseline.schedules
+        .filter((schedule) => schedule.enabled)
+        .map((schedule) => schedule.channelId),
+    );
+    const activeScheduledChannelIds = new Set(
+      baseline.channels
+        .filter(
+          (channel) => channel.enabled && scheduledChannelIds.has(channel.id),
+        )
+        .map((channel) => channel.id),
     );
     const scheduledOperationCount = baseline.devices.reduce((count, device) => {
       if (!device.enabled || device.mappingProfileId === null) {
@@ -152,7 +187,12 @@ class RunningProductionE2eStack implements ProductionE2eStack {
       const profile = mappingProfiles.get(device.mappingProfileId);
       return (
         count +
-        (profile?.mappings.filter((mapping) => mapping.enabled).length ?? 0)
+        (profile?.mappings.filter(
+          (mapping) =>
+            mapping.enabled &&
+            mapping.target.kind === "channel" &&
+            activeScheduledChannelIds.has(mapping.target.id),
+        ).length ?? 0)
       );
     }, 0);
     if (scheduledOperationCount === 0) {
@@ -160,14 +200,12 @@ class RunningProductionE2eStack implements ProductionE2eStack {
         "Broker restart requires at least one scheduled output operation",
       );
     }
-    await this.waitForSnapshot(
-      (snapshot) =>
-        snapshot.operations.items.filter(
-          (operation) =>
-            operation.kind === "set_pwm" &&
-            !baselineOperationIds.has(operation.id),
-        ).length >= scheduledOperationCount,
-      "a complete fresh scheduled PWM batch before broker restart",
+    await waitUntil(
+      () =>
+        countCompletedScheduledPwmExchanges(this.#broker.publications()) >=
+        baselineCompletedPwmExchanges + scheduledOperationCount,
+      "a complete acknowledged scheduled PWM batch before broker restart",
+      snapshotWaitTimeoutMs,
     );
     const settled = await this.waitForSettled();
     const activeOperationIds = settled.operations.items
@@ -234,11 +272,39 @@ class RunningProductionE2eStack implements ProductionE2eStack {
     faults: FakeEspResponseFaults,
   ): void {
     this.assertRunning();
-    const session = this.#fakeLauncher?.sessions.get(deviceKey);
-    if (session === undefined) {
-      throw new Error(`Fake ESP session ${deviceKey} is not running`);
+    const launcher = this.#fakeLauncher;
+    if (launcher === null) {
+      throw new Error("Fake ESP launcher is not running");
     }
-    session.actor.setResponseFaults(faults);
+    launcher.setResponseFaults(deviceKey, faults);
+  }
+
+  public setFakeDeviceNetworkEnabled(
+    deviceKey: (typeof fakeDevices)[number]["key"],
+    enabled: boolean,
+  ): void {
+    this.assertRunning();
+    const launcher = this.#fakeLauncher;
+    if (launcher === null) {
+      throw new Error("Fake ESP launcher is not running");
+    }
+    launcher.setNetworkEnabled(deviceKey, enabled);
+  }
+
+  public async setFakeDevicePower(
+    deviceKey: (typeof fakeDevices)[number]["key"],
+    powered: boolean,
+  ): Promise<void> {
+    this.assertRunning();
+    const launcher = this.#fakeLauncher;
+    if (launcher === null) {
+      throw new Error("Fake ESP launcher is not running");
+    }
+    if (powered) {
+      await launcher.powerOn(deviceKey);
+    } else {
+      await launcher.powerOff(deviceKey);
+    }
   }
 
   public async waitForSettled(): Promise<ControllerSnapshot> {
@@ -371,19 +437,48 @@ class RunningProductionE2eStack implements ProductionE2eStack {
     if (this.#fakeLauncher !== null) {
       throw new Error("Fake ESP launcher is already running");
     }
-    this.#fakeLauncher = await startFakeEspLauncher({
+    const launcher = await startFakeEspLauncher({
       brokerUrl: this.brokerUrl,
       storageDirectory: this.#paths.fakeEspStorage,
       devices: fakeDevices,
       onError: (error) => this.captureLog(`fake-esp: ${error.message}`),
     });
+    try {
+      this.#fakeControlServer = await startFakeEspControlServer({
+        host: "127.0.0.1",
+        port: this.#fakeControlPort,
+        launcher,
+      });
+      this.#fakeLauncher = launcher;
+    } catch (error) {
+      await launcher.stop();
+      throw error;
+    }
   }
 
   private async stopFakeDevices(): Promise<void> {
     const launcher = this.#fakeLauncher;
-    if (launcher === null) return;
+    const controlServer = this.#fakeControlServer;
+    if (launcher === null && controlServer === null) return;
     this.#fakeLauncher = null;
-    await launcher.stop();
+    this.#fakeControlServer = null;
+    const results = await Promise.allSettled([
+      controlServer?.stop() ?? Promise.resolve(),
+      launcher?.stop() ?? Promise.resolve(),
+    ]);
+    const failures = results
+      .filter(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      )
+      .map((result) =>
+        result.reason instanceof Error
+          ? result.reason
+          : new Error("Unknown fake ESP shutdown failure"),
+      );
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "Fake ESP shutdown failed");
+    }
   }
 
   private async waitForSnapshot(
@@ -430,8 +525,16 @@ export async function startProductionE2eStack(): Promise<ProductionE2eStack> {
   try {
     await seedState(paths);
     broker = await MosquittoTestHarness.start();
-    const controllerPort = await reserveLoopbackPort();
-    const stack = new RunningProductionE2eStack(paths, broker, controllerPort);
+    const [controllerPort, fakeControlPort] = await Promise.all([
+      reserveLoopbackPort(),
+      reserveLoopbackPort(),
+    ]);
+    const stack = new RunningProductionE2eStack(
+      paths,
+      broker,
+      controllerPort,
+      fakeControlPort,
+    );
     await stack.start();
     return stack;
   } catch (error) {
@@ -594,6 +697,57 @@ function schedulePoint(
     editorX: null,
     editorY: null,
   };
+}
+
+export function countCompletedScheduledPwmExchanges(
+  publications: readonly CapturedMqttPublication[],
+): number {
+  const requestIds = new Set<string>();
+  const responseIds = new Set<string>();
+  for (const publication of publications) {
+    if (publication.topic === "test/aquarium/command") {
+      const request = correlatedRequest(publication.payload);
+      if (
+        request !== null &&
+        scheduledPwmCommandPattern.test(request.command)
+      ) {
+        requestIds.add(request.id);
+      }
+      continue;
+    }
+    if (publication.topic !== "test/aquarium/response") {
+      continue;
+    }
+    try {
+      const response = espCommandResponseSchema.safeParse(
+        JSON.parse(publication.payload) as object,
+      );
+      if (response.success) {
+        responseIds.add(response.data.requestId);
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+    }
+  }
+  return [...requestIds].filter((requestId) => responseIds.has(requestId))
+    .length;
+}
+
+const scheduledPwmCommandPattern = /^[^;\s]+ s \d{1,2} \d{1,3} 1$/u;
+
+function correlatedRequest(
+  payload: string,
+): { readonly id: string; readonly command: string } | null {
+  const prefix = "request:";
+  const separator = payload.indexOf("|");
+  if (!payload.startsWith(prefix) || separator <= prefix.length) {
+    return null;
+  }
+  const id = payload.slice(prefix.length, separator);
+  const command = payload.slice(separator + 1);
+  return id.length > 0 && command.length > 0 ? { id, command } : null;
 }
 
 async function reserveLoopbackPort(): Promise<number> {

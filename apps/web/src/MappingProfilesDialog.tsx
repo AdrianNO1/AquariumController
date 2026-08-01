@@ -14,6 +14,8 @@ import {
   currentRevisionFromError,
 } from "./configuration-ui.js";
 import { ModalDialog } from "./ModalDialog.js";
+import { ModalBackdrop } from "./ModalBackdrop.js";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog.js";
 import { useDraftRevision } from "./use-draft-revision.js";
 
 type TargetKind = PinMapping["target"]["kind"];
@@ -25,6 +27,7 @@ export interface MappingProfilesDialogProps {
   readonly channels: readonly Channel[];
   readonly outputs: readonly Output[];
   readonly controlAreas: readonly ControlArea[];
+  readonly currentTypeKey: string;
   readonly expectedRevision: number;
   readonly refresh: () => void;
 }
@@ -51,6 +54,8 @@ interface TargetOption {
   readonly kind: TargetKind;
   readonly id: string;
   readonly label: string;
+  readonly searchText: string;
+  readonly currentArea: boolean;
 }
 
 export function MappingProfilesDialog({
@@ -60,6 +65,7 @@ export function MappingProfilesDialog({
   channels,
   outputs,
   controlAreas,
+  currentTypeKey,
   expectedRevision,
   refresh,
 }: MappingProfilesDialogProps): React.JSX.Element | null {
@@ -71,6 +77,7 @@ export function MappingProfilesDialog({
     ReadonlySet<string>
   >(() => new Set());
   const [editorDirty, setEditorDirty] = useState(false);
+  const [closeRequested, setCloseRequested] = useState(false);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocusAfterEditorReplacement = useRef(false);
   const visibleProfiles = profiles.filter(
@@ -127,15 +134,32 @@ export function MappingProfilesDialog({
     setNewProfileId(null);
   }
 
+  function requestClose(): void {
+    if (editorDirty) {
+      setCloseRequested(true);
+      return;
+    }
+    onClose();
+  }
+
+  function finishEditorAction(): void {
+    if (closeRequested) onClose();
+  }
+
+  function cancelNewProfile(): void {
+    setNewProfileId(null);
+    finishEditorAction();
+  }
+
   return (
-    <div
+    <ModalBackdrop
       className="modal-backdrop mapping-profiles-backdrop"
-      role="presentation"
+      onClose={requestClose}
     >
       <ModalDialog
         className="configuration-dialog mapping-profiles-dialog"
         labelledBy="mapping-profiles-dialog-heading"
-        onClose={onClose}
+        onClose={requestClose}
       >
         <div className="dialog-header mapping-profiles-dialog-header">
           <div>
@@ -147,7 +171,7 @@ export function MappingProfilesDialog({
             className="icon-button"
             type="button"
             aria-label="Close mapping profiles"
-            onClick={onClose}
+            onClick={requestClose}
           >
             ×
           </button>
@@ -188,15 +212,14 @@ export function MappingProfilesDialog({
             New profile
           </button>
         </div>
-        {editorDirty ? (
-          <p
-            className="muted-copy"
-            id="mapping-profile-switch-help"
-            role="status"
-          >
-            Save or discard changes before switching profiles.
-          </p>
-        ) : null}
+        <p
+          className={`muted-copy mapping-profile-switch-help${editorDirty ? "" : " mapping-profile-switch-help-hidden"}`}
+          id="mapping-profile-switch-help"
+          role={editorDirty ? "status" : undefined}
+          aria-hidden={editorDirty ? undefined : true}
+        >
+          Save or discard changes before switching profiles.
+        </p>
 
         {selectedProfile === null && newProfileId === null ? (
           <div className="empty-panel mapping-profile-empty">
@@ -217,16 +240,21 @@ export function MappingProfilesDialog({
             channels={channels}
             outputs={outputs}
             controlAreas={controlAreas}
+            currentTypeKey={currentTypeKey}
             expectedRevision={expectedRevision}
             refresh={refresh}
-            onCancelNew={() => setNewProfileId(null)}
+            onCancelNew={cancelNewProfile}
             onSavedNew={finishNewProfile}
             onDeleted={finishDeletion}
             onDirtyChange={setEditorDirty}
+            onSaved={finishEditorAction}
+            onDiscarded={finishEditorAction}
+            closeRequested={closeRequested}
+            onKeepEditing={() => setCloseRequested(false)}
           />
         )}
       </ModalDialog>
-    </div>
+    </ModalBackdrop>
   );
 }
 
@@ -236,12 +264,17 @@ interface MappingProfileEditorProps {
   readonly channels: readonly Channel[];
   readonly outputs: readonly Output[];
   readonly controlAreas: readonly ControlArea[];
+  readonly currentTypeKey: string;
   readonly expectedRevision: number;
   readonly refresh: () => void;
   readonly onCancelNew: () => void;
   readonly onSavedNew: (profileId: string) => void;
   readonly onDeleted: (profileId: string) => void;
   readonly onDirtyChange: (dirty: boolean) => void;
+  readonly onSaved: () => void;
+  readonly onDiscarded: () => void;
+  readonly closeRequested: boolean;
+  readonly onKeepEditing: () => void;
 }
 
 function MappingProfileEditor({
@@ -250,12 +283,17 @@ function MappingProfileEditor({
   channels,
   outputs,
   controlAreas,
+  currentTypeKey,
   expectedRevision,
   refresh,
   onCancelNew,
   onSavedNew,
   onDeleted,
   onDirtyChange,
+  onSaved,
+  onDiscarded,
+  closeRequested,
+  onKeepEditing,
 }: MappingProfileEditorProps): React.JSX.Element {
   const original = useMemo<MappingDraft>(
     () => ({
@@ -292,8 +330,8 @@ function MappingProfileEditor({
       : Math.max(deleteConflictRevision, expectedRevision);
   const validationErrors = validateDraft(draft);
   const targetOptions = useMemo(
-    () => buildTargetOptions(channels, outputs, controlAreas),
-    [channels, controlAreas, outputs],
+    () => buildTargetOptions(channels, outputs, controlAreas, currentTypeKey),
+    [channels, controlAreas, currentTypeKey, outputs],
   );
   const availableTarget = targetOptions.find(
     (option) =>
@@ -319,6 +357,7 @@ function MappingProfileEditor({
       draftRevision.reset();
       refresh();
       if (profile === null) onSavedNew(profileId);
+      onSaved();
     },
     onError: (error) => {
       const currentRevision = currentRevisionFromError(error);
@@ -405,6 +444,7 @@ function MappingProfileEditor({
       draft: original,
       touched: false,
     });
+    onDiscarded();
   }
 
   return (
@@ -520,12 +560,6 @@ function MappingProfileEditor({
           {configurationErrorMessage(saveMutation.error)}
         </p>
       )}
-      {saveMutation.isSuccess ? (
-        <p className="success-message" role="status">
-          Mapping profile save accepted. Refreshing authoritative state.
-        </p>
-      ) : null}
-
       <div className="button-row editor-actions">
         <button
           className="primary-button"
@@ -569,7 +603,10 @@ function MappingProfileEditor({
       </div>
 
       {confirmingDelete ? (
-        <div className="nested-confirmation-backdrop" role="presentation">
+        <ModalBackdrop
+          className="nested-confirmation-backdrop"
+          onClose={() => setConfirmingDelete(false)}
+        >
           <ModalDialog
             className="mapping-profile-delete-confirmation"
             describedBy="delete-mapping-profile-description"
@@ -616,8 +653,16 @@ function MappingProfileEditor({
               </button>
             </div>
           </ModalDialog>
-        </div>
+        </ModalBackdrop>
       ) : null}
+      <UnsavedChangesDialog
+        open={closeRequested && dirty}
+        saving={saveMutation.isPending}
+        saveDisabled={validationErrors.length > 0}
+        onSave={() => saveMutation.mutate()}
+        onDiscard={resetDraft}
+        onKeepEditing={onKeepEditing}
+      />
     </div>
   );
 }
@@ -748,7 +793,7 @@ function TargetPicker({
     normalizedSearch.length === 0
       ? kindOptions
       : kindOptions.filter((option) =>
-          option.label.toLocaleLowerCase().includes(normalizedSearch),
+          option.searchText.includes(normalizedSearch),
         );
 
   function openPicker(): void {
@@ -850,6 +895,7 @@ function buildTargetOptions(
   channels: readonly Channel[],
   outputs: readonly Output[],
   controlAreas: readonly ControlArea[],
+  currentTypeKey: string,
 ): readonly TargetOption[] {
   const areaLabels = new Map(
     controlAreas.map((area) => [area.typeKey, area.label]),
@@ -859,13 +905,23 @@ function buildTargetOptions(
       kind: "channel" as const,
       id: channel.id,
       label: `${areaLabels.get(channel.typeKey) ?? channel.typeKey} · ${channel.name}`,
+      searchText:
+        `${areaLabels.get(channel.typeKey) ?? channel.typeKey} ${channel.name} ${channel.typeKey}`.toLocaleLowerCase(),
+      currentArea: channel.typeKey === currentTypeKey,
     })),
     ...outputs.map((output) => ({
       kind: "output" as const,
       id: output.id,
       label: `${areaLabels.get(output.typeKey) ?? output.typeKey} · ${output.name}`,
+      searchText:
+        `${areaLabels.get(output.typeKey) ?? output.typeKey} ${output.name} ${output.typeKey}`.toLocaleLowerCase(),
+      currentArea: output.typeKey === currentTypeKey,
     })),
-  ].sort((left, right) => left.label.localeCompare(right.label));
+  ].sort(
+    (left, right) =>
+      Number(right.currentArea) - Number(left.currentArea) ||
+      left.label.localeCompare(right.label),
+  );
 }
 
 function toEditableMapping(mapping: PinMapping): EditableMapping {

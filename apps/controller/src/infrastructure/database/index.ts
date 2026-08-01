@@ -50,8 +50,8 @@ export {
   type PruneHistoricalNotificationDeliveriesInput,
   type PruneHistoricalNotificationDeliveriesResult,
 } from "./notification-delivery-retention.js";
+export { CONTROL_AREA_DEFINITIONS } from "./control-area-definitions.js";
 export {
-  CONTROL_AREA_DEFINITIONS,
   ControllerSnapshotRepository,
   InvalidPersistedSnapshotDataError,
   RECENT_OPERATION_LIMIT,
@@ -68,6 +68,7 @@ export {
   migrateStateDatabase,
   migrateStateDatabaseTo,
   STATE_CHANNEL_COLOR_MIGRATION_NAME,
+  STATE_CONTROL_AREA_MIGRATION_NAME,
   STATE_INITIAL_MIGRATION_NAME,
   STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
   STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,

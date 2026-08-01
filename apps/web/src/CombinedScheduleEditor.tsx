@@ -42,6 +42,11 @@ import {
 } from "./combined-schedule-state.js";
 import { CombinedScheduleSaveError } from "./combined-schedule-save.js";
 import { currentRevisionFromError } from "./configuration-ui.js";
+import {
+  localMinuteToUtcMinute,
+  utcMinuteOfDay,
+  utcMinuteToLocalMinute,
+} from "./local-time.js";
 
 export interface CombinedScheduleChannel {
   readonly channel: Channel;
@@ -70,7 +75,10 @@ export interface CombinedScheduleEditorProps {
   ) => void;
   readonly onSavingChange?: (saving: boolean) => void;
   readonly onAcceptRevisionConflict?: () => void;
+  /** UTC minute used by deterministic tests and previews. */
   readonly currentMinuteOfDay?: number;
+  /** JavaScript local-to-UTC timezone offset used by deterministic tests. */
+  readonly timezoneOffsetMinutes?: number;
 }
 
 export interface CombinedScheduleEditorHandle {
@@ -93,6 +101,7 @@ export const CombinedScheduleEditor = forwardRef<
     onSavingChange,
     onAcceptRevisionConflict,
     currentMinuteOfDay: suppliedCurrentMinute,
+    timezoneOffsetMinutes: suppliedTimezoneOffset,
   },
   ref,
 ): React.JSX.Element {
@@ -118,7 +127,12 @@ export const CombinedScheduleEditor = forwardRef<
   const savingRef = useRef(false);
   const dragRef = useRef<DragState | null>(null);
   const suppressGraphClickRef = useRef(false);
-  const currentMinute = useUtcMinute(suppliedCurrentMinute);
+  const clock = useScheduleClock(suppliedCurrentMinute, suppliedTimezoneOffset);
+  const currentUtcMinute = clock.utcMinute;
+  const currentLocalMinute = utcMinuteToLocalMinute(
+    currentUtcMinute,
+    clock.timezoneOffsetMinutes,
+  );
   const dirty = isCombinedScheduleStateDirty(state);
   const draftPoints = useMemo(
     (): CombinedScheduleDraftPoints =>
@@ -270,6 +284,10 @@ export const CombinedScheduleEditor = forwardRef<
     selectedDraft === null
       ? null
       : validateCombinedScheduleDraft(selectedDraft);
+  const toLocalMinute = (utcMinute: number): number =>
+    utcMinuteToLocalMinute(utcMinute, clock.timezoneOffsetMinutes);
+  const toUtcMinute = (localMinute: number): number =>
+    localMinuteToUtcMinute(localMinute, clock.timezoneOffsetMinutes);
 
   function selectChannel(channelId: string): void {
     dispatch({ type: "select_channel", channelId });
@@ -311,7 +329,8 @@ export const CombinedScheduleEditor = forwardRef<
       pointerId: event.pointerId,
       channelId: draft.channelId,
       pointId: point.id,
-      minuteGrabOffset: point.minuteOfDay - plotXToMinute(coordinate.x),
+      minuteGrabOffset:
+        toLocalMinute(point.minuteOfDay) - plotXToMinute(coordinate.x),
       percentageGrabOffset: point.percentage - plotYToPercentage(coordinate.y),
       captureElement: event.currentTarget,
     };
@@ -343,7 +362,7 @@ export const CombinedScheduleEditor = forwardRef<
         type: "update_point",
         channelId: drag.channelId,
         pointId: drag.pointId,
-        minuteOfDay: point.minuteOfDay,
+        minuteOfDay: toUtcMinute(point.minuteOfDay),
         percentage: point.percentage,
         currentRevision: expectedRevision,
       });
@@ -368,7 +387,7 @@ export const CombinedScheduleEditor = forwardRef<
       selectedDraft.points.some((point) => point.minuteOfDay === minuteOfDay)
     ) {
       setInteractionError(
-        `${minuteToTime(minuteOfDay)} already has a schedule point.`,
+        `${minuteToTime(toLocalMinute(minuteOfDay))} already has a schedule point.`,
       );
       return false;
     }
@@ -405,8 +424,11 @@ export const CombinedScheduleEditor = forwardRef<
       event.clientX,
       event.clientY,
     );
-    const minuteOfDay = snapDraggedMinute(plotXToMinute(coordinate.x));
-    addPoint(minuteOfDay, Math.round(plotYToPercentage(coordinate.y)));
+    const localMinute = snapDraggedMinute(plotXToMinute(coordinate.x));
+    addPoint(
+      toUtcMinute(localMinute),
+      Math.round(plotYToPercentage(coordinate.y)),
+    );
   }
 
   if (channels.length === 0) {
@@ -420,7 +442,7 @@ export const CombinedScheduleEditor = forwardRef<
   return (
     <section
       className="combined-schedule-editor"
-      aria-label="Combined UTC schedules"
+      aria-label="Combined local-time schedules"
     >
       <div className="combined-schedule-layout">
         <figure className="combined-schedule-figure">
@@ -432,7 +454,7 @@ export const CombinedScheduleEditor = forwardRef<
             }
             viewBox={`0 0 ${COMBINED_SCHEDULE_VIEW_BOX.width} ${COMBINED_SCHEDULE_VIEW_BOX.height}`}
             role="img"
-            aria-label="All channel output percentages across a UTC day"
+            aria-label="All channel output percentages across a local day"
             onPointerMove={movePointer}
             onPointerUp={finishDrag}
             onPointerCancel={finishDrag}
@@ -507,8 +529,8 @@ export const CombinedScheduleEditor = forwardRef<
             })}
             <line
               className="combined-schedule-current-time"
-              x1={minuteToPlotX(currentMinute)}
-              x2={minuteToPlotX(currentMinute)}
+              x1={minuteToPlotX(currentLocalMinute)}
+              x2={minuteToPlotX(currentLocalMinute)}
               y1={COMBINED_SCHEDULE_PLOT.top}
               y2={COMBINED_SCHEDULE_PLOT.bottom}
             />
@@ -534,7 +556,11 @@ export const CombinedScheduleEditor = forwardRef<
                 const draft = state.drafts[channel.id];
                 if (draft === undefined) return null;
                 const channelSelected = channel.id === state.selectedChannelId;
-                const points = cyclicPlotPoints(draft.points)
+                const localPoints = draft.points.map((point) => ({
+                  ...point,
+                  minuteOfDay: toLocalMinute(point.minuteOfDay),
+                }));
+                const points = cyclicPlotPoints(localPoints)
                   .map(
                     (point) =>
                       `${minuteToPlotX(point.minuteOfDay)},${percentageToPlotY(point.percentage)}`,
@@ -556,7 +582,11 @@ export const CombinedScheduleEditor = forwardRef<
                       stroke={color}
                       pointerEvents="none"
                     />
-                    {draft.points.map((point) => {
+                    {localPoints.map((localPoint) => {
+                      const point = draft.points.find(
+                        (candidate) => candidate.id === localPoint.id,
+                      );
+                      if (point === undefined) return null;
                       const pointSelected =
                         channelSelected &&
                         point.id === state.selectedPointIds[channel.id];
@@ -568,7 +598,7 @@ export const CombinedScheduleEditor = forwardRef<
                               : "combined-schedule-point"
                           }
                           key={point.id}
-                          cx={minuteToPlotX(point.minuteOfDay)}
+                          cx={minuteToPlotX(localPoint.minuteOfDay)}
                           cy={percentageToPlotY(point.percentage)}
                           r={pointSelected ? 11 : channelSelected ? 7.5 : 3.5}
                           fill={color}
@@ -627,7 +657,7 @@ export const CombinedScheduleEditor = forwardRef<
                   <span className="combined-schedule-channel-value">
                     {draft === undefined
                       ? "—"
-                      : `${Math.round(scheduleValueAt(draft.points, currentMinute))}%`}
+                      : `${Math.round(scheduleValueAt(draft.points, currentUtcMinute))}%`}
                   </span>
                   {draft !== undefined &&
                   isCombinedScheduleDraftDirty(draft) ? (
@@ -688,38 +718,47 @@ export const CombinedScheduleEditor = forwardRef<
             className="combined-schedule-point-list"
             aria-label={`${selectedChannel.channel.name} schedule points`}
           >
-            {selectedDraft.points.map((point) => (
-              <button
-                className={
-                  point.id === selectedPoint?.id
-                    ? "combined-schedule-point-button selected"
-                    : "combined-schedule-point-button"
-                }
-                key={point.id}
-                type="button"
-                aria-pressed={point.id === selectedPoint?.id}
-                onClick={() =>
-                  dispatch({
-                    type: "select_point",
-                    channelId: selectedDraft.channelId,
-                    pointId: point.id,
-                  })
-                }
-              >
-                {minuteToTime(point.minuteOfDay)} · {point.percentage}%
-              </button>
-            ))}
+            {[...selectedDraft.points]
+              .sort(
+                (left, right) =>
+                  toLocalMinute(left.minuteOfDay) -
+                  toLocalMinute(right.minuteOfDay),
+              )
+              .map((point) => (
+                <button
+                  className={
+                    point.id === selectedPoint?.id
+                      ? "combined-schedule-point-button selected"
+                      : "combined-schedule-point-button"
+                  }
+                  key={point.id}
+                  type="button"
+                  aria-pressed={point.id === selectedPoint?.id}
+                  onClick={() =>
+                    dispatch({
+                      type: "select_point",
+                      channelId: selectedDraft.channelId,
+                      pointId: point.id,
+                    })
+                  }
+                >
+                  {minuteToTime(toLocalMinute(point.minuteOfDay))} ·{" "}
+                  {point.percentage}%
+                </button>
+              ))}
           </div>
 
           {addPointMode ? (
             <NewPointForm
               key={selectedDraft.channelId}
               channelName={selectedChannel.channel.name}
-              initialMinuteOfDay={currentMinute}
+              initialMinuteOfDay={currentLocalMinute}
               initialPercentage={Math.round(
-                scheduleValueAt(selectedDraft.points, currentMinute),
+                scheduleValueAt(selectedDraft.points, currentUtcMinute),
               )}
-              onCommit={addPoint}
+              onCommit={(localMinute, percentage) =>
+                addPoint(toUtcMinute(localMinute), percentage)
+              }
             />
           ) : null}
 
@@ -727,13 +766,16 @@ export const CombinedScheduleEditor = forwardRef<
             <SelectedPointForm
               key={`${selectedPoint.id}:${selectedPoint.minuteOfDay}:${selectedPoint.percentage}`}
               channelName={selectedChannel.channel.name}
-              point={selectedPoint}
-              onCommit={(minuteOfDay, percentage) => {
+              point={{
+                ...selectedPoint,
+                minuteOfDay: toLocalMinute(selectedPoint.minuteOfDay),
+              }}
+              onCommit={(localMinute, percentage) => {
                 dispatch({
                   type: "update_point",
                   channelId: selectedDraft.channelId,
                   pointId: selectedPoint.id,
-                  minuteOfDay,
+                  minuteOfDay: toUtcMinute(localMinute),
                   percentage,
                   currentRevision: expectedRevision,
                 });
@@ -744,7 +786,7 @@ export const CombinedScheduleEditor = forwardRef<
 
           {addPointMode ? (
             <p className="combined-schedule-editor-message" role="status">
-              Click the chart or enter an exact UTC time to add the new point.
+              Click the chart or enter an exact local time to add the new point.
             </p>
           ) : null}
           {interactionError === null ? null : (
@@ -828,7 +870,7 @@ function NewPointForm({
     const minuteOfDay = timeToMinute(time);
     const parsedPercentage = Number(percentage);
     if (minuteOfDay === null || !Number.isFinite(parsedPercentage)) {
-      setError("Enter a complete UTC time and numeric percentage.");
+      setError("Enter a complete local time and numeric percentage.");
       return;
     }
     if (parsedPercentage < 0 || parsedPercentage > 100) {
@@ -841,9 +883,9 @@ function NewPointForm({
   return (
     <form className="combined-schedule-selected-point-form" onSubmit={commit}>
       <label>
-        New point UTC time
+        New point local time
         <input
-          aria-label={`${channelName} new point UTC time`}
+          aria-label={`${channelName} new point local time`}
           type="time"
           step="60"
           value={time}
@@ -859,7 +901,7 @@ function NewPointForm({
             type="number"
             min="0"
             max="100"
-            step="0.1"
+            step="1"
             value={percentage}
             onChange={(event) => setPercentage(event.currentTarget.value)}
             required
@@ -893,7 +935,7 @@ function SelectedPointForm({
     const minuteOfDay = timeToMinute(time);
     const parsedPercentage = Number(percentage);
     if (minuteOfDay === null || !Number.isFinite(parsedPercentage)) {
-      setError("Enter a complete UTC time and numeric percentage.");
+      setError("Enter a complete local time and numeric percentage.");
       return;
     }
     if (parsedPercentage < 0 || parsedPercentage > 100) {
@@ -907,9 +949,9 @@ function SelectedPointForm({
   return (
     <form className="combined-schedule-selected-point-form" onSubmit={commit}>
       <label>
-        UTC time
+        Local time
         <input
-          aria-label={`${channelName} selected point UTC time`}
+          aria-label={`${channelName} selected point local time`}
           type="time"
           step="60"
           value={time}
@@ -925,7 +967,7 @@ function SelectedPointForm({
             type="number"
             min="0"
             max="100"
-            step="0.1"
+            step="1"
             value={percentage}
             onChange={(event) => setPercentage(event.currentTarget.value)}
             required
@@ -955,22 +997,26 @@ function orderedChannels(
   ];
 }
 
-function useUtcMinute(suppliedMinute: number | undefined): number {
-  const [minute, setMinute] = useState(() => currentUtcMinute());
+function useScheduleClock(
+  suppliedUtcMinute: number | undefined,
+  suppliedTimezoneOffset: number | undefined,
+): { readonly utcMinute: number; readonly timezoneOffsetMinutes: number } {
+  const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
-    if (suppliedMinute !== undefined) return;
-    const timer = window.setInterval(
-      () => setMinute(currentUtcMinute()),
-      30_000,
-    );
+    if (
+      suppliedUtcMinute !== undefined &&
+      suppliedTimezoneOffset !== undefined
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
     return () => window.clearInterval(timer);
-  }, [suppliedMinute]);
-  return suppliedMinute ?? minute;
-}
-
-function currentUtcMinute(): number {
-  const now = new Date();
-  return now.getUTCHours() * 60 + now.getUTCMinutes();
+  }, [suppliedTimezoneOffset, suppliedUtcMinute]);
+  const now = new Date(nowMs);
+  return {
+    utcMinute: suppliedUtcMinute ?? utcMinuteOfDay(now),
+    timezoneOffsetMinutes: suppliedTimezoneOffset ?? now.getTimezoneOffset(),
+  };
 }
 
 function draftPointMapsEqual(

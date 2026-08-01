@@ -42,6 +42,14 @@ export interface CreatePendingDeviceOperationInput {
   readonly request: DeviceOperationRequest;
 }
 
+export interface DeviceOperationLifecycleOptions {
+  /**
+   * Internal operations are persisted for crash recovery while pending or in
+   * flight, but do not advance public state unless they end unsuccessfully.
+   */
+  readonly visibility?: "public" | "internal";
+}
+
 export interface CreatePendingUserConfigurationOperationInput extends CreatePendingDeviceOperationInput {
   readonly expectedRevision: number;
   readonly request: Extract<
@@ -139,9 +147,15 @@ export class ControlOperationRepository {
 
   createPending(
     input: CreatePendingDeviceOperationInput,
+    options: DeviceOperationLifecycleOptions = {},
   ): Promise<StoredDeviceOperation> {
     const parsed = parseCreateInput(input);
     return this.#serialize(async () => {
+      if (options.visibility === "internal") {
+        assertInternalOperation(parsed.request);
+        await this.#createInternalPending(parsed);
+        return this.#getById(parsed.id);
+      }
       const created = await this.#createPending(parsed, null);
       if (!created.changed) {
         throw new Error(
@@ -323,7 +337,11 @@ export class ControlOperationRepository {
     };
   }
 
-  markInFlight(id: string, atMs: number): Promise<StoredDeviceOperation> {
+  markInFlight(
+    id: string,
+    atMs: number,
+    options: DeviceOperationLifecycleOptions = {},
+  ): Promise<StoredDeviceOperation> {
     const parsedId = identifierSchema.parse(id);
     const parsedAtMs = nonnegativeSafeIntegerSchema.parse(atMs);
     return this.#serialize(async () => {
@@ -336,13 +354,18 @@ export class ControlOperationRepository {
       if (parsedAtMs < operation.requestedAtMs) {
         throw new RangeError("In-flight time must not precede request time");
       }
-      await this.#commitTransition(
-        operation,
-        "in_flight",
-        parsedAtMs,
-        null,
-        null,
-      );
+      if (options.visibility === "internal") {
+        assertInternalOperation(operation.request);
+        await this.#markInternalInFlight(operation);
+      } else {
+        await this.#commitTransition(
+          operation,
+          "in_flight",
+          parsedAtMs,
+          null,
+          null,
+        );
+      }
       return this.#getById(parsedId);
     });
   }
@@ -351,6 +374,7 @@ export class ControlOperationRepository {
     id: string,
     completedAtMs: number,
     result: DeviceOperationResult,
+    options: DeviceOperationLifecycleOptions = {},
   ): Promise<StoredDeviceOperation> {
     const parsedId = identifierSchema.parse(id);
     const parsedCompletedAtMs =
@@ -375,6 +399,19 @@ export class ControlOperationRepository {
         operation.request,
         parsedResult,
       );
+      if (
+        options.visibility === "internal" &&
+        parsedResult.status === "succeeded"
+      ) {
+        assertInternalOperation(operation.request);
+        await this.#deleteInternalSuccess(operation);
+        return {
+          ...operation,
+          status: "succeeded",
+          completedAtMs: parsedCompletedAtMs,
+          result: parsedResult,
+        };
+      }
       await this.#commitTransition(
         operation,
         parsedResult.status,
@@ -854,6 +891,71 @@ export class ControlOperationRepository {
     );
   }
 
+  async #createInternalPending(
+    parsed: CreatePendingDeviceOperationInput,
+  ): Promise<void> {
+    await this.#database.transaction().execute(async (transaction) => {
+      const device = await transaction
+        .selectFrom("devices")
+        .select("id")
+        .where("id", "=", parsed.deviceId)
+        .executeTakeFirst();
+      if (device === undefined) {
+        throw new DeviceOperationDeviceNotFoundError(parsed.deviceId);
+      }
+      await transaction
+        .insertInto("control_operations")
+        .values({
+          id: parsed.id,
+          device_id: parsed.deviceId,
+          kind: parsed.request.kind,
+          status: "pending",
+          requested_at_ms: parsed.requestedAtMs,
+          deadline_at_ms: parsed.deadlineAtMs,
+          completed_at_ms: null,
+          request_json: JSON.stringify(parsed.request),
+          request_schema_version: DEVICE_OPERATION_REQUEST_SCHEMA_VERSION,
+          result_json: null,
+          result_schema_version: null,
+        })
+        .executeTakeFirstOrThrow();
+    });
+  }
+
+  async #markInternalInFlight(operation: StoredDeviceOperation): Promise<void> {
+    const update = await this.#database
+      .updateTable("control_operations")
+      .set({
+        status: "in_flight",
+        completed_at_ms: null,
+        result_json: null,
+        result_schema_version: null,
+      })
+      .where("id", "=", operation.id)
+      .where("status", "=", operation.status)
+      .executeTakeFirst();
+    if (update.numUpdatedRows !== 1n) {
+      throw new InvalidDeviceOperationTransitionError(
+        `Operation ${operation.id} changed concurrently from ${operation.status}`,
+      );
+    }
+  }
+
+  async #deleteInternalSuccess(
+    operation: StoredDeviceOperation,
+  ): Promise<void> {
+    const deleted = await this.#database
+      .deleteFrom("control_operations")
+      .where("id", "=", operation.id)
+      .where("status", "=", operation.status)
+      .executeTakeFirst();
+    if (deleted.numDeletedRows !== 1n) {
+      throw new InvalidDeviceOperationTransitionError(
+        `Operation ${operation.id} changed concurrently from ${operation.status}`,
+      );
+    }
+  }
+
   async #getById(id: string): Promise<StoredDeviceOperation> {
     const row = await this.#database
       .selectFrom("control_operations")
@@ -905,6 +1007,12 @@ function parseCreateInput(
     deadlineAtMs,
     request: deviceOperationRequestSchema.parse(input.request),
   };
+}
+
+function assertInternalOperation(request: DeviceOperationRequest): void {
+  if (request.kind !== "set_pwm") {
+    throw new TypeError("Only routine PWM operations may be internal");
+  }
 }
 
 function parseStoredOperation(

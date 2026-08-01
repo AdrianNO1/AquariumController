@@ -41,6 +41,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   server.resetHandlers();
+  window.localStorage.clear();
 });
 
 afterAll(() => {
@@ -49,11 +50,11 @@ afterAll(() => {
 });
 
 describe("maintainer overview", () => {
-  it("shows compact system stats, utility navigation, and all control areas", async () => {
+  it("shows compact system stats, tucked-away utilities, and all control areas", async () => {
     installHealthyApi();
     const snapshot = overviewSnapshot();
 
-    renderOverview(controllerState(snapshot));
+    const user = renderOverview(controllerState(snapshot));
 
     expect(screen.getByRole("heading", { name: "Overview" })).toBeTruthy();
     expect(screen.getByText("1 online")).toBeTruthy();
@@ -62,7 +63,14 @@ describe("maintainer overview", () => {
     expect(screen.getByText("1 offline")).toBeTruthy();
     expect(screen.getByText("1 active")).toBeTruthy();
 
-    for (const name of ["Overview", "Operations", "Alerts", "Logs"]) {
+    expect(screen.getByRole("link", { name: "Overview" })).toBeTruthy();
+    for (const name of ["Operations", "Alerts", "Logs"]) {
+      expect(screen.queryByRole("link", { name })).toBeNull();
+    }
+    await user.click(
+      screen.getByRole("button", { name: "Adrian sine knapper" }),
+    );
+    for (const name of ["Operations", "Alerts", "Logs"]) {
       expect(screen.getByRole("link", { name })).toBeTruthy();
     }
 
@@ -119,6 +127,17 @@ describe("maintainer overview", () => {
       screen.getByRole("button", { name: "Retry state connection" }),
     );
     expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("shows maintenance navigation on the overview when developer mode is enabled", () => {
+    installHealthyApi();
+    window.localStorage.setItem("dev", "true");
+
+    renderOverview(controllerState(overviewSnapshot()));
+
+    for (const name of ["Operations", "Alerts", "Logs"]) {
+      expect(screen.getByRole("link", { name })).toBeTruthy();
+    }
   });
 
   it("flags online devices with firmware or configuration warnings", () => {

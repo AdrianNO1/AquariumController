@@ -34,6 +34,7 @@ export const manualOverrideDurationSecondsSchema = z
 
 export const startManualOverrideRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
+  replaceOverrideId: identifierSchema.optional(),
   target: manualOverrideTargetSchema,
   valuePercentage: percentageSchema,
   durationSeconds: manualOverrideDurationSecondsSchema,

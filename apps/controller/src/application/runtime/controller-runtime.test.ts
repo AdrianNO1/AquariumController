@@ -232,14 +232,12 @@ describe("controller MQTT runtime composition", () => {
       expect(publishedCommand(client, "A1 p")).toBeDefined(),
     );
     await vi.advanceTimersByTimeAsync(1_000);
-    await vi.waitFor(async () => {
-      const skipped = await databases.events
-        .selectFrom("interactions")
-        .select(({ fn }) => fn.countAll<number>().as("count"))
-        .where("kind", "=", "mqtt.discovery-skipped")
-        .executeTakeFirstOrThrow();
-      expect(Number(skipped.count)).toBe(1);
-    });
+    const skipped = await databases.events
+      .selectFrom("interactions")
+      .select(({ fn }) => fn.countAll<number>().as("count"))
+      .where("kind", "=", "mqtt.discovery-skipped")
+      .executeTakeFirstOrThrow();
+    expect(Number(skipped.count)).toBe(0);
     expect(
       client.publishes.filter(({ payload }) => payload === "discover"),
     ).toHaveLength(1);
@@ -254,17 +252,13 @@ describe("controller MQTT runtime composition", () => {
       client.publishes.every(({ topic }) => topic === "test/aquarium/command"),
     ).toBe(true);
 
-    const announcementLog = await databases.events
+    const announcementLogs = await databases.events
       .selectFrom("interactions")
-      .selectAll()
+      .select(({ fn }) => fn.countAll<number>().as("count"))
       .where("kind", "=", "mqtt.announcement")
       .where("device_id", "=", "A1")
       .executeTakeFirstOrThrow();
-    expect(announcementLog).toMatchObject({
-      topic: "test/aquarium/announce",
-      byte_count: encoder.encode(validPayload).byteLength,
-      outcome: "succeeded",
-    });
+    expect(Number(announcementLogs.count)).toBe(0);
   });
 
   it("requires a completed persisted-state reconciliation for every connection", async () => {

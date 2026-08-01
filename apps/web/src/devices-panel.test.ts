@@ -3,7 +3,14 @@
 
 import type { Device, MappingProfile } from "@aquarium/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
 import { setupServer } from "msw/node";
@@ -103,6 +110,23 @@ describe("DevicesPanel", () => {
     expect(screen.queryByText("Controls")).toBeNull();
   });
 
+  it("updates relative last-seen labels locally without refreshing controller state", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(timestamp));
+    try {
+      const refresh = vi.fn();
+      renderPanel(refresh);
+
+      expect(screen.getAllByText("0s ago")).toHaveLength(2);
+      act(() => vi.advanceTimersByTime(1_000));
+      expect(screen.getAllByText("1s ago")).toHaveLength(2);
+      expect(refresh).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
   it("offers exclusion only for stale and offline devices and sends the authoritative revision", async () => {
     const requests: Array<{
       readonly id: string;
@@ -133,23 +157,23 @@ describe("DevicesPanel", () => {
 
     expect(
       screen.queryByRole("button", {
-        name: "Exclude Online rack from controller commands",
+        name: "Hide Online rack until it reconnects",
       }),
     ).toBeNull();
     expect(
       screen.getByRole("button", {
-        name: "Exclude Stale rack from controller commands",
+        name: "Hide Stale rack until it reconnects",
       }),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", {
-        name: "Exclude Legacy rack from controller commands",
+        name: "Hide Legacy rack until it reconnects",
       }),
     ).toBeTruthy();
 
     await user.click(
       screen.getByRole("button", {
-        name: "Exclude Stale rack from controller commands",
+        name: "Hide Stale rack until it reconnects",
       }),
     );
 
@@ -162,6 +186,32 @@ describe("DevicesPanel", () => {
       ]),
     );
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("hides operator-excluded devices but keeps protocol quarantines visible", () => {
+    const hiddenSource = devices[1];
+    const quarantinedSource = devices[2];
+    if (hiddenSource === undefined || quarantinedSource === undefined) {
+      throw new Error("Test devices are missing exclusion fixtures");
+    }
+    const hidden = { ...hiddenSource, enabled: false };
+    const quarantined = {
+      ...quarantinedSource,
+      enabled: false,
+      status: "error" as const,
+      lastError: {
+        code: "protocol_invalid_response",
+        message: "Invalid response",
+      },
+    };
+
+    renderPanel(vi.fn(), [hidden, quarantined]);
+
+    expect(screen.queryByLabelText("ESP32 device Stale rack")).toBeNull();
+    expect(screen.getByLabelText("ESP32 device Legacy rack")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Include in controller commands" }),
+    ).toBeTruthy();
   });
 
   it("allows a reported configuration mismatch to be reapplied when a firmware warning masks its error code", async () => {
@@ -216,6 +266,39 @@ describe("DevicesPanel", () => {
         pwmResolutionBits: 8,
       }),
     );
+  });
+
+  it("requires edited configuration to be saved or discarded before backdrop close", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(
+      within(screen.getByLabelText("ESP32 device Online rack")).getByRole(
+        "button",
+        { name: "Edit" },
+      ),
+    );
+    const name = screen.getByRole("textbox", { name: "Device name" });
+    await user.clear(name);
+    await user.type(name, "Renamed-rack");
+    const backdrop = screen.getByRole("dialog", {
+      name: "Edit Online rack",
+    }).parentElement;
+    if (backdrop === null) throw new Error("Device backdrop is missing");
+
+    await user.pointer({ target: backdrop, keys: "[MouseLeft]" });
+
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Save changes before closing?",
+    });
+    expect(
+      screen.getByRole("dialog", { name: "Edit Online rack" }),
+    ).toBeTruthy();
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Discard changes" }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Edit Online rack" }),
+    ).toBeNull();
   });
 });
 

@@ -39,7 +39,8 @@ afterEach(async () => {
 
 describe("persistent device operation service", () => {
   it("persists pending -> in_flight -> succeeded and confirms reported configuration", async () => {
-    const context = await setup();
+    const onDeviceContact = vi.fn();
+    const context = await setup({ onDeviceContact });
     context.executor.outcomes.push({
       index: 0,
       command: "A1 e Reef 6000 10",
@@ -71,6 +72,10 @@ describe("persistent device operation service", () => {
       last_error_code: null,
     });
     expect(context.executor.calls).toHaveLength(1);
+    expect(onDeviceContact).toHaveBeenCalledWith({
+      deviceId: "A1",
+      observedAtMs: expect.any(Number),
+    });
     const eventTypes = await context.databases.state
       .selectFrom("state_outbox")
       .select("event_type")
@@ -1118,6 +1123,10 @@ async function setup(
   options: {
     readonly startService?: boolean;
     readonly onBackgroundError?: (error: Error) => void;
+    readonly onDeviceContact?: (contact: {
+      readonly deviceId: string;
+      readonly observedAtMs: number;
+    }) => void;
   } = {},
 ): Promise<TestContext> {
   const databases = await openControllerDatabases({
@@ -1170,6 +1179,9 @@ async function setup(
         ((error) => {
           throw error;
         }),
+      ...(options.onDeviceContact === undefined
+        ? {}
+        : { onDeviceContact: options.onDeviceContact }),
     },
   );
   if (options.startService !== false) {

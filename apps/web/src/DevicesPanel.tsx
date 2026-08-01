@@ -4,7 +4,7 @@ import type {
   PatchDeviceConfigurationRequest,
 } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { patchDeviceConfiguration, setDeviceEnabled } from "./api.js";
 import {
@@ -12,6 +12,8 @@ import {
   currentRevisionFromError,
 } from "./configuration-ui.js";
 import { ModalDialog } from "./ModalDialog.js";
+import { ModalBackdrop } from "./ModalBackdrop.js";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog.js";
 
 export interface DevicesPanelProps {
   readonly devices: readonly Device[];
@@ -33,6 +35,11 @@ export function DevicesPanel({
 }: DevicesPanelProps): React.JSX.Element {
   const [editing, setEditing] = useState<EditingDevice | null>(null);
   const [pendingDeviceId, setPendingDeviceId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, []);
   const enabledMutation = useMutation({
     retry: false,
     mutationFn: ({
@@ -52,6 +59,10 @@ export function DevicesPanel({
   const profileNames = new Map(
     mappingProfiles.map((profile) => [profile.id, profile.name]),
   );
+  const visibleDevices = devices.filter(
+    (device) =>
+      device.enabled || device.lastError?.code === "protocol_invalid_response",
+  );
 
   return (
     <section className="devices-section" aria-labelledby="devices-heading">
@@ -65,11 +76,11 @@ export function DevicesPanel({
         </button>
       </div>
 
-      {devices.length === 0 ? (
+      {visibleDevices.length === 0 ? (
         <p className="empty-panel">No ESP32 devices have announced yet.</p>
       ) : (
         <div className="device-grid">
-          {devices.map((device) => {
+          {visibleDevices.map((device) => {
             const status = device.enabled ? device.status : "excluded";
             const canExclude =
               device.enabled &&
@@ -114,8 +125,8 @@ export function DevicesPanel({
                       <button
                         className="device-exclude-button"
                         type="button"
-                        aria-label={`Exclude ${device.desired.name} from controller commands`}
-                        title="Exclude this device from controller commands"
+                        aria-label={`Hide ${device.desired.name} until it reconnects`}
+                        title="Hide this device and stop sending commands until it reconnects"
                         disabled={pendingDeviceId === device.id}
                         onClick={() =>
                           enabledMutation.mutate({
@@ -146,7 +157,7 @@ export function DevicesPanel({
                   </div>
                   <div>
                     <dt>Last seen</dt>
-                    <dd>{formatLastSeen(device.lastSeenAt)}</dd>
+                    <dd>{formatLastSeen(device.lastSeenAt, nowMs)}</dd>
                   </div>
                 </dl>
                 {configurationMatches(device) ? null : (
@@ -162,7 +173,8 @@ export function DevicesPanel({
                     {device.lastError.message}
                   </p>
                 )}
-                {!device.enabled ? (
+                {!device.enabled &&
+                device.lastError?.code === "protocol_invalid_response" ? (
                   <button
                     className="secondary-button compact-button"
                     type="button"
@@ -217,6 +229,7 @@ function DeviceConfigurationDialog({
   const [resolution, setResolution] = useState(
     String(device.desired.pwmResolutionBits),
   );
+  const [closeRequested, setCloseRequested] = useState(false);
   const parsedFrequency = Number(frequency);
   const parsedResolution = Number(resolution);
   const fieldsChanged =
@@ -264,12 +277,20 @@ function DeviceConfigurationDialog({
     },
   });
 
+  function requestClose(): void {
+    if (fieldsChanged) {
+      setCloseRequested(true);
+      return;
+    }
+    onClose();
+  }
+
   return (
-    <div className="modal-backdrop" role="presentation">
+    <ModalBackdrop onClose={requestClose}>
       <ModalDialog
         className="configuration-dialog device-dialog"
         labelledBy={`device-dialog-${device.id}`}
-        onClose={onClose}
+        onClose={requestClose}
       >
         <div className="dialog-header">
           <div>
@@ -282,7 +303,7 @@ function DeviceConfigurationDialog({
             className="icon-button"
             type="button"
             aria-label="Close device editor"
-            onClick={onClose}
+            onClick={requestClose}
           >
             ×
           </button>
@@ -339,7 +360,7 @@ function DeviceConfigurationDialog({
               type="button"
               onClick={onClose}
             >
-              Cancel
+              {fieldsChanged ? "Discard changes" : "Close"}
             </button>
             <button
               className="primary-button"
@@ -358,8 +379,15 @@ function DeviceConfigurationDialog({
           Saving records controller intent. Reported values update only after
           this ESP confirms them.
         </p>
+        <UnsavedChangesDialog
+          open={closeRequested && fieldsChanged}
+          saving={mutation.isPending}
+          onSave={() => mutation.mutate()}
+          onDiscard={onClose}
+          onKeepEditing={() => setCloseRequested(false)}
+        />
       </ModalDialog>
-    </div>
+    </ModalBackdrop>
   );
 }
 
@@ -395,11 +423,11 @@ function firmwarePresentation(device: Device): {
   return { label: `${version} · current`, className: "firmware-current" };
 }
 
-function formatLastSeen(value: string | null): string {
+function formatLastSeen(value: string | null, nowMs: number): string {
   if (value === null) return "Never";
   const differenceSeconds = Math.max(
     0,
-    Math.round((Date.now() - Date.parse(value)) / 1_000),
+    Math.floor((nowMs - Date.parse(value)) / 1_000),
   );
   if (differenceSeconds < 60) return `${differenceSeconds}s ago`;
   if (differenceSeconds < 3_600) {

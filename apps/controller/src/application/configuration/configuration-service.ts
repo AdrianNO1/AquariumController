@@ -1,6 +1,7 @@
 import type {
   AcknowledgeAlertRequest,
   AlertRulesResponse,
+  CreateControlAreaRequest,
   CreateAlertRuleRequest,
   CreateChannelRequest,
   MutationResult,
@@ -8,6 +9,7 @@ import type {
   PatchAlertRuleRequest,
   PatchDeviceConfigurationRequest,
   RenameChannelRequest,
+  RenameControlAreaRequest,
   ReplaceMappingProfileRequest,
   ReplaceScheduleRequest,
   SetDeviceEnabledRequest,
@@ -69,6 +71,15 @@ export class ConfigurationRelationalConflictError extends Error {
 }
 
 export interface ControllerConfigurationService {
+  createControlArea(request: CreateControlAreaRequest): Promise<MutationResult>;
+  renameControlArea(
+    areaSlug: string,
+    request: RenameControlAreaRequest,
+  ): Promise<MutationResult>;
+  deleteControlArea(
+    areaSlug: string,
+    expectedRevision: number,
+  ): Promise<MutationResult>;
   createChannel(request: CreateChannelRequest): Promise<MutationResult>;
   renameChannel(
     channelId: string,

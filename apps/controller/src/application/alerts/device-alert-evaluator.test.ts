@@ -7,6 +7,7 @@ import {
   toCommittedStateEvent,
   type StateDatabaseSchema,
 } from "../../infrastructure/database/index.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../maintenance/controller-storage-health-service.js";
 import { AlertService } from "./alert-service.js";
 import {
   DeviceAlertEvaluator,
@@ -32,6 +33,7 @@ describe("device alert evaluator", () => {
         device("B2", "offline", 1),
         device("A1", "online", 1),
         device("disabled", "error", 0),
+        device(CONTROLLER_STORAGE_HEALTH_DEVICE_ID, "offline", 1),
       ])
       .execute();
     const observations: AlertObservation[] = [];
@@ -75,6 +77,12 @@ describe("device alert evaluator", () => {
         enabled: 1,
       },
     ]);
+    expect(
+      observations.some(
+        (observation) =>
+          observation.sourceId === CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+      ),
+    ).toBe(false);
     const outbox = await database
       .selectFrom("state_outbox")
       .selectAll()

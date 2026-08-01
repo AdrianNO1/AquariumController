@@ -52,6 +52,42 @@ afterEach(async () => {
 });
 
 describe("configuration HTTP routes", () => {
+  it("creates, renames, and deletes control areas through revision-checked routes", async () => {
+    const { repository } = await createRepository();
+    const app = trackApp(buildApp({ configurationService: repository }));
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/control-areas",
+      payload: { expectedRevision: 0, label: "Anemone tank" },
+    });
+    expect(created.statusCode).toBe(200);
+    expect(created.json()).toMatchObject({
+      changed: true,
+      revision: 1,
+      event: {
+        type: "control_area.created",
+        entity: { type: "control_area", id: "anemone-tank" },
+      },
+    });
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: "/api/control-areas/anemone-tank",
+      payload: { expectedRevision: 1, label: "Anemones" },
+    });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ changed: true, revision: 2 });
+
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: "/api/control-areas/anemone-tank",
+      payload: { expectedRevision: 2 },
+    });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toMatchObject({ changed: true, revision: 3 });
+  });
+
   it("validates requests before returning typed unavailable-service errors", async () => {
     const app = trackApp(buildApp());
     const invalid = await app.inject({
@@ -271,6 +307,40 @@ describe("configuration HTTP routes", () => {
       resource: "mapping_profile",
       id: "profile-missing",
     });
+  });
+
+  it("requests immediate discovery after a device is included", async () => {
+    const { database, repository } = await createRepository();
+    await database
+      .insertInto("devices")
+      .values({
+        id: "device-main",
+        hardware_id: "hardware-main",
+        name: "Main",
+        desired_pwm_frequency_hz: 1_000,
+        desired_pwm_resolution_bits: 8,
+        enabled: 0,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    const requestDeviceDiscovery = vi.fn();
+    const app = trackApp(
+      buildApp({
+        configurationService: repository,
+        deviceDiscoveryCommands: { requestDeviceDiscovery },
+      }),
+    );
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/devices/device-main/enabled",
+      payload: { expectedRevision: 0, enabled: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ changed: true, revision: 1 });
+    expect(requestDeviceDiscovery).toHaveBeenCalledOnce();
   });
 
   it("delegates device configuration and alert acknowledgement commands", async () => {

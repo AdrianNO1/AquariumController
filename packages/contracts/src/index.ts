@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 import { committedStateEventSchema } from "./controller.js";
-import { controlAreaSlugSchema, isoTimestampSchema } from "./primitives.js";
+import {
+  controlAreaSlugSchema,
+  identifierSchema,
+  isoTimestampSchema,
+} from "./primitives.js";
 
 export * from "./controller.js";
 export * from "./logs.js";
@@ -47,10 +51,19 @@ export const streamHeartbeatEventSchema = z.strictObject({
   }),
 });
 
+export const deviceContactEventSchema = z.strictObject({
+  type: z.literal("device.contact"),
+  occurredAt: isoTimestampSchema,
+  data: z.strictObject({
+    deviceId: identifierSchema,
+  }),
+});
+
 export const systemStreamEventSchema = z.discriminatedUnion("type", [
   streamReadyEventSchema,
   resyncRequiredEventSchema,
   streamHeartbeatEventSchema,
+  deviceContactEventSchema,
 ]);
 
 export type SystemStreamEvent = z.infer<typeof systemStreamEventSchema>;

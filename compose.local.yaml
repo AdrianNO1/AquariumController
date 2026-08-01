@@ -39,6 +39,7 @@ services:
     ports:
       - "127.0.0.1:${AQUARIUM_TEST_MQTT_PORT:-18883}:1883"
       - "127.0.0.1:${AQUARIUM_TEST_HTTP_PORT:-3001}:3001"
+      - "127.0.0.1:${AQUARIUM_FAKE_ESP_HTTP_PORT:-3002}:3002"
     volumes:
       - type: bind
         source: ./deployment/mosquitto/mosquitto.local.conf
@@ -133,6 +134,10 @@ services:
       - /var/lib/fake-esp
       - --namespace
       - test/aquarium
+      - --control-host
+      - 0.0.0.0
+      - --control-port
+      - "3002"
       - --device
       - reef-left:ReefLeft:000000A1
       - --device
@@ -145,7 +150,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "const fs=require('node:fs');for(const device of ['reef-left','reef-right'])JSON.parse(fs.readFileSync(`/var/lib/fake-esp/$${device}/eeprom.json`,'utf8'))",
+          "fetch('http://127.0.0.1:3002/api/health').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))",
         ]
       interval: 5s
       timeout: 3s

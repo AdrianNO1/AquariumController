@@ -1,7 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-import type { CommittedStateEvent } from "@aquarium/contracts";
+import {
+  deviceContactEventSchema,
+  type CommittedStateEvent,
+} from "@aquarium/contracts";
 import { sql } from "kysely";
 
 import { buildApp } from "./app.js";
@@ -218,6 +221,15 @@ const runtimeComposition = composeControllerRuntime({
   schedulingTime,
   deviceAlertEvaluator: new DeviceAlertEvaluator(databases.state, alertService),
   onError: reportRuntimeError,
+  onDeviceContact: ({ deviceId, observedAtMs }) => {
+    eventStreamHub.publishTransient(
+      deviceContactEventSchema.parse({
+        type: "device.contact",
+        occurredAt: new Date(observedAtMs).toISOString(),
+        data: { deviceId },
+      }),
+    );
+  },
 });
 const retentionCoordinator = new DailyEventRetentionCoordinator(
   new SchedulerGuardRepository(databases.state),
@@ -279,6 +291,7 @@ const app = buildApp({
     ? {
         deviceConfigurationCommands: runtimeComposition.deviceOperations,
         manualOverrideCommands: runtimeComposition.manualOverrideCommands,
+        deviceDiscoveryCommands: runtimeComposition.deviceDiscovery,
       }
     : {}),
 });
@@ -485,6 +498,7 @@ function scheduleTriggersFor(
         case "device":
           return [{ kind: "device_configuration", deviceId: invalidation.id }];
         case "controller":
+        case "control_area":
         case "operation":
         case "override":
         case "alert_rule":

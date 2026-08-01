@@ -6,15 +6,18 @@ import type { Kysely } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  ConfigurationNotFoundError,
   ConfigurationRelationalConflictError,
   ConfigurationRevisionConflictError,
   ConfigurationValidationError,
 } from "../../application/configuration/index.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import {
   ControllerConfigurationRepository,
   ControllerSnapshotRepository,
   commitStateChange,
   openStateDatabase,
+  parseStoredStateOutboxEnvelope,
   readCurrentStateRevision,
   type StateDatabaseSchema,
 } from "./index.js";
@@ -54,6 +57,171 @@ afterEach(async () => {
 });
 
 describe("ControllerConfigurationRepository", () => {
+  it("creates, renames, and deletes areas with recoverable audit details", async () => {
+    const database = await openDatabase();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+
+    await expect(
+      repository.createControlArea({
+        expectedRevision: 0,
+        label: "Anemone tank",
+      }),
+    ).resolves.toMatchObject({
+      changed: true,
+      revision: 1,
+      event: {
+        type: "control_area.created",
+        entity: { type: "control_area", id: "anemone-tank" },
+      },
+    });
+    await expect(
+      repository.renameControlArea("anemone-tank", {
+        expectedRevision: 1,
+        label: "Anemones",
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 2 });
+    await expect(
+      repository.deleteControlArea("anemone-tank", 2),
+    ).resolves.toMatchObject({ changed: true, revision: 3 });
+
+    await expect(
+      database
+        .selectFrom("control_areas")
+        .select("slug")
+        .where("slug", "=", "anemone-tank")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+    await expect(
+      database
+        .selectFrom("throttles")
+        .select("id")
+        .where("id", "=", "throttle-anemone-tank")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+
+    const outboxRows = await database
+      .selectFrom("state_outbox")
+      .selectAll()
+      .orderBy("revision")
+      .execute();
+    expect(
+      outboxRows.map((row) => parseStoredStateOutboxEnvelope(row).details.data),
+    ).toEqual([
+      {
+        schemaVersion: 1,
+        action: "created",
+        resource: "control_area",
+        id: "anemone-tank",
+        before: null,
+        after: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemone tank",
+        },
+        throttle: { id: "throttle-anemone-tank", percentage: 100 },
+      },
+      {
+        schemaVersion: 1,
+        action: "updated",
+        resource: "control_area",
+        id: "anemone-tank",
+        before: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemone tank",
+        },
+        after: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemones",
+        },
+        throttle: { id: "throttle-anemone-tank", percentage: 100 },
+      },
+      {
+        schemaVersion: 1,
+        action: "deleted",
+        resource: "control_area",
+        id: "anemone-tank",
+        before: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemones",
+        },
+        after: null,
+        throttle: { id: "throttle-anemone-tank", percentage: 100 },
+      },
+    ]);
+  });
+
+  it("does not delete an area while it owns live configuration", async () => {
+    const database = await openDatabase();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+    await repository.createControlArea({
+      expectedRevision: 0,
+      label: "Coral tank",
+    });
+    await repository.createChannel({
+      expectedRevision: 1,
+      id: "channel-coral",
+      name: "Coral light",
+      color: "#6f5bd5",
+      typeKey: "coral-tank",
+      throttleId: "throttle-coral-tank",
+      displayOrder: 0,
+      enabled: true,
+    });
+
+    await expect(
+      repository.deleteControlArea("coral-tank", 2),
+    ).rejects.toMatchObject({
+      conflicts: [
+        expect.objectContaining({
+          resource: "channel",
+          relation: "control_area",
+        }),
+      ],
+    });
+    expect(await readCurrentStateRevision(database)).toBe(2);
+  });
+
+  it("does not expose the internal storage-health owner as an operator device", async () => {
+    const database = await openDatabase();
+    await database
+      .insertInto("devices")
+      .values({
+        id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        hardware_id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        name: "Controller storage health",
+        desired_pwm_frequency_hz: 1_000,
+        desired_pwm_resolution_bits: 8,
+        status: "unknown",
+        enabled: 0,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+      })
+      .executeTakeFirstOrThrow();
+    const repository = new ControllerConfigurationRepository(database);
+
+    await expect(
+      repository.setDeviceEnabled(CONTROLLER_STORAGE_HEALTH_DEVICE_ID, {
+        expectedRevision: 0,
+        enabled: true,
+      }),
+    ).rejects.toBeInstanceOf(ConfigurationNotFoundError);
+    await expect(
+      database
+        .selectFrom("devices")
+        .select("enabled")
+        .where("id", "=", CONTROLLER_STORAGE_HEALTH_DEVICE_ID)
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ enabled: 0 });
+    expect(await readCurrentStateRevision(database)).toBe(0);
+  });
+
   it("excludes devices reversibly and clears protocol quarantine only on include", async () => {
     const database = await openDatabase();
     await database

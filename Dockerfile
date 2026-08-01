@@ -69,7 +69,7 @@ RUN mkdir -p \
 
 USER node
 
-EXPOSE 3001
+EXPOSE 3001 3002
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=6 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:3001/api/health/ready').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))"]

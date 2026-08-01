@@ -8,6 +8,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  AquariumApiError,
   cancelManualOverride,
   reconcileManualOverride,
   startManualOverride,
@@ -27,6 +28,7 @@ export interface OverrideChannel {
 
 export interface ManualOverridePanelProps {
   readonly channels: readonly OverrideChannel[];
+  readonly commandableChannelIds: ReadonlySet<string>;
   readonly multiplierPercentage: number;
   readonly overrides: readonly Override[];
   readonly operations: readonly OperationSummary[];
@@ -52,11 +54,13 @@ interface OverrideBatchRequest {
 
 interface OverrideBatchResult {
   readonly kind: OverrideBatchKind;
-  readonly accepted: number;
   readonly revision: number;
+  readonly operationIds: readonly string[];
   readonly blockedChannelNames: readonly string[];
   readonly releasedOverrideIds: readonly string[];
 }
+
+type OverrideBatchConfirmation = "pending" | "succeeded" | "failed";
 
 const durationChoices = [
   { seconds: 60, label: "1 minute" },
@@ -67,6 +71,7 @@ const durationChoices = [
 
 export function ManualOverridePanel({
   channels,
+  commandableChannelIds,
   multiplierPercentage,
   overrides,
   operations,
@@ -114,7 +119,7 @@ export function ManualOverridePanel({
       request: OverrideBatchRequest,
     ): Promise<OverrideBatchResult> => {
       let revision = request.expectedRevision;
-      let accepted = 0;
+      const operationIds: string[] = [];
       const blockedChannelNames: string[] = [];
       const releasedIds: string[] = [];
 
@@ -128,13 +133,13 @@ export function ManualOverridePanel({
               }),
           );
           revision = response.mutation.revision;
-          accepted += 1;
+          operationIds.push(response.operation.id);
           releasedIds.push(overrideId);
         }
         return {
           kind: request.kind,
-          accepted,
           revision,
+          operationIds,
           blockedChannelNames,
           releasedOverrideIds: releasedIds,
         };
@@ -147,6 +152,7 @@ export function ManualOverridePanel({
             override.targetId === channel.id,
         );
         let blocked = false;
+        let replaceOverrideId: string | undefined;
         for (const override of targetOverrides) {
           const view = deriveManualOverrideView(
             override,
@@ -154,6 +160,10 @@ export function ManualOverridePanel({
             request.nowMs,
           );
           if (!view.blocksNewStart) continue;
+          if (view.phase === "active") {
+            replaceOverrideId = override.id;
+            continue;
+          }
           blocked = true;
           break;
         }
@@ -161,21 +171,36 @@ export function ManualOverridePanel({
           blockedChannelNames.push(channel.name);
           continue;
         }
-        const response = await runRevisionedCommand(revision, (nextRevision) =>
-          startManualOverride({
-            expectedRevision: nextRevision,
-            target: { targetType: "channel", targetId: channel.id },
-            valuePercentage: request.valuesByChannel.get(channel.id) ?? 0,
-            durationSeconds: request.durationSeconds,
-          }),
-        );
-        revision = response.mutation.revision;
-        accepted += 1;
+        try {
+          const response = await runRevisionedCommand(
+            revision,
+            (nextRevision) =>
+              startManualOverride({
+                expectedRevision: nextRevision,
+                ...(replaceOverrideId === undefined
+                  ? {}
+                  : { replaceOverrideId }),
+                target: { targetType: "channel", targetId: channel.id },
+                valuePercentage: request.valuesByChannel.get(channel.id) ?? 0,
+                durationSeconds: request.durationSeconds,
+              }),
+          );
+          revision = response.mutation.revision;
+          operationIds.push(response.operation.id);
+        } catch (error) {
+          if (
+            error instanceof AquariumApiError &&
+            isUnusedOverrideTarget(error)
+          ) {
+            continue;
+          }
+          throw error;
+        }
       }
       return {
         kind: request.kind,
-        accepted,
         revision,
+        operationIds,
         blockedChannelNames,
         releasedOverrideIds: releasedIds,
       };
@@ -194,6 +219,26 @@ export function ManualOverridePanel({
       if (currentRevisionFromError(error) !== null) refresh();
     },
   });
+  const batchData = batch.data;
+  const resetBatch = batch.reset;
+  const batchConfirmation =
+    batchData === undefined
+      ? null
+      : overrideBatchConfirmation(batchData.operationIds, operations);
+  const batchKind = batchData?.kind ?? batch.variables?.kind;
+  const confirmationPending = batchConfirmation === "pending";
+  const busy = batch.isPending || confirmationPending;
+  useEffect(() => {
+    if (
+      batchData === undefined ||
+      batchConfirmation === null ||
+      batchConfirmation === "pending"
+    ) {
+      return;
+    }
+    const timeout = window.setTimeout(() => resetBatch(), 3_000);
+    return () => window.clearTimeout(timeout);
+  }, [batchConfirmation, batchData, resetBatch]);
   const releaseOverrideIds = overrides
     .filter(
       (override) =>
@@ -210,7 +255,9 @@ export function ManualOverridePanel({
       releaseOverrideIds,
       operations,
       nowMs: currentTimeMs,
-      channels: channels.map(({ channel }) => channel),
+      channels: channels
+        .map(({ channel }) => channel)
+        .filter((channel) => commandableChannelIds.has(channel.id)),
       valuesByChannel: new Map(
         channels.map(({ channel }) => [
           channel.id,
@@ -239,7 +286,7 @@ export function ManualOverridePanel({
             Duration
             <select
               value={durationSeconds}
-              disabled={batch.isPending || disabled}
+              disabled={busy || disabled}
               onChange={(event) => {
                 draftRevision.pin();
                 setDurationSeconds(Number(event.currentTarget.value));
@@ -283,7 +330,7 @@ export function ManualOverridePanel({
                   max="100"
                   step="1"
                   value={value}
-                  disabled={batch.isPending || disabled}
+                  disabled={busy || disabled}
                   onChange={(event) => {
                     const next = new Map(draftValues);
                     next.set(channel.id, event.currentTarget.valueAsNumber);
@@ -306,25 +353,29 @@ export function ManualOverridePanel({
         <button
           className="secondary-button"
           type="button"
-          disabled={activeCount === 0 || batch.isPending || disabled}
+          disabled={activeCount === 0 || busy || disabled}
           onClick={() => batch.mutate(batchRequest("release"))}
         >
-          {batch.isPending && batch.variables.kind === "release"
-            ? "Releasing…"
-            : "Release all"}
+          {confirmationPending && batchKind === "release"
+            ? "Confirming…"
+            : batch.isPending && batch.variables.kind === "release"
+              ? "Releasing…"
+              : "Release all"}
         </button>
         <button
           className="primary-button"
           type="button"
-          disabled={channels.length === 0 || batch.isPending || disabled}
+          disabled={channels.length === 0 || busy || disabled}
           onClick={() => {
             draftRevision.pin();
             batch.mutate(batchRequest("apply"));
           }}
         >
-          {batch.isPending && batch.variables.kind === "apply"
-            ? "Applying…"
-            : "Apply test levels"}
+          {confirmationPending && batchKind === "apply"
+            ? "Confirming…"
+            : batch.isPending && batch.variables.kind === "apply"
+              ? "Applying…"
+              : "Apply test levels"}
         </button>
       </div>
 
@@ -335,12 +386,17 @@ export function ManualOverridePanel({
           authoritative override state.
         </p>
       )}
-      {batch.data === undefined ? null : (
+      {batch.data === undefined ||
+      batchConfirmation === null ? null : batchConfirmation === "failed" ? (
+        <p className="field-error" role="alert">
+          An ESP did not confirm the requested output. Review the device status
+          and unresolved operations before trying again.
+        </p>
+      ) : (
         <p className="override-command-notice" role="status">
-          {batch.data.accepted}{" "}
-          {batch.data.accepted === 1 ? "request was" : "requests were"} accepted
-          at revision {batch.data.revision}. This records controller intent; it
-          does not claim actuator success.
+          {batchConfirmation === "pending"
+            ? "Waiting for ESP confirmation…"
+            : "Success"}
           {batch.data.blockedChannelNames.length === 0
             ? ""
             : ` Unresolved override state blocked: ${batch.data.blockedChannelNames.join(", ")}.`}
@@ -350,6 +406,9 @@ export function ManualOverridePanel({
       <UnresolvedOverrides
         overrides={overrides}
         operations={operations}
+        channelNames={
+          new Map(channels.map(({ channel }) => [channel.id, channel.name]))
+        }
         expectedRevision={expectedRevision}
         nowMs={currentTimeMs}
         disabled={disabled}
@@ -359,9 +418,45 @@ export function ManualOverridePanel({
   );
 }
 
+function overrideBatchConfirmation(
+  operationIds: readonly string[],
+  operations: readonly OperationSummary[],
+): OverrideBatchConfirmation {
+  if (operationIds.length === 0) return "succeeded";
+  const operationsById = new Map(
+    operations.map((operation) => [operation.id, operation]),
+  );
+  const acceptedOperations = operationIds.map((id) => operationsById.get(id));
+  if (
+    acceptedOperations.some(
+      (operation) =>
+        operation === undefined ||
+        operation.status === "pending" ||
+        operation.status === "in_flight",
+    )
+  ) {
+    return "pending";
+  }
+  return acceptedOperations.every(
+    (operation) => operation?.status === "succeeded",
+  )
+    ? "succeeded"
+    : "failed";
+}
+
+function isUnusedOverrideTarget(error: AquariumApiError): boolean {
+  return (
+    error.details.code === "relational_conflict" &&
+    error.details.conflicts.some(
+      (conflict) => conflict.relation === "enabled_pin_mapping",
+    )
+  );
+}
+
 function UnresolvedOverrides({
   overrides,
   operations,
+  channelNames,
   expectedRevision,
   nowMs,
   disabled,
@@ -369,6 +464,7 @@ function UnresolvedOverrides({
 }: {
   readonly overrides: readonly Override[];
   readonly operations: readonly OperationSummary[];
+  readonly channelNames: ReadonlyMap<string, string>;
   readonly expectedRevision: number;
   readonly nowMs: number;
   readonly disabled: boolean;
@@ -396,8 +492,8 @@ function UnresolvedOverrides({
       {unresolved.map(({ override, view }) => (
         <div key={override.id}>
           <span>
-            {override.targetId}: the controller cannot safely claim the current
-            actuator state.
+            {channelNames.get(override.targetId) ?? "Unknown target"}: the
+            controller cannot safely claim the current actuator state.
           </span>
           {view.canReconcile ? (
             <button

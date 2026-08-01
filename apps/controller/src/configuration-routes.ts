@@ -5,8 +5,10 @@ import {
   alertRulesResponseSchema,
   apiErrorResponseSchema,
   channelParamsSchema,
+  controlAreaParamsSchema,
   createAlertRuleRequestSchema,
   createChannelRequestSchema,
+  createControlAreaRequestSchema,
   deviceParamsSchema,
   expectedRevisionSchema,
   mappingProfileParamsSchema,
@@ -16,6 +18,7 @@ import {
   patchAlertRuleRequestSchema,
   patchDeviceConfigurationRequestSchema,
   renameChannelRequestSchema,
+  renameControlAreaRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   setDeviceEnabledRequestSchema,
@@ -40,6 +43,11 @@ export interface ConfigurationRouteDependencies {
   readonly configurationService?: ControllerConfigurationService;
   readonly deviceConfigurationCommands?: DeviceConfigurationCommandPort;
   readonly alertAcknowledgementCommands?: AlertAcknowledgementCommandPort;
+  readonly deviceDiscoveryCommands?: DeviceDiscoveryCommandPort;
+}
+
+export interface DeviceDiscoveryCommandPort {
+  requestDeviceDiscovery(): void;
 }
 
 class ConfigurationServiceUnavailableError extends Error {
@@ -194,6 +202,51 @@ export function registerConfigurationRoutes(
   dependencies: ConfigurationRouteDependencies,
 ): void {
   app.post(
+    "/api/control-areas",
+    safeRoute(app, async (request, reply) => {
+      const body = parseRequest(createControlAreaRequestSchema, request.body);
+      const result =
+        await configurationService(dependencies).createControlArea(body);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.patch(
+    "/api/control-areas/:areaSlug",
+    safeRoute(app, async (request, reply) => {
+      const { areaSlug } = parseRequest(
+        controlAreaParamsSchema,
+        request.params,
+      );
+      const body = parseRequest(renameControlAreaRequestSchema, request.body);
+      const result = await configurationService(dependencies).renameControlArea(
+        areaSlug,
+        body,
+      );
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.delete(
+    "/api/control-areas/:areaSlug",
+    safeRoute(app, async (request, reply) => {
+      const { areaSlug } = parseRequest(
+        controlAreaParamsSchema,
+        request.params,
+      );
+      const { expectedRevision } = parseRequest(
+        expectedRevisionSchema,
+        request.body,
+      );
+      const result = await configurationService(dependencies).deleteControlArea(
+        areaSlug,
+        expectedRevision,
+      );
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.post(
     "/api/channels",
     safeRoute(app, async (request, reply) => {
       const body = parseRequest(createChannelRequestSchema, request.body);
@@ -308,6 +361,9 @@ export function registerConfigurationRoutes(
         deviceId,
         body,
       );
+      if (body.enabled) {
+        dependencies.deviceDiscoveryCommands?.requestDeviceDiscovery();
+      }
       return reply.code(200).send(mutationResultSchema.parse(result));
     }),
   );

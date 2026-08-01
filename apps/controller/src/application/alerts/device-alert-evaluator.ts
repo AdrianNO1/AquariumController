@@ -11,6 +11,7 @@ import {
   commitConditionalStateChange,
   type StateDatabaseSchema,
 } from "../../infrastructure/database/index.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../maintenance/controller-storage-health-service.js";
 import type { AlertEvaluationResult } from "./types.js";
 
 export const DEFAULT_DEVICE_HEALTH_ALERT_RULE_PREFIX = "device-health";
@@ -56,6 +57,7 @@ export class DeviceAlertEvaluator implements DeviceAlertEvaluatorPort {
       .selectFrom("devices")
       .select(["id", "status"])
       .where("enabled", "=", 1)
+      .where("id", "!=", CONTROLLER_STORAGE_HEALTH_DEVICE_ID)
       .orderBy("id")
       .execute();
 

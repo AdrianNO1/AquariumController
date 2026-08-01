@@ -41,6 +41,7 @@ export interface MqttFakeEspSessionOptions {
   readonly brokerUrl: string;
   readonly clientId: string;
   readonly namespace?: string;
+  readonly networkEnabled?: boolean;
   readonly actor: Omit<FakeEspActorOptions, "transport" | "namespace">;
   readonly clientFactory?: FakeEspMqttClientFactory;
   readonly onError?: (error: Error) => void;
@@ -179,6 +180,8 @@ export class MqttFakeEspSession {
   private readonly unsubscribeCallbacks: Array<() => void> = [];
   private started = false;
   private stopped = false;
+  private mqttConnected = false;
+  private networkEnabled: boolean;
   private connectionGeneration = 0;
   private connectionWork = Promise.resolve();
   private initialReadyResolve: (() => void) | undefined;
@@ -196,6 +199,7 @@ export class MqttFakeEspSession {
     this.client = (options.clientFactory ?? createMqttJsFakeEspClient)(config);
     this.transport = new MqttActorTransport(this.client, this.topics);
     this.onError = options.onError;
+    this.networkEnabled = options.networkEnabled ?? true;
     this.actor = new FakeEspActor({
       ...options.actor,
       transport: this.transport,
@@ -220,12 +224,14 @@ export class MqttFakeEspSession {
 
     this.unsubscribeCallbacks.push(
       this.client.onConnected(() => {
+        this.mqttConnected = true;
         const generation = ++this.connectionGeneration;
         this.connectionWork = this.connectionWork
           .then(() => this.handleConnected(generation))
           .catch((error: Error) => this.captureError(error));
       }),
       this.client.onDisconnected(() => {
+        this.mqttConnected = false;
         this.connectionGeneration += 1;
         this.actor.disconnect();
       }),
@@ -240,6 +246,32 @@ export class MqttFakeEspSession {
 
   public lastError(): Error | undefined {
     return this.mostRecentError;
+  }
+
+  public isMqttConnected(): boolean {
+    return this.mqttConnected;
+  }
+
+  public isNetworkEnabled(): boolean {
+    return this.networkEnabled;
+  }
+
+  public setNetworkEnabled(enabled: boolean): void {
+    if (this.stopped) {
+      throw new Error("Stopped fake ESP MQTT sessions cannot change network");
+    }
+    if (enabled === this.networkEnabled) {
+      return;
+    }
+    this.networkEnabled = enabled;
+    if (!this.started || !this.mqttConnected) {
+      return;
+    }
+    if (enabled) {
+      this.actor.connect();
+    } else {
+      this.actor.disconnect();
+    }
   }
 
   public async stop(): Promise<void> {
@@ -257,6 +289,7 @@ export class MqttFakeEspSession {
       this.initialReadyReject = undefined;
     }
     this.actor.disconnect();
+    this.mqttConnected = false;
     try {
       // Keep the socket error listener attached until MQTT.js finishes
       // shutting down. A broker restart can otherwise surface ECONNRESET in
@@ -274,10 +307,14 @@ export class MqttFakeEspSession {
     if (this.stopped || generation !== this.connectionGeneration) {
       return;
     }
-    if (this.actor.isReady()) {
-      this.actor.reconnect();
+    if (this.networkEnabled) {
+      if (this.actor.isReady()) {
+        this.actor.reconnect();
+      } else {
+        this.actor.connect();
+      }
     } else {
-      this.actor.connect();
+      this.actor.disconnect();
     }
     if (!this.initialReadySettled) {
       this.initialReadySettled = true;

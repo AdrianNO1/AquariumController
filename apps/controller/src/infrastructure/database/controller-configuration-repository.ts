@@ -5,6 +5,10 @@ import {
   alertRuleSchema,
   alertRulesResponseSchema,
   configurationMutationEventV1Schema,
+  controlAreaMutationEventV1Schema,
+  controlAreaSchema,
+  controlAreaSlugSchema,
+  createControlAreaRequestSchema,
   createAlertRuleRequestSchema,
   createChannelRequestSchema,
   expectedRevisionSchema,
@@ -14,6 +18,7 @@ import {
   operationDetailsResponseSchema,
   patchAlertRuleRequestSchema,
   renameChannelRequestSchema,
+  renameControlAreaRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   setDeviceEnabledRequestSchema,
@@ -25,10 +30,13 @@ import {
   type AlertRulesResponse,
   type CreateAlertRuleRequest,
   type CreateChannelRequest,
+  type CreateControlAreaRequest,
+  type ControlArea,
   type MutationResult,
   type OperationDetailsResponse,
   type PatchAlertRuleRequest,
   type RenameChannelRequest,
+  type RenameControlAreaRequest,
   type ReplaceMappingProfileRequest,
   type ReplaceScheduleRequest,
   type SchedulePoint,
@@ -62,6 +70,7 @@ import {
   type RelationConflict,
   type ValidationIssue,
 } from "../../application/configuration/configuration-service.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import {
   DEVICE_OPERATION_REQUEST_SCHEMA_VERSION,
   DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
@@ -89,6 +98,21 @@ import type { StateDatabaseTransaction } from "./state-outbox.js";
 
 type StoredAlertRule = Selectable<AlertRulesTable>;
 type StoredPinMapping = Selectable<PinMappingsTable>;
+
+interface ControlAreaAuditState {
+  readonly area: ControlArea;
+  readonly throttle: {
+    readonly id: string;
+    readonly percentage: number;
+  } | null;
+}
+
+interface ControlAreaMutationOutcome {
+  readonly changed: boolean;
+  readonly entityId: string;
+  readonly before: ControlAreaAuditState | null;
+  readonly after: ControlAreaAuditState | null;
+}
 
 export interface ControllerConfigurationRepositoryOptions {
   readonly nowMs?: () => number;
@@ -134,6 +158,31 @@ function zodIssues(error: z.ZodError): readonly ValidationIssue[] {
     code: issue.code,
     message: issue.message,
   }));
+}
+
+function slugifyControlAreaLabel(label: string): string | null {
+  const slug = label
+    .toLocaleLowerCase("en-US")
+    .replaceAll("æ", "ae")
+    .replaceAll("ø", "o")
+    .replaceAll("å", "a")
+    .normalize("NFKD")
+    .replace(/\p{Mark}+/gu, "")
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 64)
+    .replace(/-+$/gu, "");
+  return controlAreaSlugSchema.safeParse(slug).success ? slug : null;
+}
+
+function storedControlArea(
+  row: Selectable<StateDatabaseSchema["control_areas"]>,
+): ControlArea {
+  return controlAreaSchema.parse({
+    slug: row.slug,
+    typeKey: row.type_key,
+    label: row.label,
+  });
 }
 
 function scheduleIssuePath(
@@ -356,6 +405,226 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
     this.#schedulePointIdGenerator =
       options.schedulePointIdGenerator ??
       (() => `schedule-point-${randomUUID()}`);
+  }
+
+  async createControlArea(
+    rawRequest: CreateControlAreaRequest,
+  ): Promise<MutationResult> {
+    const request = createControlAreaRequestSchema.parse(rawRequest);
+    const slug = slugifyControlAreaLabel(request.label);
+    if (slug === null) {
+      throw new ConfigurationValidationError([
+        {
+          path: ["label"],
+          code: "invalid_slug",
+          message: "Area name must contain at least one Latin letter or number",
+        },
+      ]);
+    }
+    const throttleId = identifierSchema.parse(`throttle-${slug}`);
+    return this.commitControlAreaMutation(
+      "created",
+      slug,
+      request.expectedRevision,
+      `Create control area ${request.label}`,
+      async (transaction) => {
+        await this.assertControlAreaAvailable(
+          transaction,
+          slug,
+          slug,
+          request.label,
+          null,
+        );
+        const throttleOwner = await transaction
+          .selectFrom("throttles")
+          .select(["id", "type_key"])
+          .where((expression) =>
+            expression.or([
+              expression("id", "=", throttleId),
+              expression("type_key", "=", slug),
+            ]),
+          )
+          .executeTakeFirst();
+        if (throttleOwner !== undefined) {
+          return relationalConflict({
+            resource: "throttle",
+            id: throttleOwner.id,
+            relation: "control_area",
+            message: "The new area would reuse an existing schedule multiplier",
+          });
+        }
+        const lastArea = await transaction
+          .selectFrom("control_areas")
+          .select("display_order")
+          .orderBy("display_order", "desc")
+          .limit(1)
+          .executeTakeFirst();
+        const nowMs = assertTime(this.#nowMs());
+        const area = controlAreaSchema.parse({
+          slug,
+          typeKey: slug,
+          label: request.label,
+        });
+        await transaction
+          .insertInto("control_areas")
+          .values({
+            slug: area.slug,
+            type_key: area.typeKey,
+            label: area.label,
+            display_order: (lastArea?.display_order ?? -1) + 1,
+            created_at_ms: nowMs,
+            updated_at_ms: nowMs,
+          })
+          .executeTakeFirstOrThrow();
+        await transaction
+          .insertInto("throttles")
+          .values({
+            id: throttleId,
+            type_key: area.typeKey,
+            percentage: 100,
+            created_at_ms: nowMs,
+            updated_at_ms: nowMs,
+          })
+          .executeTakeFirstOrThrow();
+        return {
+          changed: true,
+          entityId: slug,
+          before: null,
+          after: {
+            area,
+            throttle: { id: throttleId, percentage: 100 },
+          },
+        };
+      },
+    );
+  }
+
+  async renameControlArea(
+    rawAreaSlug: string,
+    rawRequest: RenameControlAreaRequest,
+  ): Promise<MutationResult> {
+    const areaSlug = controlAreaSlugSchema.parse(rawAreaSlug);
+    const request = renameControlAreaRequestSchema.parse(rawRequest);
+    return this.commitControlAreaMutation(
+      "updated",
+      areaSlug,
+      request.expectedRevision,
+      `Rename control area ${areaSlug}`,
+      async (transaction) => {
+        const stored = await transaction
+          .selectFrom("control_areas")
+          .selectAll()
+          .where("slug", "=", areaSlug)
+          .executeTakeFirst();
+        if (stored === undefined) {
+          throw new ConfigurationNotFoundError("control_area", areaSlug);
+        }
+        const before = await this.controlAreaAuditState(transaction, stored);
+        if (stored.label === request.label) {
+          return {
+            changed: false,
+            entityId: areaSlug,
+            before,
+            after: before,
+          };
+        }
+        await this.assertControlAreaAvailable(
+          transaction,
+          areaSlug,
+          stored.type_key,
+          request.label,
+          areaSlug,
+        );
+        await transaction
+          .updateTable("control_areas")
+          .set({
+            label: request.label,
+            updated_at_ms: assertTime(this.#nowMs()),
+          })
+          .where("slug", "=", areaSlug)
+          .executeTakeFirstOrThrow();
+        return {
+          changed: true,
+          entityId: areaSlug,
+          before,
+          after: {
+            area: { ...before.area, label: request.label },
+            throttle: before.throttle,
+          },
+        };
+      },
+    );
+  }
+
+  async deleteControlArea(
+    rawAreaSlug: string,
+    rawExpectedRevision: number,
+  ): Promise<MutationResult> {
+    const areaSlug = controlAreaSlugSchema.parse(rawAreaSlug);
+    const { expectedRevision } = expectedRevisionSchema.parse({
+      expectedRevision: rawExpectedRevision,
+    });
+    return this.commitControlAreaMutation(
+      "deleted",
+      areaSlug,
+      expectedRevision,
+      `Delete control area ${areaSlug}`,
+      async (transaction) => {
+        const stored = await transaction
+          .selectFrom("control_areas")
+          .selectAll()
+          .where("slug", "=", areaSlug)
+          .executeTakeFirst();
+        if (stored === undefined) {
+          throw new ConfigurationNotFoundError("control_area", areaSlug);
+        }
+        const conflicts: RelationConflict[] = [];
+        const channel = await transaction
+          .selectFrom("channels")
+          .select("id")
+          .where("kind", "=", stored.type_key)
+          .executeTakeFirst();
+        if (channel !== undefined) {
+          conflicts.push({
+            resource: "channel",
+            id: channel.id,
+            relation: "control_area",
+            message: "Delete this area's channels before deleting the area",
+          });
+        }
+        const output = await transaction
+          .selectFrom("outputs")
+          .select("id")
+          .where("kind", "=", stored.type_key)
+          .executeTakeFirst();
+        if (output !== undefined) {
+          conflicts.push({
+            resource: "output",
+            id: output.id,
+            relation: "control_area",
+            message: "Delete this area's outputs before deleting the area",
+          });
+        }
+        if (conflicts.length > 0) {
+          throw new ConfigurationRelationalConflictError(conflicts);
+        }
+        const before = await this.controlAreaAuditState(transaction, stored);
+        await transaction
+          .deleteFrom("throttles")
+          .where("type_key", "=", stored.type_key)
+          .execute();
+        await transaction
+          .deleteFrom("control_areas")
+          .where("slug", "=", areaSlug)
+          .executeTakeFirstOrThrow();
+        return {
+          changed: true,
+          entityId: areaSlug,
+          before,
+          after: null,
+        };
+      },
+    );
   }
 
   async createChannel(
@@ -966,6 +1235,9 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
   ): Promise<MutationResult> {
     const deviceId = identifierSchema.parse(rawDeviceId);
     const request = setDeviceEnabledRequestSchema.parse(rawRequest);
+    if (deviceId === CONTROLLER_STORAGE_HEALTH_DEVICE_ID) {
+      throw new ConfigurationNotFoundError("device", deviceId);
+    }
     return this.commitMutation(
       "device",
       deviceId,
@@ -1314,6 +1586,128 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
         return true;
       },
     );
+  }
+
+  private async controlAreaAuditState(
+    transaction: StateDatabaseTransaction,
+    row: Selectable<StateDatabaseSchema["control_areas"]>,
+  ): Promise<ControlAreaAuditState> {
+    const throttle = await transaction
+      .selectFrom("throttles")
+      .select(["id", "percentage"])
+      .where("type_key", "=", row.type_key)
+      .executeTakeFirst();
+    return {
+      area: storedControlArea(row),
+      throttle: throttle ?? null,
+    };
+  }
+
+  private async assertControlAreaAvailable(
+    transaction: StateDatabaseTransaction,
+    slug: string,
+    typeKey: string,
+    label: string,
+    exceptSlug: string | null,
+  ): Promise<void> {
+    const areas = await transaction
+      .selectFrom("control_areas")
+      .select(["slug", "type_key", "label"])
+      .execute();
+    const conflicts: RelationConflict[] = [];
+    const slugOwner = areas.find(
+      (area) => area.slug === slug && area.slug !== exceptSlug,
+    );
+    if (slugOwner !== undefined) {
+      conflicts.push({
+        resource: "control_area",
+        id: slugOwner.slug,
+        relation: "slug",
+        message: "An area with this URL already exists",
+      });
+    }
+    const typeOwner = areas.find(
+      (area) => area.type_key === typeKey && area.slug !== exceptSlug,
+    );
+    if (typeOwner !== undefined) {
+      conflicts.push({
+        resource: "control_area",
+        id: typeOwner.slug,
+        relation: "type_key",
+        message: "An area with this control type already exists",
+      });
+    }
+    const labelOwner = areas.find(
+      (area) => area.label === label && area.slug !== exceptSlug,
+    );
+    if (labelOwner !== undefined) {
+      conflicts.push({
+        resource: "control_area",
+        id: labelOwner.slug,
+        relation: "label",
+        message: "An area with this name already exists",
+      });
+    }
+    if (conflicts.length > 0) {
+      throw new ConfigurationRelationalConflictError(conflicts);
+    }
+  }
+
+  private async commitControlAreaMutation(
+    action: "created" | "updated" | "deleted",
+    fallbackEntityId: string,
+    expectedRevision: number,
+    summary: string,
+    mutate: (
+      transaction: StateDatabaseTransaction,
+    ) => Promise<ControlAreaMutationOutcome>,
+  ): Promise<MutationResult> {
+    const occurredAtMs = assertTime(this.#nowMs());
+    const committed = await commitConditionalStateChange<{
+      readonly changed: boolean;
+      readonly result: ControlAreaMutationOutcome;
+    }>(
+      this.database,
+      (outcome) => {
+        const payload = controlAreaMutationEventV1Schema.parse({
+          schemaVersion: 1,
+          action,
+          resource: "control_area",
+          id: outcome.entityId,
+          before: outcome.before?.area ?? null,
+          after: outcome.after?.area ?? null,
+          throttle: outcome.after?.throttle ?? outcome.before?.throttle ?? null,
+        });
+        return {
+          actor: this.#actor,
+          mutationType: `control_area.${action}`,
+          summary,
+          eventType: `control_area.${action}`,
+          entityType: "control_area" as const,
+          entityId: outcome.entityId,
+          occurredAtMs,
+          retentionClass: "audit" as const,
+          payloadJson: JSON.stringify(payload),
+          payloadSchemaVersion: 1,
+        };
+      },
+      async (transaction) => {
+        const outcome = await mutate(transaction);
+        return { changed: outcome.changed, result: outcome };
+      },
+      undefined,
+      {
+        expectedRevision,
+        conflictError: (expected, current) =>
+          new ConfigurationRevisionConflictError(expected, current),
+      },
+    );
+    if (!committed.changed) return unchangedResult(committed.revision);
+    return mutationResultSchema.parse({
+      changed: true,
+      revision: committed.revision,
+      event: toCommittedStateEvent(committed.outboxEvent),
+    });
   }
 
   private async commitMutation(

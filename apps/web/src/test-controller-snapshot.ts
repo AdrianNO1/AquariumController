@@ -26,7 +26,7 @@ export function createTestControllerSnapshot(
       { slug: "bad", typeKey: "bad", label: "Bad" },
       { slug: "loft", typeKey: "loft", label: "Loft" },
       { slug: "biljard", typeKey: "biljard", label: "Biljard" },
-      { slug: "frag", typeKey: "frag", label: "Frag" },
+      { slug: "frag", typeKey: "frag", label: "Frag tank" },
       { slug: "qt1", typeKey: "qt1", label: "Quarantine 1" },
       { slug: "qt2", typeKey: "qt2", label: "Quarantine 2" },
       { slug: "qt3", typeKey: "qt3", label: "Quarantine 3" },

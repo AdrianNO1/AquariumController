@@ -16,6 +16,7 @@ import {
   openStateDatabase,
   parseStoredStateOutboxEnvelope,
   STATE_CHANNEL_COLOR_MIGRATION_NAME,
+  STATE_CONTROL_AREA_MIGRATION_NAME,
   STATE_INITIAL_MIGRATION_NAME,
   STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
   STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
@@ -87,6 +88,7 @@ describe("runtime migrations", () => {
       STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
       STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
       STATE_CHANNEL_COLOR_MIGRATION_NAME,
+      STATE_CONTROL_AREA_MIGRATION_NAME,
     ]);
     expect(eventsResults.map((result) => result.migrationName)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -100,6 +102,7 @@ describe("runtime migrations", () => {
       STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
       STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
       STATE_CHANNEL_COLOR_MIGRATION_NAME,
+      STATE_CONTROL_AREA_MIGRATION_NAME,
     ]);
     expect(await readMigrationNames(events)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -187,6 +190,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -251,6 +259,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -275,6 +288,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
         direction: "Down",
@@ -373,6 +391,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -394,6 +417,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_RUNTIME_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
         direction: "Down",
@@ -556,6 +584,11 @@ describe("runtime migrations", () => {
       EVENTS_INITIAL_MIGRATION_NAME,
     );
     expect(stateDown).toMatchObject([
+      {
+        migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CHANNEL_COLOR_MIGRATION_NAME,
         direction: "Down",

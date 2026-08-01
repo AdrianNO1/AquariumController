@@ -9,7 +9,10 @@ import type {
   InteractionLogInput,
   InteractionRepository,
 } from "../../infrastructure/storage/interaction-repository.js";
-import type { DeviceOperationRequest } from "../operations/device-operation-types.js";
+import type {
+  DeviceOperationPriority,
+  DeviceOperationRequest,
+} from "../operations/device-operation-types.js";
 
 export interface PersistentOperationInteraction {
   readonly occurredAtMs: number;
@@ -21,6 +24,7 @@ export interface PersistentOperationInteraction {
     "succeeded" | "failed" | "timed_out" | "outcome_unknown" | "ignored";
   readonly durationMs: number;
   readonly commandBytes: number;
+  readonly priority: DeviceOperationPriority;
 }
 
 /** Persists metadata-only MQTT interactions; raw wire payloads are not stored. */
@@ -36,33 +40,8 @@ export class MqttInteractionLogger {
 
   async logAnnouncement(event: LegacyAnnouncementEvent): Promise<void> {
     const diagnostic = event.announcement.lastError;
-    const announcementWrite = this.#repository.log({
-      occurredAtMs: event.receivedAtMs,
-      direction: "inbound",
-      kind: "mqtt.announcement",
-      severity: "debug",
-      topic: this.#topics.announce,
-      deviceId: event.announcement.id,
-      outcome: "succeeded",
-      byteCount: event.payloadBytes,
-      retentionClass: "raw",
-      payload: {
-        firmwareVersion: event.announcement.version,
-        reportedStatus: event.announcement.status,
-        scheduleHash: event.announcement.scheduleHash,
-        ...(diagnostic === undefined
-          ? {}
-          : {
-              firmwareDiagnosticCode: diagnostic.code,
-              firmwareDiagnosticSequence: diagnostic.sequence,
-              firmwareDiagnosticActive: diagnostic.active,
-            }),
-      },
-      payloadSchemaVersion: 1,
-    });
     if (diagnostic === undefined) {
       this.#lastDiagnosticSignatures.delete(event.announcement.id);
-      await announcementWrite;
       return;
     }
 
@@ -70,46 +49,57 @@ export class MqttInteractionLogger {
     if (
       this.#lastDiagnosticSignatures.get(event.announcement.id) === signature
     ) {
-      await announcementWrite;
       return;
     }
-    await Promise.all([
-      announcementWrite,
-      this.#repository.log({
-        occurredAtMs: event.receivedAtMs,
-        direction: "inbound",
-        kind: "mqtt.device-diagnostic",
-        severity: diagnostic.severity,
-        topic: this.#topics.announce,
-        deviceId: event.announcement.id,
-        outcome: diagnostic.active ? "failed" : "succeeded",
-        byteCount: event.payloadBytes,
-        retentionClass:
-          diagnostic.active && diagnostic.severity === "error"
-            ? "critical"
-            : "audit",
-        payload: {
-          code: diagnostic.code,
-          message: diagnostic.message,
-          sequence: diagnostic.sequence,
-          active: diagnostic.active,
-          recordedAtEpochSeconds: diagnostic.at,
-        },
-        payloadSchemaVersion: 1,
-      }),
-    ]);
+    await this.#repository.log({
+      occurredAtMs: event.receivedAtMs,
+      direction: "inbound",
+      kind: "mqtt.device-diagnostic",
+      severity: diagnostic.severity,
+      topic: this.#topics.announce,
+      deviceId: event.announcement.id,
+      outcome: diagnostic.active ? "failed" : "succeeded",
+      byteCount: event.payloadBytes,
+      retentionClass:
+        diagnostic.active && diagnostic.severity === "error"
+          ? "critical"
+          : "audit",
+      payload: {
+        code: diagnostic.code,
+        message: diagnostic.message,
+        sequence: diagnostic.sequence,
+        active: diagnostic.active,
+        recordedAtEpochSeconds: diagnostic.at,
+      },
+      payloadSchemaVersion: 1,
+    });
     this.#lastDiagnosticSignatures.set(event.announcement.id, signature);
   }
 
   async logTransportInteraction(
     interaction: LegacyMqttInteraction,
   ): Promise<void> {
+    if (
+      interaction.kind === "discovery_published" ||
+      interaction.kind === "batch_published" ||
+      (interaction.kind === "command_outcome" &&
+        interaction.outcome.status === "succeeded")
+    ) {
+      return;
+    }
     await this.#repository.log(this.#toLogInput(interaction));
   }
 
   async logPersistentOperation(
     interaction: PersistentOperationInteraction,
   ): Promise<void> {
+    if (
+      interaction.priority === "background" &&
+      interaction.request.kind === "set_pwm" &&
+      interaction.outcome === "succeeded"
+    ) {
+      return;
+    }
     const routinePwmSuccess =
       interaction.request.kind === "set_pwm" &&
       interaction.outcome === "succeeded";
@@ -150,19 +140,9 @@ export class MqttInteractionLogger {
     });
   }
 
-  async logDiscoverySkipped(atMs: number): Promise<void> {
-    await this.#repository.log({
-      occurredAtMs: atMs,
-      direction: "internal",
-      kind: "mqtt.discovery-skipped",
-      severity: "debug",
-      topic: this.#topics.command,
-      outcome: "ignored",
-      byteCount: 0,
-      retentionClass: "raw",
-      payload: { reason: "wire_busy", catchUpQueued: false },
-      payloadSchemaVersion: 1,
-    });
+  logDiscoverySkipped(atMs: number): Promise<void> {
+    void atMs;
+    return Promise.resolve();
   }
 
   #toLogInput(interaction: LegacyMqttInteraction): InteractionLogInput {

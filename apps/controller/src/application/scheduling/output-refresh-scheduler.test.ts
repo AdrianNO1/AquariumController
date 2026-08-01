@@ -21,6 +21,26 @@ import { ManualSchedulingTime } from "./test-scheduling-time.js";
 import type { ManualOverrideOverlayOutput } from "../overrides/manual-override-types.js";
 
 describe("five-second output refresh scheduler", () => {
+  it("runs a coalesced immediate refresh after configuration changes", async () => {
+    const time = new ManualSchedulingTime("2026-07-13T06:00:00.000Z");
+    const port = new RecordingOperationPort(async (_deviceId, _request, call) =>
+      succeeded(call),
+    );
+    const scheduler = createScheduler(time, [output()], port, []);
+
+    scheduler.start();
+    scheduler.requestRefresh();
+    scheduler.requestRefresh();
+    await time.advanceBy(0);
+    expect(port.calls).toHaveLength(1);
+
+    await time.advanceBy(4_999);
+    expect(port.calls).toHaveLength(1);
+    await time.advanceBy(1);
+    expect(port.calls).toHaveLength(2);
+    await scheduler.stop();
+  });
+
   it("evaluates mapped outputs and resends normalized 8-bit PWM values", async () => {
     const time = new ManualSchedulingTime("2026-07-13T06:00:00.000Z");
     const reports: OutputRefreshTickReport[] = [];

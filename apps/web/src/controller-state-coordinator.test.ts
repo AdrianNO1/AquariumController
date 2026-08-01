@@ -10,6 +10,7 @@ import {
   type ControllerEventStreamHandlers,
 } from "./controller-state-coordinator.js";
 import { createTestControllerSnapshot } from "./test-controller-snapshot.js";
+import { createTestControlSnapshot } from "./test-control-snapshot.js";
 
 const occurredAt = "2026-07-13T10:00:00.000Z";
 
@@ -211,6 +212,40 @@ describe("ControllerStateCoordinator", () => {
     stream?.emit(committedEvent(7));
     stream?.emit(committedEvent(6));
     expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+    coordinator.stop();
+  });
+
+  it("applies live device contact from the stream without fetching a snapshot", async () => {
+    const snapshot = createTestControlSnapshot(5);
+    const device = snapshot.devices[0];
+    if (device === undefined) throw new Error("Test snapshot has no device");
+    const streams: FakeEventStream[] = [];
+    const fetchSnapshot = vi.fn(async () => snapshot);
+    const coordinator = new ControllerStateCoordinator({
+      fetchSnapshot,
+      createEventStream: () => {
+        const stream = new FakeEventStream();
+        streams.push(stream);
+        return stream;
+      },
+    });
+
+    coordinator.start();
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    streams[0]?.emit(streamReady(5));
+    const contactAt = "2026-07-13T10:00:05.000Z";
+    streams[0]?.emit({
+      type: "device.contact",
+      occurredAt: contactAt,
+      data: { deviceId: device.id },
+    });
+
+    expect(
+      coordinator
+        .getState()
+        .snapshot?.devices.find(({ id }) => id === device.id)?.lastSeenAt,
+    ).toBe(contactAt);
+    expect(fetchSnapshot).toHaveBeenCalledOnce();
     coordinator.stop();
   });
 

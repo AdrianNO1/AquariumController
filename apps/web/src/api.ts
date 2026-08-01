@@ -5,8 +5,10 @@ import {
   alertParamsSchema,
   apiErrorResponseSchema,
   channelParamsSchema,
+  controlAreaParamsSchema,
   controllerSnapshotSchema,
   createChannelRequestSchema,
+  createControlAreaRequestSchema,
   deviceParamsSchema,
   expectedRevisionSchema,
   healthResponseSchema,
@@ -23,6 +25,7 @@ import {
   patchDeviceConfigurationRequestSchema,
   reconcileManualOverrideRequestSchema,
   renameChannelRequestSchema,
+  renameControlAreaRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   setDeviceEnabledRequestSchema,
@@ -37,6 +40,7 @@ import {
   type AlertHistoryListResponse,
   type ApiErrorResponse,
   type ControllerSnapshot,
+  type CreateControlAreaRequest,
   type CreateChannelRequest,
   type HealthResponse,
   type LogExportRequest,
@@ -49,6 +53,7 @@ import {
   type OperationDetailsResponse,
   type PatchDeviceConfigurationRequest,
   type RenameChannelRequest,
+  type RenameControlAreaRequest,
   type ReplaceMappingProfileRequest,
   type ReplaceScheduleRequest,
   type SetDeviceEnabledRequest,
@@ -170,6 +175,41 @@ export async function fetchControllerSnapshot(
   }
 
   return controllerSnapshotSchema.parse(await response.json());
+}
+
+export function createControlArea(
+  request: CreateControlAreaRequest,
+): Promise<MutationResult> {
+  return requestConfigurationMutation(
+    "/api/control-areas",
+    "POST",
+    createControlAreaRequestSchema.parse(request),
+  );
+}
+
+export function renameControlArea(
+  areaSlug: string,
+  request: RenameControlAreaRequest,
+): Promise<MutationResult> {
+  const params = controlAreaParamsSchema.parse({ areaSlug });
+  return requestConfigurationMutation(
+    `/api/control-areas/${encodeURIComponent(params.areaSlug)}`,
+    "PATCH",
+    renameControlAreaRequestSchema.parse(request),
+  );
+}
+
+export function deleteControlArea(
+  areaSlug: string,
+  expectedRevision: number,
+): Promise<MutationResult> {
+  const params = controlAreaParamsSchema.parse({ areaSlug });
+  const body = expectedRevisionSchema.parse({ expectedRevision });
+  return requestConfigurationMutation(
+    `/api/control-areas/${encodeURIComponent(params.areaSlug)}`,
+    "DELETE",
+    body,
+  );
 }
 
 export function createChannel(

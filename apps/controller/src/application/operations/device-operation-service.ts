@@ -24,6 +24,7 @@ import {
   DeviceOperationReconciliationConflictError,
   DeviceOperationRevisionConflictError,
   type ControlOperationRepository,
+  type DeviceOperationLifecycleOptions,
   type StoredDeviceOperation,
 } from "../../infrastructure/database/control-operation-repository.js";
 import {
@@ -57,6 +58,10 @@ export interface DeviceOperationServiceOptions {
   readonly operationTimeoutMs?: number;
   readonly idGenerator?: () => string;
   readonly onBackgroundError: (error: Error) => void;
+  readonly onDeviceContact?: (contact: {
+    readonly deviceId: string;
+    readonly observedAtMs: number;
+  }) => void;
 }
 
 export class DeviceOperationService implements DeviceConfigurationCommandPort {
@@ -68,6 +73,12 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
   readonly #operationTimeoutMs: number;
   readonly #idGenerator: () => string;
   readonly #onBackgroundError: (error: Error) => void;
+  readonly #onDeviceContact:
+    | ((contact: {
+        readonly deviceId: string;
+        readonly observedAtMs: number;
+      }) => void)
+    | undefined;
   readonly #activeAttempts = new Set<Promise<void>>();
   readonly #activeDeviceAttempts = new Set<string>();
   readonly #responseCooldownUntilByDevice = new Map<string, number>();
@@ -101,6 +112,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     this.#idGenerator =
       options.idGenerator ?? (() => `operation-${randomUUID()}`);
     this.#onBackgroundError = options.onBackgroundError;
+    this.#onDeviceContact = options.onDeviceContact;
   }
 
   async start(): Promise<void> {
@@ -135,13 +147,17 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     if (parsedRequest.kind === "set_pwm") {
       await this.#reconcileExpiredRoutinePwmOutcomes(device.id, requestedAtMs);
     }
-    const operation = await this.#repository.createPending({
-      id: this.#idGenerator(),
-      deviceId: device.id,
-      requestedAtMs,
-      deadlineAtMs: safeAdd(requestedAtMs, this.#operationTimeoutMs),
-      request: parsedRequest,
-    });
+    const lifecycleOptions = operationLifecycleOptions(parsedRequest, options);
+    const operation = await this.#repository.createPending(
+      {
+        id: this.#idGenerator(),
+        deviceId: device.id,
+        requestedAtMs,
+        deadlineAtMs: safeAdd(requestedAtMs, this.#operationTimeoutMs),
+        request: parsedRequest,
+      },
+      lifecycleOptions,
+    );
     if (!isCommandEligibleDevice(device)) {
       return this.#repository.completePendingWithoutAttempt(
         operation.id,
@@ -391,6 +407,10 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     command: LegacyWireCommand,
     options: DeviceOperationExecutionOptions,
   ): Promise<StoredDeviceOperation> {
+    const lifecycleOptions = operationLifecycleOptions(
+      operation.request,
+      options,
+    );
     const attemptAtMs = this.#now();
     if (attemptAtMs < operation.requestedAtMs) {
       throw new RangeError(
@@ -406,13 +426,23 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       await this.#runPostCompletionTasks(operation.id, [
         {
           description: "persistent operation logging",
-          promise: this.#logOperation(completed, command, null, "timed_out"),
+          promise: this.#logOperation(
+            completed,
+            command,
+            null,
+            "timed_out",
+            options,
+          ),
         },
       ]);
       return completed;
     }
 
-    await this.#repository.markInFlight(operation.id, attemptAtMs);
+    await this.#repository.markInFlight(
+      operation.id,
+      attemptAtMs,
+      lifecycleOptions,
+    );
     let wireResult: LegacyWireOperationResult;
     try {
       wireResult = await this.#transport.executeCommands([command], options);
@@ -444,6 +474,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
         operation.id,
         completedAtMs,
         result,
+        lifecycleOptions,
       );
       await this.#runPostCompletionTasks(operation.id, [
         {
@@ -453,6 +484,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
             command,
             null,
             result.status === "failed" ? "failed" : "outcome_unknown",
+            options,
           ),
         },
       ]);
@@ -478,6 +510,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
           reason: "transport_error_after_attempt",
           reconciledAtMs: null,
         },
+        lifecycleOptions,
       );
       await this.#runPostCompletionTasks(operation.id, [
         {
@@ -487,6 +520,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
             command,
             wireResult.operationId,
             "outcome_unknown",
+            options,
           ),
         },
       ]);
@@ -503,6 +537,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
           reason: "transport_error_after_attempt",
           reconciledAtMs: null,
         },
+        lifecycleOptions,
       );
       await this.#runPostCompletionTasks(operation.id, [
         {
@@ -512,6 +547,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
             command,
             wireResult.operationId,
             "outcome_unknown",
+            options,
           ),
         },
       ]);
@@ -522,6 +558,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       operation.id,
       wireResult.completedAtMs,
       result,
+      lifecycleOptions,
     );
     const postCompletionTasks: PostCompletionTask[] = [
       {
@@ -531,11 +568,21 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
           command,
           wireResult.operationId,
           result.status === "cancelled" ? "ignored" : result.status,
+          options,
         ),
       },
     ];
     if (outcome.status === "succeeded") {
       this.#responseCooldownUntilByDevice.delete(operation.deviceId);
+      postCompletionTasks.push({
+        description: "live device contact publication",
+        promise: Promise.resolve().then(() =>
+          this.#onDeviceContact?.({
+            deviceId: operation.deviceId,
+            observedAtMs: wireResult.completedAtMs,
+          }),
+        ),
+      });
       postCompletionTasks.push({
         description: "device response contact persistence",
         promise: this.#deviceRegistry
@@ -620,6 +667,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     correlationId: string | null,
     outcome:
       "succeeded" | "failed" | "timed_out" | "outcome_unknown" | "ignored",
+    options: DeviceOperationExecutionOptions,
   ): Promise<void> {
     if (operation.completedAtMs === null) {
       throw new Error(`Cannot log incomplete operation ${operation.id}`);
@@ -639,6 +687,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       outcome,
       durationMs: completedAtMs - operation.requestedAtMs,
       commandBytes: utf8ByteLength(command.command),
+      priority: options.priority ?? "interactive",
     });
   }
 
@@ -692,6 +741,15 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       throw new Error("Device operation service is not accepting operations");
     }
   }
+}
+
+function operationLifecycleOptions(
+  request: DeviceOperationRequest,
+  options: DeviceOperationExecutionOptions,
+): DeviceOperationLifecycleOptions {
+  return request.kind === "set_pwm" && options.priority === "background"
+    ? { visibility: "internal" }
+    : {};
 }
 
 interface PostCompletionTask {

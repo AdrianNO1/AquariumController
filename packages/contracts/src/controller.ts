@@ -21,35 +21,11 @@ import {
   retentionClassSchema,
 } from "./primitives.js";
 
-const controlTypeBySlug = {
-  lights: "light",
-  pumps: "pump",
-  testlights: "testlight",
-  bad: "bad",
-  loft: "loft",
-  biljard: "biljard",
-  frag: "frag",
-  qt1: "qt1",
-  qt2: "qt2",
-  qt3: "qt3",
-  qt4: "qt4",
-} as const;
-
-export const controlAreaSchema = z
-  .strictObject({
-    slug: controlAreaSlugSchema,
-    typeKey: controlTypeKeySchema,
-    label: boundedTextSchema,
-  })
-  .superRefine((area, context) => {
-    if (controlTypeBySlug[area.slug] !== area.typeKey) {
-      context.addIssue({
-        code: "custom",
-        path: ["typeKey"],
-        message: `Control area ${area.slug} must use type key ${controlTypeBySlug[area.slug]}`,
-      });
-    }
-  });
+export const controlAreaSchema = z.strictObject({
+  slug: controlAreaSlugSchema,
+  typeKey: controlTypeKeySchema,
+  label: boundedTextSchema,
+});
 
 export const channelSchema = z.strictObject({
   id: identifierSchema,
@@ -883,7 +859,7 @@ export const controllerSnapshotSchema = z
     revision: nonnegativeSafeIntegerSchema,
     committedAt: isoTimestampSchema.nullable(),
     generatedAt: isoTimestampSchema,
-    controlAreas: z.array(controlAreaSchema).length(11),
+    controlAreas: z.array(controlAreaSchema).max(100),
     channels: z.array(channelSchema),
     schedules: z.array(scheduleGraphSchema),
     throttles: z.array(throttleSchema),
@@ -938,6 +914,14 @@ export const controllerSnapshotSchema = z
         code: "custom",
         path: ["controlAreas"],
         message: "Controller snapshot control areas must be unique",
+      });
+    }
+    const typeKeys = new Set(snapshot.controlAreas.map((area) => area.typeKey));
+    if (typeKeys.size !== snapshot.controlAreas.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["controlAreas"],
+        message: "Controller snapshot control-area type keys must be unique",
       });
     }
     const channelById = new Map(
@@ -1120,6 +1104,7 @@ export const controllerSnapshotSchema = z
   });
 
 export const entityStateResourceSchema = z.enum([
+  "control_area",
   "channel",
   "schedule",
   "throttle",
@@ -1221,6 +1206,20 @@ export const committedStateEventSchema = z
 
 export const expectedRevisionSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
+});
+
+export const controlAreaParamsSchema = z.strictObject({
+  areaSlug: controlAreaSlugSchema,
+});
+
+export const createControlAreaRequestSchema = z.strictObject({
+  expectedRevision: nonnegativeSafeIntegerSchema,
+  label: boundedTextSchema,
+});
+
+export const renameControlAreaRequestSchema = z.strictObject({
+  expectedRevision: nonnegativeSafeIntegerSchema,
+  label: boundedTextSchema,
 });
 
 export const channelParamsSchema = z.strictObject({
@@ -1552,6 +1551,21 @@ export const configurationMutationEventV1Schema = z.strictObject({
   id: identifierSchema,
 });
 
+const controlAreaAuditThrottleSchema = z.strictObject({
+  id: identifierSchema,
+  percentage: percentageSchema,
+});
+
+export const controlAreaMutationEventV1Schema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: z.enum(["created", "updated", "deleted"]),
+  resource: z.literal("control_area"),
+  id: controlAreaSlugSchema,
+  before: controlAreaSchema.nullable(),
+  after: controlAreaSchema.nullable(),
+  throttle: controlAreaAuditThrottleSchema.nullable(),
+});
+
 const changedMutationResultSchema = z
   .strictObject({
     changed: z.literal(true),
@@ -1664,6 +1678,12 @@ export type StateInvalidation = z.infer<typeof stateInvalidationSchema>;
 export type StateOutboxEnvelopeV1 = z.infer<typeof stateOutboxEnvelopeV1Schema>;
 export type MutationResult = z.infer<typeof mutationResultSchema>;
 export type ApiErrorResponse = z.infer<typeof apiErrorResponseSchema>;
+export type CreateControlAreaRequest = z.infer<
+  typeof createControlAreaRequestSchema
+>;
+export type RenameControlAreaRequest = z.infer<
+  typeof renameControlAreaRequestSchema
+>;
 export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
 export type RenameChannelRequest = z.infer<typeof renameChannelRequestSchema>;
 export type UpdateChannelRequest = z.infer<typeof updateChannelRequestSchema>;
@@ -1705,4 +1725,7 @@ export type OperationDetailsResponse = z.infer<
 >;
 export type ConfigurationMutationEventV1 = z.infer<
   typeof configurationMutationEventV1Schema
+>;
+export type ControlAreaMutationEventV1 = z.infer<
+  typeof controlAreaMutationEventV1Schema
 >;

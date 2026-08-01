@@ -57,6 +57,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   server.resetHandlers();
+  window.localStorage.clear();
 });
 
 afterAll(() => {
@@ -247,6 +248,93 @@ describe("logs route", () => {
 });
 
 describe("alerts route", () => {
+  it("presents controller storage alerts in operator language", async () => {
+    const rule = {
+      id: "controller-storage-high-projected-one-year-bytes",
+      name: "Controller one-year storage projection is high",
+      source: {
+        type: "sensor" as const,
+        id: "controller-storage-projected-one-year-bytes",
+      },
+      condition: { kind: "above" as const, threshold: 10 * 1024 ** 3 },
+      delayMs: 0,
+      severity: "error" as const,
+      enabled: true,
+      createdAt: "2026-07-13T08:00:00.000Z",
+      updatedAt: "2026-07-13T08:00:00.000Z",
+    };
+    const alert = {
+      id: "alert-storage-projection",
+      alertRuleId: rule.id,
+      deduplicationKey: "storage-projection",
+      state: "open" as const,
+      openedAt: "2026-07-13T09:00:00.000Z",
+      lastObservedAt: "2026-07-13T09:05:00.000Z",
+      acknowledgedAt: null,
+      recoveredAt: null,
+      details: null,
+      notificationDeliveries: [],
+    };
+    const snapshot = createTestControllerSnapshot(4, {
+      alertRules: [rule],
+      alerts: [alert],
+    });
+    server.use(
+      http.get("http://localhost/api/alerts", () =>
+        HttpResponse.json(
+          alertHistoryListResponseSchema.parse({
+            schemaVersion: 1,
+            items: [alert],
+            nextCursor: null,
+            hasMore: false,
+            deliveriesTruncatedAlertIds: [],
+          }),
+        ),
+      ),
+    );
+
+    renderApp("/alerts", controllerState(snapshot, vi.fn()));
+
+    expect(
+      await screen.findByText("Projected controller storage after one year"),
+    ).toBeTruthy();
+    expect(screen.getByText("Projected storage above 10 GiB")).toBeTruthy();
+    expect(
+      screen.queryByText("controller-storage-projected-one-year-bytes"),
+    ).toBeNull();
+  });
+
+  it("keeps transient background refreshes quiet while mutations stay guarded", async () => {
+    const snapshot = createTestAlertsSnapshot(4);
+    const open = snapshot.alerts.find((alert) => alert.state === "open");
+    if (open === undefined) throw new Error("Missing open alert fixture");
+    server.use(
+      http.get("http://localhost/api/alerts", () =>
+        HttpResponse.json(
+          alertHistoryListResponseSchema.parse({
+            schemaVersion: 1,
+            items: [open],
+            nextCursor: null,
+            hasMore: false,
+            deliveriesTruncatedAlertIds: [],
+          }),
+        ),
+      ),
+    );
+
+    renderApp("/alerts", controllerState(snapshot, vi.fn(), true));
+
+    const acknowledge = await screen.findByRole("button", {
+      name: "Acknowledge alert",
+    });
+    expect((acknowledge as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      screen.queryByText(
+        "Acknowledgement is disabled until the authoritative snapshot is current.",
+      ),
+    ).toBeNull();
+  });
+
   it("shows delivery failures, acknowledges safely, paginates, and filters recovered history", async () => {
     const snapshot = createTestAlertsSnapshot(4);
     const open = snapshot.alerts.find((alert) => alert.state === "open");
@@ -337,9 +425,7 @@ describe("alerts route", () => {
     );
     await user.click(screen.getByRole("button", { name: "Acknowledge alert" }));
     expect(
-      await screen.findByText(
-        "Acknowledgement accepted. Refreshing authoritative state…",
-      ),
+      await screen.findByRole("button", { name: "Acknowledgement sent" }),
     ).toBeTruthy();
     expect(acknowledgementBody).toEqual({
       expectedRevision: 4,
@@ -451,6 +537,20 @@ describe("alerts route", () => {
 });
 
 describe("operations route", () => {
+  it("does not show connection warnings during initial or background refreshes", () => {
+    const snapshot = createTestControlSnapshot(8);
+    const connectedRefresh = controllerState(snapshot, vi.fn(), true);
+    const user = renderApp("/operations", connectedRefresh);
+
+    expect(screen.queryByText(/Controller state is connected/u)).toBeNull();
+
+    user.rerenderState({
+      ...connectedRefresh,
+      status: "loading",
+    });
+    expect(screen.queryByText(/Controller state is loading/u)).toBeNull();
+  });
+
   it("inspects and reconciles an unresolved outcome outside recent history and current mappings", async () => {
     const base = createTestControlSnapshot(8);
     const hiddenOperation = base.operations.items.find(
@@ -463,7 +563,11 @@ describe("operations route", () => {
       ...base,
       devices: base.devices.map((device) =>
         device.id === hiddenOperation.deviceId
-          ? { ...device, mappingProfileId: null }
+          ? {
+              ...device,
+              mappingProfileId: null,
+              desired: { ...device.desired, name: "Backup rack" },
+            }
           : device,
       ),
       operations: {
@@ -524,6 +628,8 @@ describe("operations route", () => {
       screen.getByRole("heading", { name: "Device operation outcomes" }),
     ).toBeTruthy();
     expect(screen.getByRole("link", { name: "Operations" })).toBeTruthy();
+    expect(screen.getByText("Backup rack · outcome_unknown")).toBeTruthy();
+    expect(screen.queryByText("device-backup · outcome_unknown")).toBeNull();
     await user.click(
       screen.getByRole("button", {
         name: "Inspect operation-unknown",
@@ -548,6 +654,22 @@ describe("operations route", () => {
 });
 
 describe("operational navigation", () => {
+  it("hides maintenance links on control routes unless developer mode is enabled", () => {
+    const state = controllerState(createTestControlSnapshot(8), vi.fn());
+    renderApp("/control/lights", state);
+
+    for (const name of ["Operations", "Alerts", "Logs"]) {
+      expect(screen.queryByRole("link", { name })).toBeNull();
+    }
+
+    cleanup();
+    window.localStorage.setItem("dev", "true");
+    renderApp("/control/lights", state);
+    for (const name of ["Operations", "Alerts", "Logs"]) {
+      expect(screen.getByRole("link", { name })).toBeTruthy();
+    }
+  });
+
   it("links alerts and removes the unsafe admin placeholder", () => {
     renderApp(
       "/admin",

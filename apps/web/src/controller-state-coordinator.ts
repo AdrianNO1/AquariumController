@@ -315,6 +315,10 @@ export class ControllerStateCoordinator {
       this.#resynchronize(event.data.currentRevision);
       return;
     }
+    if (event.type === "device.contact") {
+      this.#applyDeviceContact(event.data.deviceId, event.occurredAt);
+      return;
+    }
     if (event.data.currentRevision > this.#state.revision) {
       this.#resynchronize(event.data.currentRevision);
       return;
@@ -341,6 +345,28 @@ export class ControllerStateCoordinator {
           this.#state.snapshot.revision < this.#state.revision,
       });
     }
+  }
+
+  #applyDeviceContact(deviceId: string, occurredAt: string): void {
+    const snapshot = this.#state.snapshot;
+    if (snapshot === null) return;
+    const contactMs = Date.parse(occurredAt);
+    let changed = false;
+    const devices = snapshot.devices.map((device) => {
+      if (device.id !== deviceId) return device;
+      const currentMs =
+        device.lastSeenAt === null
+          ? Number.NEGATIVE_INFINITY
+          : Date.parse(device.lastSeenAt);
+      if (contactMs <= currentMs) return device;
+      changed = true;
+      return { ...device, lastSeenAt: occurredAt };
+    });
+    if (!changed) return;
+    this.#setState({
+      ...this.#state,
+      snapshot: { ...snapshot, devices },
+    });
   }
 
   #handleCommittedEvent(

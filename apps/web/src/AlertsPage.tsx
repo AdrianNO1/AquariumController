@@ -34,16 +34,87 @@ interface AcknowledgeVariables {
 interface AlertCardProps {
   readonly item: AlertPresentationItem;
   readonly snapshotRevision: number;
-  readonly stateIsStale: boolean;
+  readonly actionsDisabled: boolean;
+  readonly showStateWarning: boolean;
   readonly deliveriesTruncated: boolean;
   readonly acknowledgement: ReturnType<typeof useAlertAcknowledgement>;
 }
 
+const STORAGE_SENSOR_PRESENTATION: Readonly<
+  Record<
+    string,
+    {
+      readonly source: string;
+      readonly condition: (threshold: number) => string;
+    }
+  >
+> = {
+  "controller-storage-filesystem-free-bytes": {
+    source: "Controller filesystem free space",
+    condition: (threshold) => `Free space below ${formatBytes(threshold)}`,
+  },
+  "controller-storage-projected-one-year-bytes": {
+    source: "Projected controller storage after one year",
+    condition: (threshold) =>
+      `Projected storage above ${formatBytes(threshold)}`,
+  },
+  "controller-storage-failed-retention-runs": {
+    source: "Retention maintenance",
+    condition: () => "One or more unresolved failures",
+  },
+  "controller-storage-failed-archives": {
+    source: "Event archiving",
+    condition: () => "One or more unresolved failures",
+  },
+  "controller-storage-latest-backup-failed": {
+    source: "Latest controller backup",
+    condition: () => "Latest backup failed",
+  },
+  "controller-storage-successful-backup-missing-or-stale": {
+    source: "Successful controller backups",
+    condition: () => "No recent verified backup",
+  },
+};
+
 function conditionLabel(rule: AlertRule): string {
+  const storagePresentation =
+    rule.source.type === "sensor"
+      ? STORAGE_SENSOR_PRESENTATION[rule.source.id]
+      : undefined;
+  if (storagePresentation !== undefined && "threshold" in rule.condition) {
+    return storagePresentation.condition(rule.condition.threshold);
+  }
   const kind = rule.condition.kind.replaceAll("_", " ");
   return "threshold" in rule.condition
     ? `${kind} ${rule.condition.threshold}`
     : kind;
+}
+
+function sourceLabel(rule: AlertRule): string {
+  if (rule.source.type === "sensor") {
+    return (
+      STORAGE_SENSOR_PRESENTATION[rule.source.id]?.source ??
+      `Sensor: ${humanizeIdentifier(rule.source.id)}`
+    );
+  }
+  return `${capitalize(rule.source.type)}: ${rule.source.id}`;
+}
+
+function humanizeIdentifier(value: string): string {
+  return value.replaceAll(/[-_]+/gu, " ");
+}
+
+function capitalize(value: string): string {
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+}
+
+function formatBytes(bytes: number): string {
+  const gibibytes = bytes / 1024 ** 3;
+  if (gibibytes >= 1) {
+    return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(gibibytes)} GiB`;
+  }
+  const mebibytes = bytes / 1024 ** 2;
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(mebibytes)} MiB`;
 }
 
 function deliveryLabel(delivery: NotificationDelivery): string {
@@ -110,7 +181,8 @@ function DeliveryList({
 function AlertCard({
   item,
   snapshotRevision,
-  stateIsStale,
+  actionsDisabled,
+  showStateWarning,
   deliveriesTruncated,
   acknowledgement,
 }: AlertCardProps): React.JSX.Element {
@@ -155,9 +227,7 @@ function AlertCard({
       <dl className="alert-facts">
         <div>
           <dt>Source</dt>
-          <dd>
-            {rule.source.type}: {rule.source.id}
-          </dd>
+          <dd>{sourceLabel(rule)}</dd>
         </div>
         <div>
           <dt>Condition</dt>
@@ -228,7 +298,7 @@ function AlertCard({
           <button
             className="primary-button"
             type="submit"
-            disabled={stateIsStale || pending || succeeded}
+            disabled={actionsDisabled || pending || succeeded}
           >
             {pending
               ? "Acknowledging…"
@@ -236,7 +306,7 @@ function AlertCard({
                 ? "Acknowledgement sent"
                 : "Acknowledge alert"}
           </button>
-          {stateIsStale ? (
+          {showStateWarning ? (
             <p className="field-error" role="status">
               Acknowledgement is disabled until the authoritative snapshot is
               current.
@@ -260,11 +330,6 @@ function AlertCard({
               Keep acknowledgement draft with refreshed revision
             </button>
           )}
-          {succeeded ? (
-            <p className="success-message" role="status">
-              Acknowledgement accepted. Refreshing authoritative state…
-            </p>
-          ) : null}
         </form>
       )}
     </article>
@@ -284,7 +349,8 @@ function AlertSection({
   emptyMessage,
   items,
   snapshotRevision,
-  stateIsStale,
+  actionsDisabled,
+  showStateWarning,
   truncatedDeliveryIds,
   acknowledgement,
 }: {
@@ -293,7 +359,8 @@ function AlertSection({
   readonly emptyMessage: string;
   readonly items: readonly AlertPresentationItem[];
   readonly snapshotRevision: number;
-  readonly stateIsStale: boolean;
+  readonly actionsDisabled: boolean;
+  readonly showStateWarning: boolean;
   readonly truncatedDeliveryIds: ReadonlySet<string>;
   readonly acknowledgement: ReturnType<typeof useAlertAcknowledgement>;
 }): React.JSX.Element {
@@ -311,7 +378,8 @@ function AlertSection({
               key={item.alert.id}
               item={item}
               snapshotRevision={snapshotRevision}
-              stateIsStale={stateIsStale}
+              actionsDisabled={actionsDisabled}
+              showStateWarning={showStateWarning}
               deliveriesTruncated={truncatedDeliveryIds.has(item.alert.id)}
               acknowledgement={acknowledgement}
             />
@@ -325,14 +393,16 @@ function AlertSection({
 function AlertsPresentation({
   model,
   snapshotRevision,
-  stateIsStale,
+  actionsDisabled,
+  showStateWarning,
   stateFilter,
   truncatedDeliveryIds,
   acknowledgement,
 }: {
   readonly model: AlertsReadModel;
   readonly snapshotRevision: number;
-  readonly stateIsStale: boolean;
+  readonly actionsDisabled: boolean;
+  readonly showStateWarning: boolean;
   readonly stateFilter: AlertHistoryStateFilter;
   readonly truncatedDeliveryIds: ReadonlySet<string>;
   readonly acknowledgement: ReturnType<typeof useAlertAcknowledgement>;
@@ -362,7 +432,8 @@ function AlertsPresentation({
           emptyMessage="No open alerts on this page."
           items={model.open}
           snapshotRevision={snapshotRevision}
-          stateIsStale={stateIsStale}
+          actionsDisabled={actionsDisabled}
+          showStateWarning={showStateWarning}
           truncatedDeliveryIds={truncatedDeliveryIds}
           acknowledgement={acknowledgement}
         />
@@ -376,7 +447,8 @@ function AlertsPresentation({
           emptyMessage="No acknowledged alerts on this page."
           items={model.acknowledged}
           snapshotRevision={snapshotRevision}
-          stateIsStale={stateIsStale}
+          actionsDisabled={actionsDisabled}
+          showStateWarning={showStateWarning}
           truncatedDeliveryIds={truncatedDeliveryIds}
           acknowledgement={acknowledgement}
         />
@@ -388,7 +460,8 @@ function AlertsPresentation({
           emptyMessage="No recovered alerts on this page."
           items={model.recovered}
           snapshotRevision={snapshotRevision}
-          stateIsStale={stateIsStale}
+          actionsDisabled={actionsDisabled}
+          showStateWarning={showStateWarning}
           truncatedDeliveryIds={truncatedDeliveryIds}
           acknowledgement={acknowledgement}
         />
@@ -485,11 +558,9 @@ export function AlertsPage(): React.JSX.Element {
           className="secondary-button"
           type="button"
           onClick={refreshAll}
-          disabled={controller.isRefreshing || history.isFetching}
+          disabled={history.isPending}
         >
-          {controller.isRefreshing || history.isFetching
-            ? "Refreshing…"
-            : "Refresh alerts"}
+          Refresh alerts
         </button>
       </header>
 
@@ -564,7 +635,15 @@ export function AlertsPage(): React.JSX.Element {
           <AlertsPresentation
             model={model}
             snapshotRevision={snapshot.revision}
-            stateIsStale={controller.dataStale || history.isPlaceholderData}
+            actionsDisabled={
+              controller.dataStale ||
+              controller.status !== "connected" ||
+              history.isPlaceholderData
+            }
+            showStateWarning={
+              controller.status !== "connected" &&
+              controller.status !== "loading"
+            }
             stateFilter={request.state}
             truncatedDeliveryIds={truncatedDeliveryIds}
             acknowledgement={acknowledgement}

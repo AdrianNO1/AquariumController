@@ -23,9 +23,9 @@ export interface PruneRoutineControlOperationsResult {
 }
 
 /**
- * Bounds high-volume routine PWM operation history in state.db. Durable wire
- * summaries remain in events.db; unresolved, failed, non-PWM, recent, and
- * foreign-key-referenced operations are never selected.
+ * Bounds retained PWM operation history in state.db. Healthy background
+ * refreshes are removed at completion; unresolved, failed, non-PWM, recent,
+ * and foreign-key-referenced operations are never selected here.
  */
 export class ControlOperationRetentionRepository {
   constructor(private readonly database: Kysely<StateDatabaseSchema>) {}
