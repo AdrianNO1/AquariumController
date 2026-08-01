@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <ArduinoOTA.h>
 #include <PubSubClient.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
@@ -12,8 +13,10 @@
 #include <atomic>
 #include <cerrno>
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>  // for strlcpy, strlen
+#include <esp_system.h>
 #include "firmware-config.h"
 
 unsigned long lastReconnectAttempt = 0;
@@ -27,8 +30,9 @@ const int MAX_PIN = 63;
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "4.1.0";
+const char* VERSION = "4.2.1";
 const bool TEST = false;
+const uint16_t OTA_PORT = 3232;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
 const time_t MIN_VALID_UNIX_TIME = 1735689600; // January 1, 2025 UTC
@@ -96,6 +100,11 @@ std::map<int, PinState> pinStates;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+bool otaStarted = false;
+String otaHostname;
+char otaPassword[17] = {0};
+unsigned int lastOtaProgressPercent = 101;
 
 bool attachedPins[64] = {false};
 int lastPinValues[64] = {0};
@@ -1300,6 +1309,114 @@ bool publishWithRetry(const char* topic, const char* payload) {
 }
 
 
+void stopOta() {
+	if (!otaStarted) {
+		return;
+	}
+
+	ArduinoOTA.end();
+	otaStarted = false;
+	Serial.println("OTA service stopped");
+}
+
+void startOtaIfConnected() {
+	if (otaStarted || WiFi.status() != WL_CONNECTED) {
+		return;
+	}
+
+	if (otaPassword[0] == '\0') {
+		const uint32_t firstPasswordHalf = esp_random();
+		const uint32_t secondPasswordHalf = esp_random();
+		snprintf(
+			otaPassword,
+			sizeof(otaPassword),
+			"%08lX%08lX",
+			static_cast<unsigned long>(firstPasswordHalf),
+			static_cast<unsigned long>(secondPasswordHalf)
+		);
+		otaHostname = "aquarium-" + deviceId;
+	}
+
+	ArduinoOTA.setPort(OTA_PORT);
+	ArduinoOTA.setHostname(otaHostname.c_str());
+	ArduinoOTA.setPassword(otaPassword);
+	ArduinoOTA.setRebootOnSuccess(true);
+	ArduinoOTA.onStart([]() {
+		lastOtaProgressPercent = 101;
+		const char* target = ArduinoOTA.getCommand() == U_FLASH
+			? "firmware"
+			: "filesystem";
+		Serial.println();
+		Serial.println("OTA update starting");
+		Serial.println("OTA target: " + String(target));
+	});
+	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+		const unsigned int percent = total == 0
+			? 0
+			: static_cast<unsigned int>(
+				(static_cast<uint64_t>(progress) * 100U) / total
+			);
+		if (
+			percent == 100 ||
+			lastOtaProgressPercent == 101 ||
+			percent / 10 != lastOtaProgressPercent / 10
+		) {
+			lastOtaProgressPercent = percent;
+			Serial.printf("OTA progress: %u%%\n", percent);
+		}
+	});
+	ArduinoOTA.onEnd([]() {
+		Serial.println("OTA update complete; rebooting");
+		Serial.flush();
+	});
+	ArduinoOTA.onError([](ota_error_t error) {
+		Serial.printf("OTA error %u: ", static_cast<unsigned int>(error));
+		switch (error) {
+			case OTA_AUTH_ERROR:
+				Serial.println("authentication failed");
+				break;
+			case OTA_BEGIN_ERROR:
+				Serial.println("update initialization failed");
+				break;
+			case OTA_CONNECT_ERROR:
+				Serial.println("uploader connection failed");
+				break;
+			case OTA_RECEIVE_ERROR:
+				Serial.println("firmware receive failed");
+				break;
+			case OTA_END_ERROR:
+				Serial.println("firmware validation failed");
+				break;
+			default:
+				Serial.println("unknown failure");
+				break;
+		}
+	});
+	ArduinoOTA.begin();
+	otaStarted = true;
+
+	Serial.println();
+	Serial.println("=== OTA CONNECTION INFO ===");
+	Serial.println("Firmware: " + String(VERSION));
+	Serial.println("Device ID: " + deviceId);
+	Serial.println("Hostname: " + otaHostname);
+	Serial.println("IP address: " + WiFi.localIP().toString());
+	Serial.println("Port: " + String(OTA_PORT));
+	Serial.println("Password: " + String(otaPassword));
+	Serial.println("=== END OTA CONNECTION INFO ===");
+	Serial.println();
+}
+
+void serviceOta() {
+	if (WiFi.status() != WL_CONNECTED) {
+		stopOta();
+		return;
+	}
+
+	startOtaIfConnected();
+	ArduinoOTA.handle();
+}
+
 void setup_wifi() {
 	Serial.println("Connecting to WiFi...");
 	Serial.print("SSID: ");
@@ -2003,6 +2120,7 @@ void setup() {
 	}
 
 	setup_wifi();
+	startOtaIfConnected();
 	initializeTime();
 	
 	client.setServer(mqtt_server, mqtt_port);
@@ -2017,6 +2135,7 @@ void loop() {
 		WiFi.reconnect();
 		delay(200);
 	}
+	serviceOta();
 
 	serviceTimeSynchronization();
 
@@ -2184,6 +2303,7 @@ void loop() {
             }
 
             // Reconnect WiFi
+			stopOta();
             WiFi.disconnect(true);
             delay(500);
             setup_wifi();

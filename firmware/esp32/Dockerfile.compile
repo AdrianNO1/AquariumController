@@ -30,8 +30,8 @@ RUN apt-get update \
 
 WORKDIR /src/ESP32Code
 
-COPY .old/slaveCode/ESP32Code/ESP32Code.ino ./ESP32Code.ino
-COPY .old/slaveCode/ESP32Code/firmware-config.example.h ./firmware-config.h
+COPY firmware/esp32/ESP32Code/ESP32Code.ino ./ESP32Code.ino
+COPY firmware/esp32/ESP32Code/firmware-config.example.h ./firmware-config.h
 
 RUN arduino-cli compile \
     --fqbn esp32:esp32:esp32 \

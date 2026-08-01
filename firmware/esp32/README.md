@@ -1,23 +1,29 @@
 # ESP32 firmware verification
 
-The deployed firmware source remains at
-`.old/slaveCode/ESP32Code/ESP32Code.ino` while the refactor is in progress. It
-is now a supported part of the application and must compile before release.
+The active firmware source is
+`firmware/esp32/ESP32Code/ESP32Code.ino`. It is a supported part of the
+application and must compile before release.
 
 The sketch reads its Wi-Fi and MQTT settings from the ignored
-`.old/slaveCode/ESP32Code/firmware-config.h`. A local copy has been preserved on
-this development machine without exposing its values in tracked source. On a
-fresh checkout, copy `firmware-config.example.h` to `firmware-config.h`, replace
-the Wi-Fi, MQTT, and NTP settings, and keep that file out of Git. The pinned verification build
-uses only the safe example values because it compiles but never flashes or
-connects the firmware.
+`firmware/esp32/ESP32Code/firmware-config.h`. On a fresh checkout, copy
+`firmware-config.example.h` to `firmware-config.h`, replace the Wi-Fi, MQTT, and
+NTP settings, and keep that file out of Git. The pinned verification build uses
+only the safe example values because it compiles but never flashes or connects
+the firmware.
 
-Firmware 4.1.0 supports a username/password on its plaintext MQTT connection.
+Firmware 4.2.1 supports a username/password on its plaintext MQTT connection.
 Set both values to non-empty strings for an authenticated broker, or leave both
 empty only when the broker intentionally permits anonymous clients on an
 isolated trusted LAN. The sketch does not support MQTT TLS; do not configure a
 production broker that requires `mqtts://` for ESP clients without a future
 firmware change and physical validation.
+
+Firmware 4.2.1 also exposes a temporary ArduinoOTA smoke-test service after
+Wi-Fi connects. It generates its OTA password automatically at boot and prints
+the hostname, IP address, port, and password to the serial monitor. This push
+service verifies the wireless transport before controller-managed pull updates
+and signed release images are implemented; it is not the final fleet-update
+authentication design.
 
 The `s <pin> <value> <overwrite>` command defines `value` as a normalized
 8-bit duty from 0 through 255. Firmware scales that value to the configured
@@ -57,7 +63,7 @@ operation. Unwrapped command batches remain available for local diagnostics.
 Build the pinned verification image from the repository root:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.1.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.2.1 .
 ```
 
 The image build verifies Arduino CLI 1.5.0 against its official archive SHA-256
