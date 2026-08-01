@@ -41,6 +41,17 @@ const controlAreas: readonly ControlArea[] = [
 ];
 const channels: readonly Channel[] = [
   {
+    id: "channel-uv",
+    name: "Uv",
+    color: "#7651d8",
+    typeKey: "light",
+    throttleId: "throttle-light",
+    displayOrder: 1,
+    enabled: true,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  },
+  {
     id: "channel-light",
     name: "White",
     color: "#80909a",
@@ -135,7 +146,21 @@ describe("MappingProfilesDialog", () => {
     expect(
       screen.getByRole("option", { name: "Pumps · Return pump" }),
     ).toBeTruthy();
+    expect(
+      within(
+        screen.getByRole("listbox", {
+          name: "Available channel targets",
+        }),
+      )
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Lights · Uv", "Lights · White", "Pumps · Return pump"]);
 
+    await user.type(search, "lights uv");
+    expect(screen.getByRole("option", { name: "Lights · Uv" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Lights · White" })).toBeNull();
+
+    await user.clear(search);
     await user.type(search, "return");
     expect(screen.queryByRole("option", { name: "Lights · White" })).toBeNull();
     expect(
@@ -335,6 +360,52 @@ describe("MappingProfilesDialog", () => {
     expect(document.activeElement).toBe(openConfirmation);
   });
 
+  it("closes only when a pointer gesture both starts and ends on the backdrop", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderDialog({ onClose });
+    const backdrop = screen.getByRole("dialog", {
+      name: "Mapping profiles",
+    }).parentElement;
+    if (backdrop === null) throw new Error("Mapping backdrop is missing");
+
+    await user.pointer([
+      {
+        target: screen.getByRole("textbox", { name: "Profile name" }),
+        keys: "[MouseLeft>]",
+      },
+      { target: backdrop, keys: "[/MouseLeft]" },
+    ]);
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.pointer({ target: backdrop, keys: "[MouseLeft]" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("requires dirty profile edits to be saved or discarded before backdrop close", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderDialog({ onClose });
+    const name = screen.getByRole("textbox", { name: "Profile name" });
+    await user.clear(name);
+    await user.type(name, "Unsaved profile");
+    const backdrop = screen.getByRole("dialog", {
+      name: "Mapping profiles",
+    }).parentElement;
+    if (backdrop === null) throw new Error("Mapping backdrop is missing");
+
+    await user.pointer({ target: backdrop, keys: "[MouseLeft]" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Save changes before closing?",
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Discard changes" }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
   it("keeps focus inside the outer dialog while a newly saved editor is replaced", async () => {
     server.use(
       http.put("http://localhost/api/mapping-profiles/:profileId", () =>
@@ -474,6 +545,7 @@ function renderTree(
       channels,
       outputs,
       controlAreas,
+      currentTypeKey: "light",
       expectedRevision: 8,
       refresh: vi.fn(),
       ...overrides,

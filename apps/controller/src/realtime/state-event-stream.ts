@@ -3,6 +3,7 @@ import {
   streamHeartbeatEventSchema,
   streamReadyEventSchema,
   type CommittedStateEvent,
+  type SystemStreamEvent,
 } from "@aquarium/contracts";
 
 import {
@@ -116,6 +117,12 @@ export class StateEventStreamHub {
     }
   }
 
+  publishTransient(event: SystemStreamEvent): void {
+    for (const connection of this.#connections) {
+      connection.acceptTransient(event);
+    }
+  }
+
   get connectionCount(): number {
     return this.#connections.size;
   }
@@ -181,6 +188,11 @@ export class StateEventStreamConnection {
       return;
     }
     this.#acceptSequentialEvent(event);
+  }
+
+  acceptTransient(event: SystemStreamEvent): void {
+    if (this.#closed || this.#replaying) return;
+    this.#enqueue({ value: formatTransientSseEvent(event) });
   }
 
   finishReplay(replay: ReplayWindow): void {

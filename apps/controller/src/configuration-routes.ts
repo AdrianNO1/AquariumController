@@ -40,6 +40,11 @@ export interface ConfigurationRouteDependencies {
   readonly configurationService?: ControllerConfigurationService;
   readonly deviceConfigurationCommands?: DeviceConfigurationCommandPort;
   readonly alertAcknowledgementCommands?: AlertAcknowledgementCommandPort;
+  readonly deviceDiscoveryCommands?: DeviceDiscoveryCommandPort;
+}
+
+export interface DeviceDiscoveryCommandPort {
+  requestDeviceDiscovery(): void;
 }
 
 class ConfigurationServiceUnavailableError extends Error {
@@ -308,6 +313,9 @@ export function registerConfigurationRoutes(
         deviceId,
         body,
       );
+      if (body.enabled) {
+        dependencies.deviceDiscoveryCommands?.requestDeviceDiscovery();
+      }
       return reply.code(200).send(mutationResultSchema.parse(result));
     }),
   );

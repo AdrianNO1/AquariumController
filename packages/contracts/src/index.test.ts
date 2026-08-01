@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   committedStateEventSchema,
   controllerStreamEventSchema,
+  deviceContactEventSchema,
   healthResponseSchema,
   legacyControlAreaSchema,
   streamReadyEventSchema,
@@ -83,5 +84,16 @@ describe("shared contracts", () => {
         data: { currentRevision: 0, replayedCount: 0, unexpected: true },
       }).success,
     ).toBe(false);
+  });
+
+  it("validates transient device contact without assigning a revision", () => {
+    const event = deviceContactEventSchema.parse({
+      type: "device.contact",
+      occurredAt: "2026-07-10T12:00:00.000Z",
+      data: { deviceId: "device-main" },
+    });
+
+    expect(controllerStreamEventSchema.parse(event)).toEqual(event);
+    expect("revision" in event).toBe(false);
   });
 });

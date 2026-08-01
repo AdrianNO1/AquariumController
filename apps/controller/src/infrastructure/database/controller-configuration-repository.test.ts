@@ -6,10 +6,12 @@ import type { Kysely } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  ConfigurationNotFoundError,
   ConfigurationRelationalConflictError,
   ConfigurationRevisionConflictError,
   ConfigurationValidationError,
 } from "../../application/configuration/index.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import {
   ControllerConfigurationRepository,
   ControllerSnapshotRepository,
@@ -54,6 +56,40 @@ afterEach(async () => {
 });
 
 describe("ControllerConfigurationRepository", () => {
+  it("does not expose the internal storage-health owner as an operator device", async () => {
+    const database = await openDatabase();
+    await database
+      .insertInto("devices")
+      .values({
+        id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        hardware_id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        name: "Controller storage health",
+        desired_pwm_frequency_hz: 1_000,
+        desired_pwm_resolution_bits: 8,
+        status: "unknown",
+        enabled: 0,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+      })
+      .executeTakeFirstOrThrow();
+    const repository = new ControllerConfigurationRepository(database);
+
+    await expect(
+      repository.setDeviceEnabled(CONTROLLER_STORAGE_HEALTH_DEVICE_ID, {
+        expectedRevision: 0,
+        enabled: true,
+      }),
+    ).rejects.toBeInstanceOf(ConfigurationNotFoundError);
+    await expect(
+      database
+        .selectFrom("devices")
+        .select("enabled")
+        .where("id", "=", CONTROLLER_STORAGE_HEALTH_DEVICE_ID)
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ enabled: 0 });
+    expect(await readCurrentStateRevision(database)).toBe(0);
+  });
+
   it("excludes devices reversibly and clears protocol quarantine only on include", async () => {
     const database = await openDatabase();
     await database

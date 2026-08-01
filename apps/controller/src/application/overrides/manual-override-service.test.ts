@@ -92,6 +92,58 @@ describe("manual override service", () => {
     ]);
   });
 
+  it("keeps the active value until its replacement receives an outcome", async () => {
+    let finishReplacement: (
+      result: ManualOverrideDeviceDispatchResult,
+    ) => void = () => undefined;
+    const replacementResult = new Promise<ManualOverrideDeviceDispatchResult>(
+      (resolve) => {
+        finishReplacement = resolve;
+      },
+    );
+    const context = await createContext([
+      {
+        kind: "completed",
+        operation: { id: "child-original", status: "succeeded" },
+      },
+      replacementResult,
+    ]);
+    await context.service.startOverride({
+      expectedRevision: 0,
+      target: { targetType: "channel", targetId: "channel-blue" },
+      valuePercentage: 80,
+      durationSeconds: 300,
+    });
+    await waitForOverrideStatus(context.repository, "override-1", "active");
+
+    const replacement = await context.service.startOverride({
+      expectedRevision: 3,
+      replaceOverrideId: "override-1",
+      target: { targetType: "channel", targetId: "channel-blue" },
+      valuePercentage: 40,
+      durationSeconds: 300,
+    });
+    expect(replacement.override.id).toBe("override-3");
+    await vi.waitFor(() => expect(context.commands.calls).toHaveLength(2));
+    await expect(
+      context.repository.readActiveManualOverrideOutputs(INITIAL_TIME_MS),
+    ).resolves.toMatchObject([{ overrideId: "override-1", value: 143 }]);
+
+    finishReplacement({
+      kind: "completed",
+      operation: { id: "child-replacement", status: "succeeded" },
+    });
+    await waitForOverrideStatus(context.repository, "override-3", "active");
+    await expect(
+      context.repository.getOverride("override-1"),
+    ).resolves.toMatchObject({
+      status: "cancelled",
+    });
+    await expect(
+      context.repository.readActiveManualOverrideOutputs(INITIAL_TIME_MS),
+    ).resolves.toMatchObject([{ overrideId: "override-3", value: 71 }]);
+  });
+
   it("keeps the overlay through 119999 ms and expires it at exactly 120000 ms", async () => {
     const context = await createContext();
     await context.service.startOverride({

@@ -17,6 +17,7 @@ import {
 import type { Kysely, Selectable } from "kysely";
 import { z } from "zod";
 
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 import type {
   ActiveAlertsTable,
@@ -67,15 +68,31 @@ export class AlertHistoryRepository {
       request.cursor === undefined
         ? null
         : decodeAlertHistoryCursor(request.cursor, request.state);
-    let query = this.database.selectFrom("active_alerts").selectAll();
+    let query = this.database
+      .selectFrom("active_alerts")
+      .innerJoin("alert_rules", "alert_rules.id", "active_alerts.alert_rule_id")
+      .selectAll("active_alerts")
+      .where((expressions) =>
+        expressions.or([
+          expressions("alert_rules.source_type", "!=", "device"),
+          expressions(
+            "alert_rules.device_id",
+            "!=",
+            CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+          ),
+        ]),
+      );
     switch (request.state) {
       case "active":
-        query = query.where("state", "in", ["open", "acknowledged"]);
+        query = query.where("active_alerts.state", "in", [
+          "open",
+          "acknowledged",
+        ]);
         break;
       case "open":
       case "acknowledged":
       case "recovered":
-        query = query.where("state", "=", request.state);
+        query = query.where("active_alerts.state", "=", request.state);
         break;
       case "all":
         break;
@@ -83,17 +100,25 @@ export class AlertHistoryRepository {
     if (cursor !== null) {
       query = query.where((expressions) =>
         expressions.or([
-          expressions("last_observed_at_ms", "<", cursor.lastObservedAtMs),
+          expressions(
+            "active_alerts.last_observed_at_ms",
+            "<",
+            cursor.lastObservedAtMs,
+          ),
           expressions.and([
-            expressions("last_observed_at_ms", "=", cursor.lastObservedAtMs),
-            expressions("id", "<", cursor.id),
+            expressions(
+              "active_alerts.last_observed_at_ms",
+              "=",
+              cursor.lastObservedAtMs,
+            ),
+            expressions("active_alerts.id", "<", cursor.id),
           ]),
         ]),
       );
     }
     const rows = await query
-      .orderBy("last_observed_at_ms", "desc")
-      .orderBy("id", "desc")
+      .orderBy("active_alerts.last_observed_at_ms", "desc")
+      .orderBy("active_alerts.id", "desc")
       .limit(request.pageSize + 1)
       .execute();
     const hasMore = rows.length > request.pageSize;

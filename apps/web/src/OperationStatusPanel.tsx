@@ -1,4 +1,5 @@
 import type {
+  Device,
   OperationDetailsResponse,
   OperationSummary,
 } from "@aquarium/contracts";
@@ -11,6 +12,7 @@ import { configurationErrorMessage } from "./configuration-ui.js";
 
 interface OperationStatusPanelProps {
   readonly operations: readonly OperationSummary[];
+  readonly devices?: readonly Device[];
   readonly truncated: boolean;
   readonly expectedRevision: number;
   readonly refresh: () => void;
@@ -56,6 +58,7 @@ export function UnresolvedOperationStatusPanel(
 
 function OperationListPanel({
   operations,
+  devices = [],
   truncated,
   expectedRevision,
   refresh,
@@ -65,6 +68,9 @@ function OperationListPanel({
 }): React.JSX.Element {
   const [selectedOperationId, setSelectedOperationId] = useState<string | null>(
     null,
+  );
+  const deviceNames = new Map(
+    devices.map((device) => [device.id, device.desired.name]),
   );
   return (
     <section className="control-panel" aria-labelledby={copy.headingId}>
@@ -90,11 +96,15 @@ function OperationListPanel({
               <span>
                 <strong>{operation.kind.replaceAll("_", " ")}</strong>
                 <small>
-                  {operation.deviceId ?? "Controller"} · {operation.status}
+                  {operation.deviceId === null
+                    ? "Controller"
+                    : (deviceNames.get(operation.deviceId) ??
+                      operation.deviceId)}{" "}
+                  · {operation.status}
                 </small>
               </span>
               <time dateTime={operation.requestedAt}>
-                {formatUtc(operation.requestedAt)}
+                {formatLocalTime(operation.requestedAt)}
               </time>
               <button
                 className="text-button"
@@ -175,14 +185,14 @@ function OperationDetails({
             </div>
             <div>
               <dt>Requested</dt>
-              <dd>{formatUtc(query.data.operation.requestedAt)}</dd>
+              <dd>{formatLocalTime(query.data.operation.requestedAt)}</dd>
             </div>
             <div>
               <dt>Completed</dt>
               <dd>
                 {query.data.operation.completedAt === null
                   ? "Not completed"
-                  : formatUtc(query.data.operation.completedAt)}
+                  : formatLocalTime(query.data.operation.completedAt)}
               </dd>
             </div>
           </dl>
@@ -247,7 +257,10 @@ function OperationDetails({
           deviceOutcome.reconciledAtMs === null ? null : (
             <p className="information-banner">
               This unknown device outcome was reconciled at{" "}
-              {formatUtc(new Date(deviceOutcome.reconciledAtMs).toISOString())}.
+              {formatLocalTime(
+                new Date(deviceOutcome.reconciledAtMs).toISOString(),
+              )}
+              .
             </p>
           )}
         </>
@@ -290,10 +303,9 @@ function operationSymbol(status: OperationSummary["status"]): string {
   }
 }
 
-function formatUtc(value: string): string {
+function formatLocalTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
-    timeZone: "UTC",
   }).format(new Date(value));
 }

@@ -36,6 +36,7 @@ export const manualOverrideOperationRequestSchema = z.discriminatedUnion(
     z.strictObject({
       ...manualOverrideOperationBaseShape,
       kind: z.literal("manual_override_start"),
+      replacesOverrideId: identifierSchema.optional(),
       valuePercentage: percentageSchema,
       expiresAtMs: nonnegativeSafeIntegerSchema,
     }),
@@ -203,6 +204,7 @@ export interface ManualOverrideRepositoryPort extends ManualOverrideOverlayReade
     readonly overrideId: string;
     readonly operationId: string;
     readonly expectedRevision: number;
+    readonly replaceOverrideId?: string;
     readonly target: ManualOverrideTarget;
     readonly valuePercentage: number;
     readonly requestedAtMs: number;

@@ -42,12 +42,12 @@ const UINT32_MODULUS = 0x1_0000_0000;
 export interface FakeEspResponseFaults {
   readonly delayMilliseconds?: number;
   readonly drop?: boolean;
-  readonly dropNextResponseForCommand?: string;
+  readonly dropNextResponseForCommand?: string | null;
   readonly duplicateResponses?: number;
   readonly malformed?: boolean;
 }
 
-interface NormalizedFakeEspResponseFaults {
+export interface NormalizedFakeEspResponseFaults {
   readonly delayMilliseconds: number;
   readonly drop: boolean;
   readonly dropNextResponseForCommand: string | null;
@@ -73,6 +73,11 @@ export interface FakeEspPinSnapshot {
   readonly lastManualValue: number;
   readonly overwritten: boolean;
   readonly overwriteExpiryMilliseconds?: number;
+  readonly analogValue?: number;
+}
+
+export interface FakeEspPinStateSnapshot extends FakeEspPinSnapshot {
+  readonly pin: number;
 }
 
 interface FirmwareLink {
@@ -192,7 +197,9 @@ export class FakeEspActor {
     this.defaultDeviceName = options.defaultDeviceName ?? DEFAULT_DEVICE_NAME;
     this.firmwareVersion = options.firmwareVersion ?? FAKE_ESP_FIRMWARE_VERSION;
     this.idGenerator = options.idGenerator ?? generateDeviceId;
-    this.responseFaults = normalizeResponseFaults(options.responseFaults);
+    this.responseFaults = normalizeFakeEspResponseFaults(
+      options.responseFaults,
+    );
     for (const pin of options.pinAttachmentFailures ?? []) {
       assertInteger(pin, "Pin attachment failure");
       if (!validPin(pin)) {
@@ -264,6 +271,7 @@ export class FakeEspActor {
   public pinSnapshot(pin: number): FakeEspPinSnapshot {
     assertInteger(pin, "Pin");
     const state = this.pinStates.get(pin);
+    const analogValue = this.analogValues.get(pin);
     return {
       attached: this.attachedPins.has(pin),
       outputValue: this.outputValues.get(pin) ?? 0,
@@ -277,11 +285,29 @@ export class FakeEspActor {
             ),
           }
         : {}),
+      ...(analogValue === undefined ? {} : { analogValue }),
     };
   }
 
+  public pinSnapshots(): readonly FakeEspPinStateSnapshot[] {
+    const pins = new Set<number>([
+      ...this.attachedPins,
+      ...this.outputValues.keys(),
+      ...this.lastPinValues.keys(),
+      ...this.pinStates.keys(),
+      ...this.analogValues.keys(),
+    ]);
+    return [...pins]
+      .sort((left, right) => left - right)
+      .map((pin) => ({ pin, ...this.pinSnapshot(pin) }));
+  }
+
+  public reportedFirmwareVersion(): string {
+    return this.firmwareVersion;
+  }
+
   public setResponseFaults(faults: FakeEspResponseFaults): void {
-    this.responseFaults = normalizeResponseFaults(faults);
+    this.responseFaults = normalizeFakeEspResponseFaults(faults);
   }
 
   public setPinAttachmentFailure(pin: number, failing: boolean): void {
@@ -1162,7 +1188,7 @@ export class FakeEspActor {
   }
 }
 
-function normalizeResponseFaults(
+export function normalizeFakeEspResponseFaults(
   faults: FakeEspResponseFaults = {},
 ): NormalizedFakeEspResponseFaults {
   const delayMilliseconds = faults.delayMilliseconds ?? 0;

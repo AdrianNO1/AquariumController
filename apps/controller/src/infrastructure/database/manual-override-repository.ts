@@ -100,6 +100,7 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
     readonly overrideId: string;
     readonly operationId: string;
     readonly expectedRevision: number;
+    readonly replaceOverrideId?: string;
     readonly target: ManualOverrideTarget;
     readonly valuePercentage: number;
     readonly requestedAtMs: number;
@@ -112,6 +113,10 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
       expectedRevision: nonnegativeSafeIntegerSchema.parse(
         input.expectedRevision,
       ),
+      replaceOverrideId:
+        input.replaceOverrideId === undefined
+          ? null
+          : identifierSchema.parse(input.replaceOverrideId),
       target: manualOverrideTargetSchema.parse(input.target),
       valuePercentage: percentageSchema.parse(input.valuePercentage),
       requestedAtMs: nonnegativeSafeIntegerSchema.parse(input.requestedAtMs),
@@ -151,7 +156,11 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
         },
         async (transaction) => {
           await assertEnabledTarget(transaction, parsed.target);
-          await assertNoLiveTargetOverride(transaction, parsed.target);
+          await assertNoLiveTargetOverride(
+            transaction,
+            parsed.target,
+            parsed.replaceOverrideId,
+          );
           const commands = await resolveStartCommands(
             transaction,
             parsed.target,
@@ -160,6 +169,9 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
           const request = manualOverrideOperationRequestSchema.parse({
             kind: "manual_override_start",
             overrideId: parsed.overrideId,
+            ...(parsed.replaceOverrideId === null
+              ? {}
+              : { replacesOverrideId: parsed.replaceOverrideId }),
             target: parsed.target,
             valuePercentage: parsed.valuePercentage,
             expiresAtMs: parsed.expiresAtMs,
@@ -619,6 +631,10 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
             operationId: operation.id,
             operationStatus: status,
             overrideStatus: nextOverride.status,
+            ...(operation.request.kind === "manual_override_start" &&
+            operation.request.replacesOverrideId !== undefined
+              ? { replacesOverrideId: operation.request.replacesOverrideId }
+              : {}),
           }),
           payloadSchemaVersion: 1,
           invalidations: [
@@ -658,6 +674,21 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
             throw new InvalidManualOverrideTransitionError(
               `Override ${override.id} changed during completion`,
             );
+          }
+          if (
+            operation.request.kind === "manual_override_start" &&
+            operation.request.replacesOverrideId !== undefined &&
+            (status === "succeeded" || status === "outcome_unknown")
+          ) {
+            await transaction
+              .updateTable("overrides")
+              .set({
+                status: "cancelled",
+                completed_at_ms: parsedCompletedAtMs,
+              })
+              .where("id", "=", operation.request.replacesOverrideId)
+              .where("status", "=", "active")
+              .executeTakeFirst();
           }
         },
       );
@@ -794,6 +825,18 @@ export class ManualOverrideRepository implements ManualOverrideRepositoryPort {
             throw new InvalidManualOverrideTransitionError(
               `Override ${override.id} changed during recovery`,
             );
+          }
+          if (
+            interruptedStart &&
+            operation.request.kind === "manual_override_start" &&
+            operation.request.replacesOverrideId !== undefined
+          ) {
+            await transaction
+              .updateTable("overrides")
+              .set({ status: "cancelled", completed_at_ms: nowMs })
+              .where("id", "=", operation.request.replacesOverrideId)
+              .where("status", "=", "active")
+              .executeTakeFirst();
           }
         }
       },
@@ -1242,21 +1285,35 @@ async function assertEnabledTarget(
 async function assertNoLiveTargetOverride(
   transaction: StateDatabaseTransaction,
   target: ManualOverrideTarget,
+  replaceOverrideId: string | null,
 ): Promise<void> {
   const query = transaction
     .selectFrom("overrides")
-    .select("id")
+    .select(["id", "status"])
     .where("status", "in", ["pending", "active"]);
   const existing =
     target.targetType === "channel"
-      ? await query.where("channel_id", "=", target.targetId).executeTakeFirst()
-      : await query.where("output_id", "=", target.targetId).executeTakeFirst();
-  if (existing !== undefined) {
+      ? await query.where("channel_id", "=", target.targetId).execute()
+      : await query.where("output_id", "=", target.targetId).execute();
+  if (replaceOverrideId !== null) {
+    const replaceable = existing.some(
+      ({ id, status }) => id === replaceOverrideId && status === "active",
+    );
+    const conflicting = existing.some(({ id }) => id !== replaceOverrideId);
+    if (replaceable && !conflicting) return;
     throw new ManualOverrideConflictError(
       target.targetType,
       target.targetId,
       "live_override",
-      `${target.targetType} ${target.targetId} already has live override ${existing.id}`,
+      `Override ${replaceOverrideId} is not the sole live override for ${target.targetType} ${target.targetId}`,
+    );
+  }
+  if (existing.length > 0) {
+    throw new ManualOverrideConflictError(
+      target.targetType,
+      target.targetId,
+      "live_override",
+      `${target.targetType} ${target.targetId} already has live override ${existing[0]?.id}`,
     );
   }
 }
@@ -1313,7 +1370,7 @@ async function resolveStartCommands(
       target.targetType,
       target.targetId,
       "enabled_pin_mapping",
-      `${target.targetType} ${target.targetId} has no enabled online device pin mappings`,
+      `This ${target.targetType} has no enabled online device pin mappings`,
     );
   }
   return rows.map((rawRow) => {

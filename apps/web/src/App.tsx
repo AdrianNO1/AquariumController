@@ -5,12 +5,22 @@ import {
   type ControlArea,
 } from "@aquarium/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { Link, NavLink, Route, Routes, useParams } from "react-router";
+import { useState } from "react";
+import {
+  Link,
+  NavLink,
+  Route,
+  Routes,
+  useLocation,
+  useParams,
+} from "react-router";
 
 import { AlertsPage } from "./AlertsPage.js";
 import { fetchHealth } from "./api.js";
 import { ControlAreaPage } from "./ControlAreaPage.js";
 import { LogsPage } from "./LogsPage.js";
+import { ModalBackdrop } from "./ModalBackdrop.js";
+import { ModalDialog } from "./ModalDialog.js";
 import { OperationsPage } from "./OperationsPage.js";
 import { useControllerState } from "./use-controller-state.js";
 
@@ -32,6 +42,7 @@ const controlAreas = [
 }[];
 
 function Dashboard(): React.JSX.Element {
+  const [maintainerMenuOpen, setMaintainerMenuOpen] = useState(false);
   const health = useQuery({
     queryKey: ["controller-health"],
     queryFn: fetchHealth,
@@ -109,7 +120,7 @@ function Dashboard(): React.JSX.Element {
           </strong>
           <small>
             {health.isSuccess
-              ? `API checked ${formatUtcTime(health.data.now)}`
+              ? `API checked ${formatLocalTime(health.data.now)}`
               : health.isError
                 ? "API health check failed"
                 : "Checking HTTP API"}
@@ -174,6 +185,47 @@ function Dashboard(): React.JSX.Element {
           })}
         </div>
       </section>
+
+      <button
+        className="maintainer-menu-button secondary-button"
+        type="button"
+        onClick={() => setMaintainerMenuOpen(true)}
+      >
+        Adrian sine knapper
+      </button>
+
+      {maintainerMenuOpen ? (
+        <ModalBackdrop onClose={() => setMaintainerMenuOpen(false)}>
+          <ModalDialog
+            className="configuration-dialog maintainer-menu-dialog"
+            labelledBy="maintainer-menu-heading"
+            onClose={() => setMaintainerMenuOpen(false)}
+          >
+            <div className="dialog-header">
+              <div>
+                <p className="eyebrow">Maintenance</p>
+                <h2 id="maintainer-menu-heading">Adrian sine knapper</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close maintenance menu"
+                onClick={() => setMaintainerMenuOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <nav
+              className="maintainer-menu-links"
+              aria-label="Maintenance pages"
+            >
+              <Link to="/operations">Operations</Link>
+              <Link to="/alerts">Alerts</Link>
+              <Link to="/logs">Logs</Link>
+            </nav>
+          </ModalDialog>
+        </ModalBackdrop>
+      ) : null}
     </main>
   );
 }
@@ -330,12 +382,11 @@ function formatConnectionStatus(
   }
 }
 
-function formatUtcTime(value: string): string {
+function formatLocalTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    timeZone: "UTC",
     timeZoneName: "short",
   }).format(new Date(value));
 }
@@ -364,6 +415,12 @@ function NotFound(): React.JSX.Element {
 
 export default function App(): React.JSX.Element {
   const controller = useControllerState();
+  const location = useLocation();
+  const overview = location.pathname === "/";
+  const controlArea = location.pathname.startsWith("/control/");
+  const developerNavigation = window.localStorage.getItem("dev") === "true";
+  const showMaintenanceNavigation =
+    developerNavigation || (!overview && !controlArea);
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -380,9 +437,13 @@ export default function App(): React.JSX.Element {
           <NavLink to="/" end>
             Overview
           </NavLink>
-          <NavLink to="/operations">Operations</NavLink>
-          <NavLink to="/alerts">Alerts</NavLink>
-          <NavLink to="/logs">Logs</NavLink>
+          {showMaintenanceNavigation ? (
+            <>
+              <NavLink to="/operations">Operations</NavLink>
+              <NavLink to="/alerts">Alerts</NavLink>
+              <NavLink to="/logs">Logs</NavLink>
+            </>
+          ) : null}
         </nav>
         <div className="topbar-status" aria-live="polite">
           <span>Revision {controller.revision}</span>

@@ -9,6 +9,7 @@ import {
   StateEventStreamHub,
   type StateEventStreamSink,
 } from "../../realtime/state-event-stream.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import {
   commitStateChange,
   openStateDatabase,
@@ -99,6 +100,56 @@ describe("controller snapshot repository", () => {
     await expect(
       database.selectFrom("throttles").selectAll().execute(),
     ).resolves.toEqual([]);
+  });
+
+  it("keeps the internal storage-health owner out of ESP-facing projections", async () => {
+    const database = await openDatabase(":memory:");
+    await database
+      .insertInto("devices")
+      .values({
+        id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        hardware_id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        name: "Controller storage health",
+        desired_pwm_frequency_hz: 1_000,
+        desired_pwm_resolution_bits: 8,
+        status: "unknown",
+        enabled: 0,
+        created_at_ms: BASE_TIME_MS,
+        updated_at_ms: BASE_TIME_MS,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("alert_rules")
+      .values({
+        id: "rule-internal-device-health",
+        name: "Internal storage owner health",
+        source_type: "device",
+        device_id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        condition: "not_online",
+        threshold: null,
+        delay_ms: 0,
+        severity: "error",
+        created_at_ms: BASE_TIME_MS,
+        updated_at_ms: BASE_TIME_MS,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("active_alerts")
+      .values({
+        id: "alert-internal-device-health",
+        alert_rule_id: "rule-internal-device-health",
+        deduplication_key: "device:virtual-controller-storage",
+        state: "open",
+        opened_at_ms: BASE_TIME_MS,
+        last_observed_at_ms: BASE_TIME_MS,
+      })
+      .executeTakeFirstOrThrow();
+
+    const snapshot = await createRepository(database).read();
+
+    expect(snapshot.devices).toEqual([]);
+    expect(snapshot.alertRules).toEqual([]);
+    expect(snapshot.alerts).toEqual([]);
   });
 
   it("projects populated normalized state, nested JSON, and current lifecycle records", async () => {

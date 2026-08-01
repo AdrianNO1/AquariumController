@@ -193,6 +193,44 @@ describe("fake ESP MQTT safety and lifecycle", () => {
     await session.stop();
   });
 
+  it("isolates and restores the simulated network without stopping MQTT", async () => {
+    const client = new TestMqttClient();
+    const session = createSession(client);
+    const ready = session.start();
+    client.emitConnected();
+    await ready;
+    expect(session.isMqttConnected()).toBe(true);
+    expect(session.actor.isReady()).toBe(true);
+
+    session.setNetworkEnabled(false);
+    expect(session.isNetworkEnabled()).toBe(false);
+    expect(session.isMqttConnected()).toBe(true);
+    expect(session.actor.isReady()).toBe(false);
+    const publicationCount = client.publications.length;
+    client.emitMessage("test/aquarium/command", "A1B2C3D4 p");
+    expect(client.publications).toHaveLength(publicationCount);
+
+    session.setNetworkEnabled(true);
+    expect(session.actor.isReady()).toBe(true);
+    expect(
+      client.publications.filter(({ topic }) => topic.endsWith("/announce")),
+    ).toHaveLength(2);
+    await session.stop();
+  });
+
+  it("can start MQTT with the simulated device network disabled", async () => {
+    const client = new TestMqttClient();
+    const session = createSession(client, undefined, false);
+    const ready = session.start();
+    client.emitConnected();
+    await ready;
+
+    expect(session.isMqttConnected()).toBe(true);
+    expect(session.actor.isReady()).toBe(false);
+    expect(client.publications).toEqual([]);
+    await session.stop();
+  });
+
   it("fails initial readiness loudly when subscription fails", async () => {
     const client = new TestMqttClient();
     client.subscribeError = new Error("SUBACK rejected");
@@ -290,6 +328,7 @@ describe("fake ESP MQTT safety and lifecycle", () => {
 function createSession(
   client: TestMqttClient,
   onError?: (error: Error) => void,
+  networkEnabled?: boolean,
 ): MqttFakeEspSession {
   return new MqttFakeEspSession({
     brokerUrl: "mqtt://127.0.0.1:1883",
@@ -299,6 +338,7 @@ function createSession(
       idGenerator: () => "A1B2C3D4",
     },
     clientFactory: () => client,
+    ...(networkEnabled === undefined ? {} : { networkEnabled }),
     ...(onError === undefined ? {} : { onError }),
   });
 }

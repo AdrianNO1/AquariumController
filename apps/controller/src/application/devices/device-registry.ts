@@ -301,6 +301,10 @@ export class DeviceRegistry {
         const quarantinedForProtocolFault =
           existing.enabled === 0 &&
           existing.last_error_code === "protocol_invalid_response";
+        const reincludeAfterReconnect =
+          existing.enabled === 0 &&
+          !quarantinedForProtocolFault &&
+          announcement.status === "online";
         const reportedError = announcementError(announcement, {
           name: existing.name,
           frequencyHz: existing.desired_pwm_frequency_hz,
@@ -321,6 +325,7 @@ export class DeviceRegistry {
             ? "online"
             : "error";
         const reportedStateChanged =
+          reincludeAfterReconnect ||
           existing.mapping_profile_id !== mappingProfileId ||
           existing.reported_name !== announcement.name ||
           existing.reported_pwm_frequency_hz !== announcement.freq ||
@@ -349,6 +354,7 @@ export class DeviceRegistry {
         await transaction
           .updateTable("devices")
           .set({
+            enabled: reincludeAfterReconnect ? 1 : existing.enabled,
             reported_name: announcement.name,
             mapping_profile_id: mappingProfileId,
             reported_pwm_frequency_hz: announcement.freq,

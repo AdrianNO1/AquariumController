@@ -83,7 +83,10 @@ export function ControlAreaPage({
       allChannels={controller.snapshot.channels}
       allOutputs={controller.snapshot.outputs}
       allAreas={controller.snapshot.controlAreas}
-      stale={controller.dataStale || controller.status !== "connected"}
+      liveStateUnavailable={
+        controller.dataStale || controller.status !== "connected"
+      }
+      showConnectionWarning={controller.status !== "connected"}
       connectionStatus={controller.status}
       channelsOpen={channelsOpen}
       mappingsOpen={mappingsOpen}
@@ -109,7 +112,8 @@ type LoadedControlAreaProps = {
   readonly allAreas: Parameters<
     typeof MappingProfilesDialog
   >[0]["controlAreas"];
-  readonly stale: boolean;
+  readonly liveStateUnavailable: boolean;
+  readonly showConnectionWarning: boolean;
   readonly connectionStatus: string;
   readonly channelsOpen: boolean;
   readonly mappingsOpen: boolean;
@@ -131,7 +135,8 @@ function LoadedControlArea({
   allChannels,
   allOutputs,
   allAreas,
-  stale,
+  liveStateUnavailable,
+  showConnectionWarning,
   connectionStatus,
   channelsOpen,
   mappingsOpen,
@@ -194,6 +199,28 @@ function LoadedControlArea({
       }),
     [draftPointsByChannel, model.channels],
   );
+  const commandableOverrideChannelIds = useMemo(() => {
+    const activeProfileIds = new Set(
+      model.devices.flatMap((device) =>
+        device.enabled &&
+        ["online", "stale", "offline"].includes(device.status) &&
+        device.mappingProfileId !== null
+          ? [device.mappingProfileId]
+          : [],
+      ),
+    );
+    return new Set(
+      model.mappingProfiles
+        .filter((profile) => activeProfileIds.has(profile.id))
+        .flatMap((profile) =>
+          profile.mappings.flatMap((mapping) =>
+            mapping.enabled && mapping.target.kind === "channel"
+              ? [mapping.target.id]
+              : [],
+          ),
+        ),
+    );
+  }, [model.devices, model.mappingProfiles]);
 
   useEffect(() => {
     if (multiplierDirty) {
@@ -317,17 +344,8 @@ function LoadedControlArea({
           {configurationErrorMessage(save.error)}
         </p>
       )}
-      {save.data === undefined ? null : (
-        <p
-          className="configuration-save-feedback save-confirmation"
-          role="status"
-        >
-          Configuration accepted at revision {save.data.revision}. Refreshing
-          authoritative state.
-        </p>
-      )}
 
-      {stale ? (
+      {showConnectionWarning ? (
         <div className="stale-banner compact-stale-banner" role="status">
           <span>
             Controller state is {connectionStatus}. This view may be stale;
@@ -394,11 +412,12 @@ function LoadedControlArea({
         />
         <ManualOverridePanel
           channels={overrideChannels}
+          commandableChannelIds={commandableOverrideChannelIds}
           multiplierPercentage={multiplier.value}
           overrides={model.overrides}
           operations={model.operations}
           expectedRevision={model.revision}
-          disabled={stale || saving}
+          disabled={liveStateUnavailable || saving}
           refresh={refresh}
         />
       </section>
@@ -427,6 +446,7 @@ function LoadedControlArea({
         channels={allChannels}
         outputs={allOutputs}
         controlAreas={allAreas}
+        currentTypeKey={model.area.typeKey}
         expectedRevision={model.revision}
         refresh={refresh}
       />

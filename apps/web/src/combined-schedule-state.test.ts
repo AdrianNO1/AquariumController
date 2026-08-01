@@ -187,6 +187,8 @@ describe("combined schedule drafts", () => {
         (candidate) => candidate.id === "uv-noon",
       ),
     ).toMatchObject({ minuteOfDay: 721, percentage: 55 });
+    expect(unchangedSnapshot.drafts["channel-light"]?.pinnedRevision).toBe(31);
+    expect(unchangedSnapshot.drafts["channel-uv"]?.pinnedRevision).toBe(31);
 
     const externalLight = schedule({
       id: "schedule-light",

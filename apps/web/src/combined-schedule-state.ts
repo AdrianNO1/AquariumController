@@ -335,14 +335,14 @@ export function validateCombinedScheduleDraft(
       issues.push(`Point identifier ${point.id} is duplicated.`);
     }
     if (minutes.has(point.minuteOfDay)) {
-      issues.push(`UTC minute ${point.minuteOfDay} is duplicated.`);
+      issues.push("Two schedule points have the same time.");
     }
     if (
       !Number.isInteger(point.minuteOfDay) ||
       point.minuteOfDay < 0 ||
       point.minuteOfDay > 1_439
     ) {
-      issues.push(`A schedule point has an invalid UTC minute.`);
+      issues.push("A schedule point has an invalid time.");
     }
     if (
       !Number.isFinite(point.percentage) ||
@@ -577,7 +577,9 @@ function synchronizeCombinedScheduleState(
     let draft = incoming;
     if (existing !== undefined && existing.scheduleId === incoming.scheduleId) {
       if (existing.graphRevision === incoming.graphRevision) {
-        draft = existing;
+        draft = isCombinedScheduleDraftDirty(existing)
+          ? { ...existing, pinnedRevision: currentRevision }
+          : existing;
       } else if (
         !isCombinedScheduleDraftDirty(existing) ||
         schedulePointsEqual(incoming.points, existing.points)

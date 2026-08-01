@@ -26,7 +26,8 @@ export function OperationsPage(): React.JSX.Element {
     );
   }
 
-  const stale = controller.dataStale || controller.status !== "connected";
+  const showConnectionWarning =
+    controller.status !== "connected" && controller.status !== "loading";
   const unresolved = controller.snapshot.unresolvedDeviceOperations;
 
   return (
@@ -45,7 +46,7 @@ export function OperationsPage(): React.JSX.Element {
         </Link>
       </div>
 
-      {stale ? (
+      {showConnectionWarning ? (
         <div className="stale-banner" role="status">
           <strong>Controller state is {controller.status}.</strong>
           <span>
@@ -65,6 +66,7 @@ export function OperationsPage(): React.JSX.Element {
 
       <UnresolvedOperationStatusPanel
         operations={unresolved.items}
+        devices={controller.snapshot.devices}
         truncated={unresolved.truncated}
         expectedRevision={controller.snapshot.revision}
         refresh={controller.refresh}

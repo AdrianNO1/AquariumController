@@ -421,9 +421,15 @@ Unexpected runtime callback failures add a critical
 `controller.runtime-callback-error` row containing only a sanitized error class
 and error name. Exception messages and stacks are never stored there.
 
-Normal five-second ticks are omitted. Routine successful PWM operations,
-announcements, command batches, and successful responses use `raw`; diagnostic,
-audit, and outcome-unknown paths use longer classes.
+Normal five-second ticks and their healthy background PWM wire traffic are
+omitted entirely. A background PWM operation exists in `state.db` only while
+pending or in flight so restart recovery remains safe; success removes that
+transient row without advancing public state. Failure, timeout, cancellation,
+or an unknown outcome promotes it to a durable operation and state event.
+Repeated healthy announcements, discovery publications, command batches, and
+matched responses are also omitted. Foreground operations keep one semantic
+operation summary, while diagnostics, malformed or unexpected responses, and
+outcome-unknown paths remain durable.
 
 Alert transitions (open, acknowledge, reopen, recover) are never throttled.
 Repeated matching observations for an unchanged still-true alert create at most
@@ -448,11 +454,12 @@ deterministic order. The job reads internal candidate batches capped at 10,000
 and carries aggregation and byte-budget accounting across batches instead of
 materializing a whole retention class. A class requiring archive is never
 deleted unless each exact selection has been written and re-read as a complete,
-verified archive. The same job deletes successful `set_pwm` operation rows older
-than seven days only when no override, artifact, or scheduler guard references
-them. Terminal notification deliveries older than 180 days are removed only
-when a newer terminal result exists for the same alert/destination; pending and
-attempting rows plus the newest terminal result are retained. Terminal delivery
+verified archive. The same job deletes any retained successful `set_pwm`
+operation rows older than seven days only when no override, artifact, or
+scheduler guard references them; successful background refreshes are already
+removed immediately. Terminal notification deliveries older than 180 days are
+removed only when a newer terminal result exists for the same alert/destination;
+pending and attempting rows plus the newest terminal result are retained. Terminal delivery
 metadata is mirrored idempotently to `events.db` before that state history can
 age out. Terminal state and a null audit checkpoint commit together; recorder
 failure leaves the row eligible for bounded startup/dispatch backfill, and a

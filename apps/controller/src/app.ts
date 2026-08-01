@@ -25,7 +25,10 @@ import type {
 } from "./application/configuration/index.js";
 import type { ManualOverrideCommandService } from "./application/overrides/index.js";
 import type { HttpResponseInteractionRecorder } from "./application/runtime/controller-interaction-logger.js";
-import { registerConfigurationRoutes } from "./configuration-routes.js";
+import {
+  registerConfigurationRoutes,
+  type DeviceDiscoveryCommandPort,
+} from "./configuration-routes.js";
 import { registerLogsRoutes, type LogsRouteService } from "./logs-routes.js";
 import { registerManualOverrideRoutes } from "./manual-override-routes.js";
 import type { StateEventStreamHub } from "./realtime/state-event-stream.js";
@@ -54,6 +57,7 @@ export interface BuildAppOptions {
   readonly configurationService?: ControllerConfigurationService;
   readonly deviceConfigurationCommands?: DeviceConfigurationCommandPort;
   readonly alertAcknowledgementCommands?: AlertAcknowledgementCommandPort;
+  readonly deviceDiscoveryCommands?: DeviceDiscoveryCommandPort;
   readonly alertHistoryReader?: AlertHistoryRouteReader;
   readonly logsService?: LogsRouteService;
   readonly manualOverrideCommands?: ManualOverrideCommandService;

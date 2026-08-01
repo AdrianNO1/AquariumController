@@ -75,14 +75,8 @@ export function projectControlArea(
   const devices = [...snapshot.devices].sort((left, right) =>
     compareIdentifiers(left.id, right.id),
   );
-  const deviceIds = new Set(devices.map((device) => device.id));
   const overrides = snapshot.overrides.filter((override) =>
     targetKeys.has(`${override.targetType}:${override.targetId}`),
-  );
-  const overrideOperationIds = new Set(
-    overrides.flatMap((override) =>
-      override.operationId === null ? [] : [override.operationId],
-    ),
   );
 
   return {
@@ -99,11 +93,7 @@ export function projectControlArea(
     ),
     relevantProfileIds,
     devices,
-    operations: snapshot.operations.items.filter(
-      (operation) =>
-        (operation.deviceId !== null && deviceIds.has(operation.deviceId)) ||
-        overrideOperationIds.has(operation.id),
-    ),
+    operations: snapshot.operations.items,
     overrides,
   };
 }

@@ -1,4 +1,5 @@
 export * from "./clock.js";
+export * from "./control-server.js";
 export * from "./fake-esp.js";
 export * from "./file-persistence.js";
 export * from "./harness.js";

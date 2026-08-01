@@ -62,6 +62,7 @@ import {
   type RelationConflict,
   type ValidationIssue,
 } from "../../application/configuration/configuration-service.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import {
   DEVICE_OPERATION_REQUEST_SCHEMA_VERSION,
   DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
@@ -966,6 +967,9 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
   ): Promise<MutationResult> {
     const deviceId = identifierSchema.parse(rawDeviceId);
     const request = setDeviceEnabledRequestSchema.parse(rawRequest);
+    if (deviceId === CONTROLLER_STORAGE_HEALTH_DEVICE_ID) {
+      throw new ConfigurationNotFoundError("device", deviceId);
+    }
     return this.commitMutation(
       "device",
       deviceId,

@@ -35,6 +35,7 @@ import {
   ControllerStateContext,
   type ControllerStateContextValue,
 } from "./controller-state-context.js";
+import { localMinuteToUtcMinute } from "./local-time.js";
 import { createTestControlSnapshot } from "./test-control-snapshot.js";
 
 const server = setupServer();
@@ -120,7 +121,7 @@ describe("control area routes", () => {
     );
 
     const graph = screen.getByRole("img", {
-      name: "All channel output percentages across a UTC day",
+      name: "All channel output percentages across a local day",
     });
     const channelList = screen.getByRole("list", {
       name: "Schedule channels",
@@ -186,7 +187,7 @@ describe("control area routes", () => {
     expect(within(mainDevice).getByText("ID: DEVICE-MAIN")).toBeTruthy();
     expect(
       within(mainDevice).getByRole("button", {
-        name: "Exclude device-main from controller commands",
+        name: "Hide device-main until it reconnects",
       }),
     ).toBeTruthy();
   });
@@ -201,7 +202,7 @@ describe("control area routes", () => {
     );
 
     fireEvent.change(
-      screen.getByLabelText("Main light selected point UTC time"),
+      screen.getByLabelText("Main light selected point local time"),
       { target: { value: "00:07" } },
     );
     await user.click(screen.getByRole("button", { name: "Apply point" }));
@@ -222,7 +223,12 @@ describe("control area routes", () => {
     expect(requests[0]?.body).toMatchObject({
       expectedRevision: 8,
       points: expect.arrayContaining([
-        expect.objectContaining({ minuteOfDay: 7 }),
+        expect.objectContaining({
+          minuteOfDay: localMinuteToUtcMinute(
+            7,
+            new Date().getTimezoneOffset(),
+          ),
+        }),
       ]),
     });
     expect(requests[1]?.body).toMatchObject({
@@ -240,7 +246,7 @@ describe("control area routes", () => {
     );
 
     fireEvent.change(
-      screen.getByLabelText("Main light selected point UTC time"),
+      screen.getByLabelText("Main light selected point local time"),
       { target: { value: "00:07" } },
     );
     await user.click(screen.getByRole("button", { name: "Apply point" }));
@@ -252,6 +258,24 @@ describe("control area routes", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(false);
+    expect(
+      (
+        screen.getByRole("slider", {
+          name: "Main light temporary override",
+        }) as HTMLInputElement
+      ).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/Controller state is stale/u)).toBeTruthy();
+  });
+
+  it("does not flash a connection warning during a normal live snapshot refresh", () => {
+    const snapshot = createTestControlSnapshot();
+    renderControlArea("/control/lights", {
+      ...controllerState(snapshot, vi.fn()),
+      dataStale: true,
+    });
+
+    expect(screen.queryByText(/Controller state is connected/u)).toBeNull();
     expect(
       (
         screen.getByRole("slider", {

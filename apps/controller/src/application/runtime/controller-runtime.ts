@@ -60,6 +60,7 @@ export type ControllerRuntimeComposition =
       readonly deviceOperations: null;
       readonly manualOverrideCommands: null;
       readonly scheduleReconciliation: null;
+      readonly deviceDiscovery: null;
     }
   | {
       readonly mqttEnabled: true;
@@ -67,10 +68,15 @@ export type ControllerRuntimeComposition =
       readonly deviceOperations: DeviceOperationService;
       readonly manualOverrideCommands: ManualOverrideService;
       readonly scheduleReconciliation: ScheduleReconciliationRequester;
+      readonly deviceDiscovery: DeviceDiscoveryRequester;
     };
 
 export interface ScheduleReconciliationRequester {
   requestScheduleReconciliation(trigger: ScheduleReconciliationTrigger): void;
+}
+
+export interface DeviceDiscoveryRequester {
+  requestDeviceDiscovery(): void;
 }
 
 export interface ComposeControllerRuntimeOptions {
@@ -82,6 +88,10 @@ export interface ComposeControllerRuntimeOptions {
   readonly schedulingTime?: SchedulingClock & SchedulingTimer;
   readonly deviceAlertEvaluator?: DeviceAlertEvaluatorPort;
   readonly onError?: (error: Error) => void;
+  readonly onDeviceContact?: (contact: {
+    readonly deviceId: string;
+    readonly observedAtMs: number;
+  }) => void;
 }
 
 interface ControllerMqttRuntimeOptions {
@@ -94,10 +104,17 @@ interface ControllerMqttRuntimeOptions {
   readonly schedulingTime: SchedulingClock & SchedulingTimer;
   readonly deviceAlertEvaluator: DeviceAlertEvaluatorPort | undefined;
   readonly onError: (error: Error) => void;
+  readonly onDeviceContact?: (contact: {
+    readonly deviceId: string;
+    readonly observedAtMs: number;
+  }) => void;
 }
 
 export class ControllerMqttRuntime
-  implements ControllerRuntime, ScheduleReconciliationRequester
+  implements
+    ControllerRuntime,
+    ScheduleReconciliationRequester,
+    DeviceDiscoveryRequester
 {
   readonly #transport: LegacyMqttTransport;
   readonly #registry: DeviceRegistry;
@@ -228,6 +245,9 @@ export class ControllerMqttRuntime
         now: options.now,
         operationTimeoutMs: options.mqtt.responseTimeoutMs,
         onBackgroundError: options.onError,
+        ...(options.onDeviceContact === undefined
+          ? {}
+          : { onDeviceContact: options.onDeviceContact }),
       },
     );
     this.#scheduledCommands = new ScheduledDeviceOperationDispatcher(
@@ -324,7 +344,12 @@ export class ControllerMqttRuntime
     this.#tasks.run(async () => {
       await this.#ensureSchedulingStarted();
       await this.#reconcileSchedules(trigger);
+      this.#outputRefresh.requestRefresh();
     });
+  }
+
+  requestDeviceDiscovery(): void {
+    this.#scheduleDiscoveryTick();
   }
 
   async #handleTransportReady(transportGeneration: number): Promise<void> {
@@ -516,6 +541,7 @@ export function composeControllerRuntime(
       deviceOperations: null,
       manualOverrideCommands: null,
       scheduleReconciliation: null,
+      deviceDiscovery: null,
     };
   }
   if (options.onError === undefined) {
@@ -537,6 +563,9 @@ export function composeControllerRuntime(
     schedulingTime: options.schedulingTime ?? new SystemSchedulingTime(),
     deviceAlertEvaluator: options.deviceAlertEvaluator,
     onError,
+    ...(options.onDeviceContact === undefined
+      ? {}
+      : { onDeviceContact: options.onDeviceContact }),
   });
   return {
     mqttEnabled: true,
@@ -544,6 +573,7 @@ export function composeControllerRuntime(
     deviceOperations: runtime.deviceOperations,
     manualOverrideCommands: runtime.manualOverrideCommands,
     scheduleReconciliation: runtime,
+    deviceDiscovery: runtime,
   };
 }
 

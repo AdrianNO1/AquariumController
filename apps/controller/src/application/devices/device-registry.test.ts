@@ -431,6 +431,34 @@ describe("persistent device registry", () => {
     ).resolves.toBeNull();
   });
 
+  it("automatically includes an operator-hidden device after it announces online", async () => {
+    const database = await openTestDatabase();
+    const registry = createRegistry(database);
+    await registry.handleAnnouncement({
+      announcement: announcement(),
+      receivedAtMs: 10_000,
+    });
+    await database
+      .updateTable("devices")
+      .set({ enabled: 0, status: "offline" })
+      .where("id", "=", "A1")
+      .executeTakeFirstOrThrow();
+
+    await expect(
+      registry.handleAnnouncement({
+        announcement: announcement(),
+        receivedAtMs: 10_100,
+      }),
+    ).resolves.toMatchObject({
+      changed: true,
+      reason: "connection_recovered",
+    });
+    expect(await readDevice(database)).toMatchObject({
+      enabled: 1,
+      status: "online",
+    });
+  });
+
   it("surfaces and clears firmware diagnostics without taking the device offline", async () => {
     const database = await openTestDatabase();
     const registry = createRegistry(database);

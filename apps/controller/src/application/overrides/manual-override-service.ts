@@ -196,6 +196,9 @@ export class ManualOverrideService implements ManualOverrideCommandService {
       overrideId: this.#idGenerator("override"),
       operationId: this.#idGenerator("operation"),
       expectedRevision: parsed.expectedRevision,
+      ...(parsed.replaceOverrideId === undefined
+        ? {}
+        : { replaceOverrideId: parsed.replaceOverrideId }),
       target: parsed.target,
       valuePercentage: parsed.valuePercentage,
       requestedAtMs,

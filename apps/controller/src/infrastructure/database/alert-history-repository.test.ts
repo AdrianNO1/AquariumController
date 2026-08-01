@@ -1,6 +1,7 @@
 import type { Kysely } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import {
   ALERT_HISTORY_DELIVERY_LIMIT,
   AlertHistoryRepository,
@@ -95,6 +96,57 @@ afterEach(async () => {
 });
 
 describe("AlertHistoryRepository", () => {
+  it("does not expose alerts attached to the internal storage-health owner", async () => {
+    const database = await createDatabase();
+    await database
+      .insertInto("devices")
+      .values({
+        id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        hardware_id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        name: "Controller storage health",
+        desired_pwm_frequency_hz: 1_000,
+        desired_pwm_resolution_bits: 8,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("alert_rules")
+      .values({
+        id: "rule-internal-device-health",
+        name: "Internal storage owner health",
+        source_type: "device",
+        device_id: CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+        condition: "not_online",
+        threshold: null,
+        delay_ms: 0,
+        severity: "error",
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("active_alerts")
+      .values({
+        id: "alert-internal-device-health",
+        alert_rule_id: "rule-internal-device-health",
+        deduplication_key: "device:virtual-controller-storage",
+        state: "open",
+        opened_at_ms: 4_000,
+        last_observed_at_ms: 4_000,
+      })
+      .executeTakeFirstOrThrow();
+
+    const result = await new AlertHistoryRepository(database).list({
+      state: "all",
+      pageSize: 50,
+    });
+
+    expect(result.items.map((alert) => alert.id)).not.toContain(
+      "alert-internal-device-health",
+    );
+  });
+
   it("filters active and recovered alerts and paginates in stable descending order", async () => {
     const repository = new AlertHistoryRepository(await createDatabase());
 

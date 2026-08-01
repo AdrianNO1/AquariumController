@@ -273,6 +273,40 @@ describe("configuration HTTP routes", () => {
     });
   });
 
+  it("requests immediate discovery after a device is included", async () => {
+    const { database, repository } = await createRepository();
+    await database
+      .insertInto("devices")
+      .values({
+        id: "device-main",
+        hardware_id: "hardware-main",
+        name: "Main",
+        desired_pwm_frequency_hz: 1_000,
+        desired_pwm_resolution_bits: 8,
+        enabled: 0,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    const requestDeviceDiscovery = vi.fn();
+    const app = trackApp(
+      buildApp({
+        configurationService: repository,
+        deviceDiscoveryCommands: { requestDeviceDiscovery },
+      }),
+    );
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: "/api/devices/device-main/enabled",
+      payload: { expectedRevision: 0, enabled: true },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ changed: true, revision: 1 });
+    expect(requestDeviceDiscovery).toHaveBeenCalledOnce();
+  });
+
   it("delegates device configuration and alert acknowledgement commands", async () => {
     const unchanged: MutationResult = {
       changed: false,

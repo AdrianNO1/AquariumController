@@ -13,6 +13,7 @@ import {
   DEVICE_OPERATION_RESULT_SCHEMA_VERSION,
   deviceOperationResultSchema,
 } from "../../application/operations/index.js";
+import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenance/controller-storage-health-service.js";
 import type { ControllerSnapshotReader } from "../../application/snapshot/index.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 import type { StateDatabaseSchema } from "./types.js";
@@ -248,11 +249,23 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         transaction
           .selectFrom("devices")
           .selectAll()
+          .where("id", "!=", CONTROLLER_STORAGE_HEALTH_DEVICE_ID)
           .orderBy("id", "asc")
           .execute(),
         transaction
           .selectFrom("control_operations")
           .selectAll()
+          .where((expression) =>
+            expression.or([
+              expression("kind", "!=", "set_pwm"),
+              expression("status", "in", [
+                "failed",
+                "timed_out",
+                "outcome_unknown",
+                "cancelled",
+              ]),
+            ]),
+          )
           .orderBy("requested_at_ms", "desc")
           .orderBy("id", "asc")
           .limit(RECENT_OPERATION_LIMIT + 1)
@@ -286,6 +299,16 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         transaction
           .selectFrom("alert_rules")
           .selectAll()
+          .where((expression) =>
+            expression.or([
+              expression("source_type", "!=", "device"),
+              expression(
+                "device_id",
+                "!=",
+                CONTROLLER_STORAGE_HEALTH_DEVICE_ID,
+              ),
+            ]),
+          )
           .orderBy("id", "asc")
           .execute(),
         transaction
@@ -296,9 +319,13 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
           .orderBy("id", "asc")
           .execute(),
       ]);
+      const publicAlertRuleIds = new Set(alertRuleRows.map((rule) => rule.id));
+      const publicAlertRows = alertRows.filter((alert) =>
+        publicAlertRuleIds.has(alert.alert_rule_id),
+      );
       const deliveryRows = (
         await Promise.all(
-          alertRows.map((alert) =>
+          publicAlertRows.map((alert) =>
             transaction
               .selectFrom("notification_deliveries")
               .selectAll()
@@ -557,7 +584,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         };
       });
 
-      const alerts = alertRows.map((alert) => {
+      const alerts = publicAlertRows.map((alert) => {
         const details = parseOptionalStoredJson(
           alert.details_json,
           alert.details_schema_version,

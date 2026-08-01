@@ -9,6 +9,8 @@ import {
 } from "./configuration-ui.js";
 import { chooseDistinctChannelColor } from "./channel-color.js";
 import { ModalDialog } from "./ModalDialog.js";
+import { ModalBackdrop } from "./ModalBackdrop.js";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog.js";
 import { useDraftRevision } from "./use-draft-revision.js";
 
 export interface ChannelManagementDialogProps {
@@ -58,6 +60,7 @@ export function ChannelManagementDialog({
   const [newColor, setNewColor] = useState(() =>
     chooseDistinctChannelColor(channels.map((channel) => channel.color)),
   );
+  const [closeRequested, setCloseRequested] = useState(false);
   const draftRevision = useDraftRevision(expectedRevision);
   const originalById = new Map(
     channels.map((channel) => [channel.id, channel]),
@@ -176,12 +179,20 @@ export function ChannelManagementDialog({
     }
   }
 
+  function requestClose(): void {
+    if (dirty) {
+      setCloseRequested(true);
+      return;
+    }
+    onClose();
+  }
+
   return (
-    <div className="modal-backdrop" role="presentation">
+    <ModalBackdrop onClose={requestClose}>
       <ModalDialog
         className="configuration-dialog channel-dialog"
         labelledBy="manage-channels-heading"
-        onClose={onClose}
+        onClose={requestClose}
       >
         <div className="dialog-header">
           <div>
@@ -192,7 +203,7 @@ export function ChannelManagementDialog({
             className="icon-button"
             type="button"
             aria-label="Close channel manager"
-            onClick={onClose}
+            onClick={requestClose}
           >
             ×
           </button>
@@ -305,7 +316,7 @@ export function ChannelManagementDialog({
             disabled={save.isPending}
             onClick={onClose}
           >
-            Cancel
+            {dirty ? "Discard changes" : "Close"}
           </button>
           <button
             className="primary-button"
@@ -320,7 +331,15 @@ export function ChannelManagementDialog({
             {save.isPending ? "Saving…" : "Save changes"}
           </button>
         </div>
+        <UnsavedChangesDialog
+          open={closeRequested && dirty}
+          saving={save.isPending}
+          saveDisabled={drafts.some((draft) => draft.name.trim().length === 0)}
+          onSave={() => save.mutate()}
+          onDiscard={onClose}
+          onKeepEditing={() => setCloseRequested(false)}
+        />
       </ModalDialog>
-    </div>
+    </ModalBackdrop>
   );
 }

@@ -145,6 +145,7 @@ export class OutputRefreshScheduler {
   #lastMonotonicMs: number | null = null;
   #fatalError: Error | null = null;
   #fatalDrainPending = false;
+  #refreshRequested = false;
   #started = false;
   #stopping = false;
 
@@ -168,6 +169,18 @@ export class OutputRefreshScheduler {
 
   signalDeviceAvailable(deviceId: string): void {
     this.#retryAfterByDevice.delete(identifierSchema.parse(deviceId));
+  }
+
+  requestRefresh(): void {
+    if (!this.#started || this.#stopping || this.#fatalError !== null) return;
+    if (this.#activeTick !== null) {
+      this.#refreshRequested = true;
+      return;
+    }
+    this.#cancelTimer?.();
+    this.#cancelTimer = null;
+    this.#nextDeadlineMs = this.#readMonotonicNow();
+    this.#armTimer();
   }
 
   start(): void {
@@ -243,7 +256,12 @@ export class OutputRefreshScheduler {
           this.#activeTick = null;
         }
         if (!this.#stopping) {
-          this.#advanceDeadline();
+          if (this.#refreshRequested) {
+            this.#refreshRequested = false;
+            this.#nextDeadlineMs = this.#readMonotonicNow();
+          } else {
+            this.#advanceDeadline();
+          }
           this.#armTimer();
         }
       } catch (error) {
@@ -557,6 +575,7 @@ export class OutputRefreshScheduler {
     this.#stopping = true;
     this.#cancelTimer?.();
     this.#cancelTimer = null;
+    this.#refreshRequested = false;
     this.#discardPendingBatches();
   }
 

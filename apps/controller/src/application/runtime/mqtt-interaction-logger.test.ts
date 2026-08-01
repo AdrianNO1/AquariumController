@@ -49,6 +49,7 @@ describe("MQTT interaction volume policy", () => {
       outcome: "succeeded",
       durationMs: 10,
       commandBytes: 12,
+      priority: "background",
     });
     await logger.logPersistentOperation({
       occurredAtMs: 400,
@@ -59,6 +60,7 @@ describe("MQTT interaction volume policy", () => {
       outcome: "succeeded",
       durationMs: 10,
       commandBytes: 4,
+      priority: "interactive",
     });
     await logger.logPersistentOperation({
       occurredAtMs: 500,
@@ -69,6 +71,7 @@ describe("MQTT interaction volume policy", () => {
       outcome: "outcome_unknown",
       durationMs: 10,
       commandBytes: 10,
+      priority: "background",
     });
     await logger.logTransportInteraction({
       kind: "batch_published",
@@ -114,24 +117,6 @@ describe("MQTT interaction volume policy", () => {
       .execute();
     expect(rows).toEqual([
       {
-        kind: "mqtt.announcement",
-        severity: "debug",
-        outcome: "succeeded",
-        retention_class: "raw",
-      },
-      {
-        kind: "mqtt.discovery-skipped",
-        severity: "debug",
-        outcome: "ignored",
-        retention_class: "raw",
-      },
-      {
-        kind: "mqtt.device-operation",
-        severity: "debug",
-        outcome: "succeeded",
-        retention_class: "raw",
-      },
-      {
         kind: "mqtt.device-operation",
         severity: "info",
         outcome: "succeeded",
@@ -144,18 +129,6 @@ describe("MQTT interaction volume policy", () => {
         retention_class: "critical",
       },
       {
-        kind: "mqtt.command-batch",
-        severity: "debug",
-        outcome: "succeeded",
-        retention_class: "raw",
-      },
-      {
-        kind: "mqtt.command-response",
-        severity: "debug",
-        outcome: "succeeded",
-        retention_class: "raw",
-      },
-      {
         kind: "mqtt.command-response",
         severity: "warning",
         outcome: "failed",
@@ -165,14 +138,10 @@ describe("MQTT interaction volume policy", () => {
     await expect(
       database
         .selectFrom("interactions")
-        .select(["device_id", "correlation_id", "operation_id"])
-        .where("kind", "=", "mqtt.command-batch")
+        .select(({ fn }) => fn.countAll<number>().as("count"))
+        .where("severity", "=", "debug")
         .executeTakeFirstOrThrow(),
-    ).resolves.toEqual({
-      device_id: "A1",
-      correlation_id: "session-request-1",
-      operation_id: "wire-batch",
-    });
+    ).resolves.toEqual({ count: 0 });
   });
 
   it("logs each active and resolved firmware diagnostic sequence once", async () => {

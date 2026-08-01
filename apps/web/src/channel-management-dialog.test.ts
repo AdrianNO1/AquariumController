@@ -9,6 +9,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
@@ -164,6 +165,30 @@ describe("ChannelManagementDialog", () => {
     const existing = ["#6c54d8", "#a84aa7", "#315bd6", "#0aa0c0", "#87959e"];
 
     expect(existing).not.toContain(chooseDistinctChannelColor(existing));
+  });
+
+  it("requires dirty changes to be saved or discarded before backdrop close", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderDialog({ onClose });
+    const name = screen.getByLabelText("Channel name for White");
+    await user.clear(name);
+    await user.type(name, "Warm white");
+    const backdrop = screen.getByRole("dialog", {
+      name: "Manage channels",
+    }).parentElement;
+    if (backdrop === null) throw new Error("Channel backdrop is missing");
+
+    await user.pointer({ target: backdrop, keys: "[MouseLeft]" });
+
+    expect(onClose).not.toHaveBeenCalled();
+    const confirmation = screen.getByRole("alertdialog", {
+      name: "Save changes before closing?",
+    });
+    await user.click(
+      within(confirmation).getByRole("button", { name: "Discard changes" }),
+    );
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });
 

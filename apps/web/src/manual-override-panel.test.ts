@@ -127,7 +127,7 @@ describe("ManualOverridePanel", () => {
     );
     const refresh = vi.fn();
     const user = userEvent.setup();
-    renderPanel({ overrides: [], operations: [], refresh });
+    const panel = renderPanel({ overrides: [], operations: [], refresh });
 
     const mainSlider = screen.getByRole("slider", {
       name: "Main light temporary override",
@@ -163,8 +163,13 @@ describe("ManualOverridePanel", () => {
       },
     ]);
     expect(
-      await screen.findByText(/2 requests were accepted at revision 10/u),
+      await screen.findByText("Waiting for ESP confirmation…"),
     ).toBeTruthy();
+    panel.rerenderOperations([
+      operation("operation-1"),
+      operation("operation-2"),
+    ]);
+    expect(await screen.findByText("Success")).toBeTruthy();
     expect(refresh).toHaveBeenCalledOnce();
   });
 
@@ -209,7 +214,7 @@ describe("ManualOverridePanel", () => {
     );
     const refresh = vi.fn();
     const user = userEvent.setup();
-    renderPanel({
+    const panel = renderPanel({
       overrides: activeOverrides,
       operations: [operation("operation-main"), operation("operation-accent")],
       refresh,
@@ -232,7 +237,79 @@ describe("ManualOverridePanel", () => {
     ]);
     await waitFor(() => expect(mainSlider.value).toBe("40"));
     expect(accentSlider.value).toBe("20");
+    expect(
+      await screen.findByText("Waiting for ESP confirmation…"),
+    ).toBeTruthy();
+    panel.rerenderOperations([
+      operation("operation-main"),
+      operation("operation-accent"),
+      {
+        ...operation("operation-cancel-1"),
+        kind: "manual_override_cancel",
+      },
+      {
+        ...operation("operation-cancel-2"),
+        kind: "manual_override_cancel",
+      },
+    ]);
+    expect(await screen.findByText("Success")).toBeTruthy();
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("replaces an active override when applying new test levels", async () => {
+    const requests: StartManualOverrideRequest[] = [];
+    const active = activeOverride(
+      "override-main",
+      "light-main",
+      85,
+      "operation-main",
+    );
+    server.use(
+      http.post("http://localhost/api/overrides", async ({ request }) => {
+        const body = (await request.json()) as StartManualOverrideRequest;
+        requests.push(body);
+        return HttpResponse.json(
+          commandResponse({
+            overrideId: "override-replacement",
+            operationId: "operation-replacement",
+            targetId: body.target.targetId,
+            valuePercentage: body.valuePercentage,
+            durationSeconds: body.durationSeconds,
+            revision: body.expectedRevision + 1,
+            kind: "manual_override_start",
+          }),
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    const panel = renderPanel({
+      overrides: [active],
+      operations: [operation("operation-main")],
+      refresh: vi.fn(),
+      commandableChannelIds: new Set(["light-main"]),
+    });
+    fireEvent.change(
+      screen.getByRole("slider", {
+        name: "Main light temporary override",
+      }),
+      { target: { value: "60" } },
+    );
+
+    await user.click(screen.getByRole("button", { name: "Apply test levels" }));
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({
+      expectedRevision: 8,
+      replaceOverrideId: "override-main",
+      target: { targetType: "channel", targetId: "light-main" },
+      valuePercentage: 60,
+    });
+    expect(screen.queryByText(/Unresolved override state blocked/u)).toBeNull();
+    panel.rerenderOperations([
+      operation("operation-main"),
+      operation("operation-replacement"),
+    ]);
+    expect(await screen.findByText("Success")).toBeTruthy();
   });
 
   it("releases active overrides without attempting to cancel pending starts", async () => {
@@ -290,6 +367,80 @@ describe("ManualOverridePanel", () => {
     );
   });
 
+  it("quietly skips channels that no enabled controller currently maps", async () => {
+    const requestedTargets: string[] = [];
+    server.use(
+      http.post("http://localhost/api/overrides", async ({ request }) => {
+        const body = (await request.json()) as StartManualOverrideRequest;
+        requestedTargets.push(body.target.targetId);
+        return HttpResponse.json(
+          commandResponse({
+            overrideId: "override-main",
+            operationId: "operation-main",
+            targetId: body.target.targetId,
+            valuePercentage: body.valuePercentage,
+            durationSeconds: body.durationSeconds,
+            revision: body.expectedRevision + 1,
+            kind: "manual_override_start",
+          }),
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    const panel = renderPanel({
+      overrides: [],
+      operations: [],
+      refresh: vi.fn(),
+      commandableChannelIds: new Set(["light-main"]),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Apply test levels" }));
+
+    await waitFor(() => expect(requestedTargets).toEqual(["light-main"]));
+    panel.rerenderOperations([operation("operation-main")]);
+    expect(await screen.findByText("Success")).toBeTruthy();
+  });
+
+  it("does not report success until every ESP confirms the requested output", async () => {
+    server.use(
+      http.post("http://localhost/api/overrides", async ({ request }) => {
+        const body = (await request.json()) as StartManualOverrideRequest;
+        return HttpResponse.json(
+          commandResponse({
+            overrideId: "override-main",
+            operationId: "operation-main",
+            targetId: body.target.targetId,
+            valuePercentage: body.valuePercentage,
+            durationSeconds: body.durationSeconds,
+            revision: body.expectedRevision + 1,
+            kind: "manual_override_start",
+          }),
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    const panel = renderPanel({
+      overrides: [],
+      operations: [],
+      refresh: vi.fn(),
+      commandableChannelIds: new Set(["light-main"]),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Apply test levels" }));
+    expect(
+      await screen.findByText("Waiting for ESP confirmation…"),
+    ).toBeTruthy();
+    expect(screen.queryByText("Success")).toBeNull();
+
+    panel.rerenderOperations([
+      { ...operation("operation-main"), status: "outcome_unknown" },
+    ]);
+    expect(
+      await screen.findByText(/An ESP did not confirm the requested output/u),
+    ).toBeTruthy();
+    expect(screen.queryByText("Success")).toBeNull();
+  });
+
   it("interpolates cyclic schedules across midnight", () => {
     expect(schedulePointsValueAt(mainSchedule?.points ?? [], 600)).toBe(50);
     expect(schedulePointsValueAt(accentSchedule?.points ?? [], 1_439)).toBe(25);
@@ -300,32 +451,40 @@ function renderPanel({
   overrides,
   operations,
   refresh,
+  commandableChannelIds = new Set(channels.map(({ channel }) => channel.id)),
 }: {
   readonly overrides: readonly Override[];
   readonly operations: readonly OperationSummary[];
   readonly refresh: () => void;
-}): void {
+  readonly commandableChannelIds?: ReadonlySet<string>;
+}): {
+  readonly rerenderOperations: (next: readonly OperationSummary[]) => void;
+} {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
-  render(
+  const renderTree = (renderedOperations: readonly OperationSummary[]) =>
     createElement(
       QueryClientProvider,
       { client: queryClient },
       createElement(ManualOverridePanel, {
         channels,
+        commandableChannelIds,
         multiplierPercentage: 80,
         overrides,
-        operations,
+        operations: renderedOperations,
         expectedRevision: 8,
         refresh,
         nowMs: () => now,
       }),
-    ),
-  );
+    );
+  const rendered = render(renderTree(operations));
+  return {
+    rerenderOperations: (next) => rendered.rerender(renderTree(next)),
+  };
 }
 
 function activeOverride(

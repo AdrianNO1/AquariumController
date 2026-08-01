@@ -38,6 +38,7 @@ describe("CombinedScheduleEditor", () => {
         channels: [combinedChannel()],
         expectedRevision: 8,
         currentMinuteOfDay: 600,
+        timezoneOffsetMinutes: 0,
         onSaveSchedule: async (): Promise<ScheduleMutationResult> => ({
           revision: 9,
         }),
@@ -46,11 +47,11 @@ describe("CombinedScheduleEditor", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "New point" }));
-    fireEvent.change(screen.getByLabelText("Main light new point UTC time"), {
+    fireEvent.change(screen.getByLabelText("Main light new point local time"), {
       target: { value: "10:07" },
     });
     fireEvent.change(screen.getByLabelText("Main light new point output"), {
-      target: { value: "42.5" },
+      target: { value: "42" },
     });
     await user.click(screen.getByRole("button", { name: "Add point" }));
 
@@ -58,10 +59,17 @@ describe("CombinedScheduleEditor", () => {
       const latest = reportedDrafts.at(-1)?.["light-main"];
       expect(latest?.find((point) => point.minuteOfDay === 607)).toMatchObject({
         minuteOfDay: 607,
-        percentage: 42.5,
+        percentage: 42,
       });
     });
-    expect(screen.queryByLabelText("Main light new point UTC time")).toBeNull();
+    expect(
+      screen
+        .getByLabelText("Main light selected point output")
+        .getAttribute("step"),
+    ).toBe("1");
+    expect(
+      screen.queryByLabelText("Main light new point local time"),
+    ).toBeNull();
     expect(screen.getByLabelText("Unsaved changes")).toBeTruthy();
   });
 
@@ -90,6 +98,7 @@ describe("CombinedScheduleEditor", () => {
         channels: [combinedChannel()],
         expectedRevision: 8,
         currentMinuteOfDay: 600,
+        timezoneOffsetMinutes: 0,
         onSaveSchedule,
         onDraftPointsChange: (drafts) => reportedDrafts.push(drafts),
       }),
@@ -143,6 +152,41 @@ describe("CombinedScheduleEditor", () => {
     expect(editorRef.current?.dirty).toBe(false);
   });
 
+  it("rebases a draft when unrelated controller changes leave its graph unchanged", async () => {
+    const requests: ReplaceScheduleRequest[] = [];
+    const editorRef = createRef<CombinedScheduleEditorHandle>();
+    const channel = combinedChannel();
+    const renderEditor = (expectedRevision: number) =>
+      createElement(CombinedScheduleEditor, {
+        ref: editorRef,
+        channels: [channel],
+        expectedRevision,
+        currentMinuteOfDay: 600,
+        timezoneOffsetMinutes: 0,
+        onSaveSchedule: async (
+          _channelId: string,
+          request: ReplaceScheduleRequest,
+        ): Promise<ScheduleMutationResult> => {
+          requests.push(request);
+          return { revision: request.expectedRevision + 1 };
+        },
+      });
+    const user = userEvent.setup();
+    const rendered = render(renderEditor(8));
+
+    fireEvent.change(
+      screen.getByLabelText("Main light selected point output"),
+      { target: { value: "65" } },
+    );
+    await user.click(screen.getByRole("button", { name: "Apply point" }));
+    rendered.rerender(renderEditor(12));
+
+    await act(async () => {
+      await editorRef.current?.saveAll(12);
+    });
+    expect(requests[0]?.expectedRevision).toBe(12);
+  });
+
   it("rebases every dirty schedule after one shared revision conflict", async () => {
     const channels = [
       combinedChannel(),
@@ -178,6 +222,7 @@ describe("CombinedScheduleEditor", () => {
         channels,
         expectedRevision: 8,
         currentMinuteOfDay: 600,
+        timezoneOffsetMinutes: 0,
         onSaveSchedule,
         onAcceptRevisionConflict: acceptedConflict,
       }),
@@ -214,6 +259,7 @@ describe("CombinedScheduleEditor", () => {
         channels,
         expectedRevision: 9,
         currentMinuteOfDay: 600,
+        timezoneOffsetMinutes: 0,
         onSaveSchedule,
         onAcceptRevisionConflict: acceptedConflict,
       }),
