@@ -4,7 +4,6 @@ import {
   controllerSnapshotSchema,
   type AlertNotificationV1,
   type ControllerSnapshot,
-  type ControlArea,
 } from "@aquarium/contracts";
 import { sql, type Kysely, type Selectable } from "kysely";
 import { z, type ZodType } from "zod";
@@ -17,6 +16,8 @@ import { CONTROLLER_STORAGE_HEALTH_DEVICE_ID } from "../../application/maintenan
 import type { ControllerSnapshotReader } from "../../application/snapshot/index.js";
 import { parseJsonDocument } from "../import/strict-json.js";
 import type { StateDatabaseSchema } from "./types.js";
+
+export { CONTROL_AREA_DEFINITIONS } from "./control-area-definitions.js";
 
 export const RECENT_OPERATION_LIMIT = 100;
 export const UNRESOLVED_DEVICE_OPERATION_LIMIT = 100;
@@ -31,20 +32,6 @@ const outcomeUnknownReconciliationSchema = z.object({
     .max(Number.MAX_SAFE_INTEGER)
     .nullable(),
 });
-
-export const CONTROL_AREA_DEFINITIONS = [
-  { slug: "lights", typeKey: "light", label: "Lights" },
-  { slug: "pumps", typeKey: "pump", label: "Pumps" },
-  { slug: "testlights", typeKey: "testlight", label: "Test lights" },
-  { slug: "bad", typeKey: "bad", label: "Bad" },
-  { slug: "loft", typeKey: "loft", label: "Loft" },
-  { slug: "biljard", typeKey: "biljard", label: "Biljard" },
-  { slug: "frag", typeKey: "frag", label: "Frag" },
-  { slug: "qt1", typeKey: "qt1", label: "QT1" },
-  { slug: "qt2", typeKey: "qt2", label: "QT2" },
-  { slug: "qt3", typeKey: "qt3", label: "QT3" },
-  { slug: "qt4", typeKey: "qt4", label: "QT4" },
-] as const satisfies readonly ControlArea[];
 
 export interface ControllerSnapshotRepositoryOptions {
   readonly now?: () => Date;
@@ -185,6 +172,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         .executeTakeFirst();
 
       const [
+        controlAreaRows,
         channelRows,
         scheduleRows,
         schedulePointRows,
@@ -200,6 +188,12 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         alertRuleRows,
         alertRows,
       ] = await Promise.all([
+        transaction
+          .selectFrom("control_areas")
+          .selectAll()
+          .orderBy("display_order", "asc")
+          .orderBy("slug", "asc")
+          .execute(),
         transaction
           .selectFrom("channels")
           .selectAll()
@@ -693,7 +687,11 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
                 `state revision ${revisionRow.revision} commit time`,
               ),
         generatedAt: generatedAt.toISOString(),
-        controlAreas: CONTROL_AREA_DEFINITIONS,
+        controlAreas: controlAreaRows.map((area) => ({
+          slug: area.slug,
+          typeKey: area.type_key,
+          label: area.label,
+        })),
         channels: channelRows.map((channel) => ({
           id: channel.id,
           name: channel.name,

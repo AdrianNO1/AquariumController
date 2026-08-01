@@ -17,6 +17,7 @@ import {
   ControllerSnapshotRepository,
   commitStateChange,
   openStateDatabase,
+  parseStoredStateOutboxEnvelope,
   readCurrentStateRevision,
   type StateDatabaseSchema,
 } from "./index.js";
@@ -56,6 +57,137 @@ afterEach(async () => {
 });
 
 describe("ControllerConfigurationRepository", () => {
+  it("creates, renames, and deletes areas with recoverable audit details", async () => {
+    const database = await openDatabase();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+
+    await expect(
+      repository.createControlArea({
+        expectedRevision: 0,
+        label: "Anemone tank",
+      }),
+    ).resolves.toMatchObject({
+      changed: true,
+      revision: 1,
+      event: {
+        type: "control_area.created",
+        entity: { type: "control_area", id: "anemone-tank" },
+      },
+    });
+    await expect(
+      repository.renameControlArea("anemone-tank", {
+        expectedRevision: 1,
+        label: "Anemones",
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 2 });
+    await expect(
+      repository.deleteControlArea("anemone-tank", 2),
+    ).resolves.toMatchObject({ changed: true, revision: 3 });
+
+    await expect(
+      database
+        .selectFrom("control_areas")
+        .select("slug")
+        .where("slug", "=", "anemone-tank")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+    await expect(
+      database
+        .selectFrom("throttles")
+        .select("id")
+        .where("id", "=", "throttle-anemone-tank")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+
+    const outboxRows = await database
+      .selectFrom("state_outbox")
+      .selectAll()
+      .orderBy("revision")
+      .execute();
+    expect(
+      outboxRows.map((row) => parseStoredStateOutboxEnvelope(row).details.data),
+    ).toEqual([
+      {
+        schemaVersion: 1,
+        action: "created",
+        resource: "control_area",
+        id: "anemone-tank",
+        before: null,
+        after: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemone tank",
+        },
+        throttle: { id: "throttle-anemone-tank", percentage: 100 },
+      },
+      {
+        schemaVersion: 1,
+        action: "updated",
+        resource: "control_area",
+        id: "anemone-tank",
+        before: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemone tank",
+        },
+        after: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemones",
+        },
+        throttle: { id: "throttle-anemone-tank", percentage: 100 },
+      },
+      {
+        schemaVersion: 1,
+        action: "deleted",
+        resource: "control_area",
+        id: "anemone-tank",
+        before: {
+          slug: "anemone-tank",
+          typeKey: "anemone-tank",
+          label: "Anemones",
+        },
+        after: null,
+        throttle: { id: "throttle-anemone-tank", percentage: 100 },
+      },
+    ]);
+  });
+
+  it("does not delete an area while it owns live configuration", async () => {
+    const database = await openDatabase();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+    await repository.createControlArea({
+      expectedRevision: 0,
+      label: "Coral tank",
+    });
+    await repository.createChannel({
+      expectedRevision: 1,
+      id: "channel-coral",
+      name: "Coral light",
+      color: "#6f5bd5",
+      typeKey: "coral-tank",
+      throttleId: "throttle-coral-tank",
+      displayOrder: 0,
+      enabled: true,
+    });
+
+    await expect(
+      repository.deleteControlArea("coral-tank", 2),
+    ).rejects.toMatchObject({
+      conflicts: [
+        expect.objectContaining({
+          resource: "channel",
+          relation: "control_area",
+        }),
+      ],
+    });
+    expect(await readCurrentStateRevision(database)).toBe(2);
+  });
+
   it("does not expose the internal storage-health owner as an operator device", async () => {
     const database = await openDatabase();
     await database

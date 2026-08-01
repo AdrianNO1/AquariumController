@@ -91,6 +91,15 @@ export interface ThrottlesTable {
   updated_at_ms: number;
 }
 
+export interface ControlAreasTable {
+  slug: string;
+  type_key: string;
+  label: string;
+  display_order: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
 export interface ChannelsTable {
   id: string;
   name: string;
@@ -384,6 +393,7 @@ export interface ImportIssuesTable {
 }
 
 export interface StateDatabaseSchema {
+  control_areas: ControlAreasTable;
   mapping_profiles: MappingProfilesTable;
   devices: DevicesTable;
   outputs: OutputsTable;

@@ -107,18 +107,22 @@ const validEvent = {
 } as const;
 
 describe("controller contracts", () => {
-  it("pins every route slug to its distinct control type key", () => {
+  it("accepts persisted and dynamically named control areas", () => {
     for (const area of controlAreas) {
       expect(controlAreaSchema.parse(area)).toEqual(area);
     }
 
     expect(
-      controlAreaSchema.safeParse({
-        slug: "lights",
-        typeKey: "pump",
-        label: "Wrong",
-      }).success,
-    ).toBe(false);
+      controlAreaSchema.parse({
+        slug: "anemone-tank",
+        typeKey: "anemone-tank",
+        label: "Anemone tank",
+      }),
+    ).toEqual({
+      slug: "anemone-tank",
+      typeKey: "anemone-tank",
+      label: "Anemone tank",
+    });
   });
 
   it("accepts a strict empty controller snapshot with all retained areas", () => {

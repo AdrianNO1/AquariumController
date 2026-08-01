@@ -361,13 +361,21 @@ hard pruning watermark.
 
 The storage model is relational first, not a JSON-document database.
 
-`state.db` contains normalized tables for mapping profiles, devices, outputs,
-throttles, channels, pin mappings, schedules, schedule points, control
+`state.db` contains normalized tables for control areas, mapping profiles,
+devices, outputs, throttles, channels, pin mappings, schedules, schedule points, control
 operations, overrides, timers, sensors, switches, calibrations, alert rules and
 lifecycle state, revisions/outbox, import audit, compiled device artifacts,
 scheduler guards, alert delay state, and notification delivery intent.
 Foreign keys, uniqueness, `CHECK` constraints, UTC-only schedules, and indexes
 encode invariants that would be fragile inside one large document.
+
+Control areas are ordered persistent records rather than a fixed frontend
+list. Creating an area also provisions its 100% schedule multiplier. Renaming
+changes only its display label, preserving the stable route slug and type key.
+Deletion is rejected while channels or outputs still belong to the area. Every
+create, rename, and delete commits an audit-retained state event containing the
+before/after area record and multiplier state, making reconstruction from logs
+or verified archives possible.
 
 `events.db` contains mirrored committed events, structured interactions,
 five-minute aggregates, archive metadata, retention policies, and retention

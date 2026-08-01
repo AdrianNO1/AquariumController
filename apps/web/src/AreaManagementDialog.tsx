@@ -1,0 +1,275 @@
+import type { Channel, ControlArea, Output } from "@aquarium/contracts";
+import { useMutation } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+
+import {
+  createControlArea,
+  deleteControlArea,
+  renameControlArea,
+} from "./api.js";
+import {
+  configurationErrorMessage,
+  currentRevisionFromError,
+} from "./configuration-ui.js";
+import { ModalBackdrop } from "./ModalBackdrop.js";
+import { ModalDialog } from "./ModalDialog.js";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog.js";
+import { useDraftRevision } from "./use-draft-revision.js";
+
+interface AreaManagementDialogProps {
+  readonly areas: readonly ControlArea[];
+  readonly channels: readonly Channel[];
+  readonly outputs: readonly Output[];
+  readonly expectedRevision: number;
+  readonly refresh: () => void;
+  readonly onClose: () => void;
+}
+
+interface AreaDraft {
+  readonly key: string;
+  readonly slug: string | null;
+  readonly typeKey: string | null;
+  readonly label: string;
+}
+
+export function AreaManagementDialog({
+  areas,
+  channels,
+  outputs,
+  expectedRevision,
+  refresh,
+  onClose,
+}: AreaManagementDialogProps): React.JSX.Element {
+  const initialDrafts = useMemo(
+    () =>
+      areas.map<AreaDraft>((area) => ({
+        key: area.slug,
+        slug: area.slug,
+        typeKey: area.typeKey,
+        label: area.label,
+      })),
+    [areas],
+  );
+  const [drafts, setDrafts] = useState<readonly AreaDraft[]>(initialDrafts);
+  const [deletedSlugs, setDeletedSlugs] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [newName, setNewName] = useState("");
+  const [closeRequested, setCloseRequested] = useState(false);
+  const draftRevision = useDraftRevision(expectedRevision);
+  const originalBySlug = new Map(areas.map((area) => [area.slug, area]));
+  const dirty =
+    deletedSlugs.size > 0 ||
+    drafts.some((draft) => {
+      if (draft.slug === null) return true;
+      return originalBySlug.get(draft.slug)?.label !== draft.label;
+    });
+  const save = useMutation({
+    retry: false,
+    mutationFn: async (): Promise<number> => {
+      let revision = draftRevision.revision;
+      for (const slug of deletedSlugs) {
+        const result = await deleteControlArea(slug, revision);
+        revision = result.revision;
+      }
+      for (const draft of drafts) {
+        if (draft.slug === null) continue;
+        const original = originalBySlug.get(draft.slug);
+        if (original === undefined || original.label === draft.label) continue;
+        const result = await renameControlArea(draft.slug, {
+          expectedRevision: revision,
+          label: draft.label,
+        });
+        revision = result.revision;
+      }
+      for (const draft of drafts) {
+        if (draft.slug !== null) continue;
+        const result = await createControlArea({
+          expectedRevision: revision,
+          label: draft.label,
+        });
+        revision = result.revision;
+      }
+      return revision;
+    },
+    onSuccess: () => {
+      draftRevision.reset();
+      refresh();
+      onClose();
+    },
+    onError: (error) => {
+      if (currentRevisionFromError(error) !== null) refresh();
+    },
+  });
+
+  function updateName(key: string, label: string): void {
+    draftRevision.pin();
+    setDrafts((current) =>
+      current.map((draft) => (draft.key === key ? { ...draft, label } : draft)),
+    );
+  }
+
+  function addArea(): void {
+    const label = newName.trim();
+    if (label.length === 0) return;
+    draftRevision.pin();
+    setDrafts((current) => [
+      ...current,
+      {
+        key: `new-area-${crypto.randomUUID()}`,
+        slug: null,
+        typeKey: null,
+        label,
+      },
+    ]);
+    setNewName("");
+  }
+
+  function removeArea(draft: AreaDraft): void {
+    draftRevision.pin();
+    setDrafts((current) => current.filter((area) => area.key !== draft.key));
+    const slug = draft.slug;
+    if (slug !== null) {
+      setDeletedSlugs((current) => new Set([...current, slug]));
+    }
+  }
+
+  function areaHasConfiguration(draft: AreaDraft): boolean {
+    if (draft.typeKey === null) return false;
+    return (
+      channels.some((channel) => channel.typeKey === draft.typeKey) ||
+      outputs.some((output) => output.typeKey === draft.typeKey)
+    );
+  }
+
+  function requestClose(): void {
+    if (dirty) {
+      setCloseRequested(true);
+      return;
+    }
+    onClose();
+  }
+
+  const invalid = drafts.some((draft) => draft.label.trim().length === 0);
+  return (
+    <ModalBackdrop onClose={requestClose}>
+      <ModalDialog
+        className="configuration-dialog area-management-dialog"
+        labelledBy="manage-areas-heading"
+        onClose={requestClose}
+      >
+        <div className="dialog-header">
+          <div>
+            <p className="eyebrow">Overview</p>
+            <h2 id="manage-areas-heading">Manage areas</h2>
+          </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close area manager"
+            onClick={requestClose}
+          >
+            ×
+          </button>
+        </div>
+        <div className="dialog-body">
+          <div className="area-management-list">
+            {drafts.map((draft) => {
+              const hasConfiguration = areaHasConfiguration(draft);
+              return (
+                <div className="area-management-row" key={draft.key}>
+                  <label className="field">
+                    <span className="visually-hidden">
+                      Area name for {draft.label}
+                    </span>
+                    <input
+                      value={draft.label}
+                      maxLength={120}
+                      required
+                      onChange={(event) =>
+                        updateName(draft.key, event.currentTarget.value)
+                      }
+                    />
+                  </label>
+                  <button
+                    className="danger-button compact-button"
+                    type="button"
+                    disabled={hasConfiguration}
+                    title={
+                      hasConfiguration
+                        ? "Remove this area's channels and outputs first"
+                        : "Delete area"
+                    }
+                    onClick={() => removeArea(draft)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="add-area-row">
+            <label className="field">
+              <span>New area</span>
+              <input
+                value={newName}
+                placeholder="Area name"
+                maxLength={120}
+                onChange={(event) => setNewName(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addArea();
+                  }
+                }}
+              />
+            </label>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={newName.trim().length === 0}
+              onClick={addArea}
+            >
+              Add
+            </button>
+          </div>
+          <p className="muted-copy area-forensics-note">
+            Area changes are retained in the audit history. Populated areas must
+            be emptied before deletion.
+          </p>
+          {save.error === null ? null : (
+            <p className="field-error" role="alert">
+              {configurationErrorMessage(save.error)}
+            </p>
+          )}
+        </div>
+        <div className="dialog-actions">
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={save.isPending}
+            onClick={onClose}
+          >
+            {dirty ? "Discard changes" : "Close"}
+          </button>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={!dirty || invalid || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+        <UnsavedChangesDialog
+          open={closeRequested && dirty}
+          saving={save.isPending}
+          saveDisabled={invalid}
+          onSave={() => save.mutate()}
+          onDiscard={onClose}
+          onKeepEditing={() => setCloseRequested(false)}
+        />
+      </ModalDialog>
+    </ModalBackdrop>
+  );
+}

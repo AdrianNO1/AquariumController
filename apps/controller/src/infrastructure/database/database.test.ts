@@ -17,6 +17,7 @@ const requiredStateTables = [
   "active_alerts",
   "alert_rules",
   "channels",
+  "control_areas",
   "control_operations",
   "devices",
   "dsl_program_revisions",

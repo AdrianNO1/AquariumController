@@ -1,6 +1,5 @@
 import {
   legacyControlAreaSchema,
-  type LegacyControlArea,
   type ControllerSnapshot,
   type ControlArea,
 } from "@aquarium/contracts";
@@ -16,6 +15,7 @@ import {
 } from "react-router";
 
 import { AlertsPage } from "./AlertsPage.js";
+import { AreaManagementDialog } from "./AreaManagementDialog.js";
 import { fetchHealth } from "./api.js";
 import { ControlAreaPage } from "./ControlAreaPage.js";
 import { LogsPage } from "./LogsPage.js";
@@ -24,25 +24,9 @@ import { ModalDialog } from "./ModalDialog.js";
 import { OperationsPage } from "./OperationsPage.js";
 import { useControllerState } from "./use-controller-state.js";
 
-const controlAreas = [
-  { path: "lights", label: "Lights" },
-  { path: "pumps", label: "Pumps" },
-  { path: "testlights", label: "Test lights" },
-  { path: "bad", label: "Bad" },
-  { path: "loft", label: "Loft" },
-  { path: "biljard", label: "Biljard" },
-  { path: "frag", label: "Frag tank" },
-  { path: "qt1", label: "Quarantine 1" },
-  { path: "qt2", label: "Quarantine 2" },
-  { path: "qt3", label: "Quarantine 3" },
-  { path: "qt4", label: "Quarantine 4" },
-] as const satisfies readonly {
-  readonly path: LegacyControlArea;
-  readonly label: string;
-}[];
-
 function Dashboard(): React.JSX.Element {
   const [maintainerMenuOpen, setMaintainerMenuOpen] = useState(false);
+  const [areaManagerOpen, setAreaManagerOpen] = useState(false);
   const health = useQuery({
     queryKey: ["controller-health"],
     queryFn: fetchHealth,
@@ -149,18 +133,26 @@ function Dashboard(): React.JSX.Element {
             <p className="eyebrow">Control areas</p>
             <h2 id="areas-heading">Select an area</h2>
           </div>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={controller.snapshot === null}
+            onClick={() => setAreaManagerOpen(true)}
+          >
+            + Manage areas
+          </button>
         </div>
         <div className="area-grid">
-          {controlAreas.map((area) => {
+          {(controller.snapshot?.controlAreas ?? []).map((area) => {
             const areaSummary =
               controller.snapshot === null
                 ? null
-                : createAreaSummary(controller.snapshot, area.path);
+                : createAreaSummary(controller.snapshot, area.slug);
             return (
               <Link
                 className={`area-card area-card-${areaSummary?.status ?? "loading"}`}
-                key={area.path}
-                to={`/control/${area.path}`}
+                key={area.slug}
+                to={`/control/${area.slug}`}
               >
                 <span className="area-card-heading">
                   <strong>{area.label}</strong>
@@ -185,6 +177,17 @@ function Dashboard(): React.JSX.Element {
           })}
         </div>
       </section>
+
+      {areaManagerOpen && controller.snapshot !== null ? (
+        <AreaManagementDialog
+          areas={controller.snapshot.controlAreas}
+          channels={controller.snapshot.channels}
+          outputs={controller.snapshot.outputs}
+          expectedRevision={controller.revision}
+          refresh={controller.refresh}
+          onClose={() => setAreaManagerOpen(false)}
+        />
+      ) : null}
 
       <button
         className="maintainer-menu-button secondary-button"

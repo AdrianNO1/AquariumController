@@ -2606,10 +2606,11 @@ button:disabled {
 .unsaved-changes-confirmation {
   width: min(460px, calc(100vw - 32px));
   padding: 22px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--compact-border-strong);
   border-radius: 10px;
-  background: var(--surface-raised);
-  box-shadow: var(--shadow-strong);
+  color: #e9f4f3;
+  background: #0b2a31;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.58);
 }
 
 .unsaved-changes-confirmation h3 {
@@ -2618,7 +2619,7 @@ button:disabled {
 
 .unsaved-changes-confirmation p {
   margin: 0 0 18px;
-  color: var(--text-muted);
+  color: var(--compact-muted);
 }
 
 .nested-confirmation-backdrop {
@@ -3029,6 +3030,35 @@ button:disabled {
   gap: 7px;
 }
 
+.area-management-dialog {
+  width: min(620px, calc(100vw - 28px));
+}
+
+.area-management-list {
+  display: grid;
+  gap: 7px;
+}
+
+.area-management-row,
+.add-area-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.add-area-row {
+  align-items: end;
+  margin-top: 13px;
+  padding-top: 13px;
+  border-top: 1px solid var(--compact-border);
+}
+
+.area-forensics-note {
+  margin: 11px 0 0;
+  font-size: 0.72rem;
+}
+
 .channel-management-row,
 .add-channel-row {
   display: grid;
@@ -3138,6 +3168,8 @@ button:disabled {
   }
 
   .device-form-grid,
+  .area-management-row,
+  .add-area-row,
   .channel-management-row,
   .add-channel-row,
   .mapping-profile-editor .profile-fields,

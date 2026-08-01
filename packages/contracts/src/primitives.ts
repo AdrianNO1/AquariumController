@@ -67,33 +67,15 @@ export const canonicalUint32HashSchema = z
 
 export const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 
-export const controlTypeKeySchema = z.enum([
-  "light",
-  "pump",
-  "testlight",
-  "bad",
-  "loft",
-  "biljard",
-  "frag",
-  "qt1",
-  "qt2",
-  "qt3",
-  "qt4",
-]);
+const controlAreaKeySchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-z][a-z0-9-]*$/u);
 
-export const controlAreaSlugSchema = z.enum([
-  "lights",
-  "pumps",
-  "testlights",
-  "bad",
-  "loft",
-  "biljard",
-  "frag",
-  "qt1",
-  "qt2",
-  "qt3",
-  "qt4",
-]);
+export const controlTypeKeySchema = controlAreaKeySchema;
+
+export const controlAreaSlugSchema = controlAreaKeySchema;
 
 export const deviceStatusSchema = z.enum([
   "unknown",

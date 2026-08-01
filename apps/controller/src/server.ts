@@ -498,6 +498,7 @@ function scheduleTriggersFor(
         case "device":
           return [{ kind: "device_configuration", deviceId: invalidation.id }];
         case "controller":
+        case "control_area":
         case "operation":
         case "override":
         case "alert_rule":

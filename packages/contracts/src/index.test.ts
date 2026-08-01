@@ -23,8 +23,13 @@ describe("shared contracts", () => {
     expect(parsed.status).toBe("ok");
   });
 
-  it("rejects unrecognized control areas", () => {
-    expect(legacyControlAreaSchema.safeParse("unknown").success).toBe(false);
+  it("accepts dynamic control areas and rejects unsafe route slugs", () => {
+    expect(legacyControlAreaSchema.safeParse("anemone-tank").success).toBe(
+      true,
+    );
+    for (const slug of ["Anemone", "anemone tank", "../anemone", ""]) {
+      expect(legacyControlAreaSchema.safeParse(slug).success).toBe(false);
+    }
   });
 
   it("does not assign a state revision identifier to stream readiness", () => {

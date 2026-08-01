@@ -140,7 +140,8 @@ export class MqttInteractionLogger {
     });
   }
 
-  logDiscoverySkipped(_atMs: number): Promise<void> {
+  logDiscoverySkipped(atMs: number): Promise<void> {
+    void atMs;
     return Promise.resolve();
   }
 
