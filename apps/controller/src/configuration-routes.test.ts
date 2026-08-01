@@ -585,6 +585,54 @@ describe("configuration HTTP routes", () => {
     });
   });
 
+  it("routes revision-checked device and fleet firmware requests", async () => {
+    const result: MutationResult = {
+      changed: false,
+      revision: 7,
+      event: null,
+    };
+    const requestDeviceUpdate = vi.fn(async () => result);
+    const requestFleetUpdate = vi.fn(async () => result);
+    const app = trackApp(
+      buildApp({
+        firmwareUpdateCommands: {
+          requestDeviceUpdate,
+          requestFleetUpdate,
+        },
+      }),
+    );
+
+    const deviceResponse = await app.inject({
+      method: "POST",
+      url: "/api/devices/device-main/firmware-update",
+      payload: { expectedRevision: 7, mode: "when_off" },
+    });
+    expect(deviceResponse.statusCode).toBe(200);
+    expect(requestDeviceUpdate).toHaveBeenCalledWith("device-main", {
+      expectedRevision: 7,
+      mode: "when_off",
+    });
+
+    const fleetResponse = await app.inject({
+      method: "POST",
+      url: "/api/firmware/esp32/update-all",
+      payload: { expectedRevision: 7, mode: "immediate" },
+    });
+    expect(fleetResponse.statusCode).toBe(200);
+    expect(requestFleetUpdate).toHaveBeenCalledWith({
+      expectedRevision: 7,
+      mode: "immediate",
+    });
+
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/firmware/esp32/update-all",
+      payload: { expectedRevision: 7, mode: "later" },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(requestFleetUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it("does not expose unexpected repository failures", async () => {
     const { repository } = await createRepository();
     repository.getOperation = async () => {

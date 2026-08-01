@@ -32,6 +32,12 @@ import {
 
 const now = "2026-07-13T08:00:00.000Z";
 const later = "2026-07-13T08:02:00.000Z";
+const firmware = {
+  currentVersion: "5.0.0",
+  sha256: "f655a0a1bc067c24ebec9578c2f638d1221bfbf6d3c4679785dd6e8851bfbee5",
+  sizeBytes: 1_174_576,
+  fleetPolicy: null,
+} as const;
 
 const controlAreas = [
   { slug: "lights", typeKey: "light", label: "Lights" },
@@ -138,6 +144,7 @@ describe("controller contracts", () => {
       outputs: [],
       mappingProfiles: [],
       devices: [],
+      firmware,
       operations: { items: [], limit: 100, truncated: false },
       unresolvedDeviceOperations: {
         items: [],
@@ -329,7 +336,11 @@ describe("controller contracts", () => {
         pwmResolutionBits: 8,
         firmwareVersion: "4.0.0",
         scheduleHash: "4294967295",
+        outputsOff: false,
+        outputs: [{ pin: 16, valuePercentage: 40 }],
+        ota: null,
       },
+      firmwareUpdate: null,
       status: "online",
       lastSeenAt: now,
       lastError: null,
@@ -624,7 +635,11 @@ describe("controller contracts", () => {
         pwmResolutionBits: null,
         firmwareVersion: null,
         scheduleHash: null,
+        outputsOff: null,
+        outputs: [],
+        ota: null,
       },
+      firmwareUpdate: null,
       status: "unknown",
       lastSeenAt: null,
       lastError: null,
@@ -655,6 +670,7 @@ describe("controller contracts", () => {
       outputs: [],
       mappingProfiles: [],
       devices: [device],
+      firmware,
       operations: { items: [], limit: 100, truncated: false },
       unresolvedDeviceOperations: {
         items: [],
@@ -794,7 +810,11 @@ describe("controller contracts", () => {
         pwmResolutionBits: 10,
         firmwareVersion: "4.0.0",
         scheduleHash: "0",
+        outputsOff: true,
+        outputs: [],
+        ota: null,
       },
+      firmwareUpdate: null,
       status: "online",
       lastSeenAt: now,
       lastError: null,

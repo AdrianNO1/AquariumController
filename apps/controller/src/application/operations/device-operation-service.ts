@@ -158,7 +158,10 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       },
       lifecycleOptions,
     );
-    if (!isCommandEligibleDevice(device)) {
+    if (
+      !isCommandEligibleDevice(device) &&
+      !(parsedRequest.kind === "firmware_update" && device.enabled === 1)
+    ) {
       return this.#repository.completePendingWithoutAttempt(
         operation.id,
         this.#now(),

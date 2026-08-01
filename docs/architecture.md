@@ -189,11 +189,12 @@ the application:
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `4.1.0` is the exact supported release. Every other announced
+- Firmware `5.0.0` is the exact supported release. Every other announced
   version remains visible but is marked `firmware_outdated`, excluded from
-  actuator work, and shown with an install-4.1.0 message in the frontend.
+  actuator work, and shown with an update or USB-bootstrap message in the
+  frontend.
 
-Firmware 4.1 accepts
+Firmware 5.0 accepts
 `request:<requestId>|<semicolon-separated commands>` and echoes the request ID
 in its structured response. The transport therefore maintains one FIFO lane
 per ESP, permits one response-waiting operation per ESP, and runs at most sixteen
@@ -202,6 +203,15 @@ work is selected before queued background schedule, refresh, and time-sync
 work. Responses are routed by request ID and then checked against the expected
 device and local command index, so delayed or out-of-order responses cannot
 settle a newer operation.
+
+Firmware updates use the same discovery registry and correlated MQTT command
+lane. The controller sends an approved local HTTP URL, exact byte count, and
+SHA-256; the ESP streams the image into its inactive OTA partition and reports
+output/OTA state in announcements. `when_off` requests wait for every reported
+pin to reach 0%. Update-all persists its mode so an outdated ESP announcing
+later is enrolled. A new image is confirmed only after MQTT presence succeeds;
+five minutes without confirmation or three probation boots select the previous
+partition. ESP-reported OTA failures remain terminal until an operator retries.
 
 Chunk frames still have no separate message identifier, and every subscribed
 ESP has one chunk-reassembly buffer. A short global publication mutex keeps all

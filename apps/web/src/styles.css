@@ -1691,6 +1691,7 @@ h2 {
   .device-card-heading,
   .override-card-heading,
   .override-command-notice,
+  .firmware-fleet-panel,
   .stale-banner,
   .delete-confirmation {
     align-items: stretch;
@@ -2912,6 +2913,80 @@ button:disabled {
 
 .device-card-error {
   color: #ffb4aa;
+}
+
+.firmware-update-state,
+.firmware-usb-required,
+.firmware-fleet-policy {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.firmware-update-state,
+.firmware-fleet-policy {
+  color: #9ee3d8;
+}
+
+.firmware-update-failed,
+.firmware-usb-required {
+  color: #ffb4aa;
+}
+
+.firmware-update-waiting_for_off,
+.firmware-update-waiting_for_device,
+.firmware-update-probation {
+  color: #f0d28d;
+}
+
+.firmware-fleet-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px;
+  border: 1px solid rgba(128, 206, 200, 0.2);
+  border-radius: 12px;
+  background: rgba(5, 25, 30, 0.62);
+}
+
+.firmware-fleet-panel h2,
+.firmware-fleet-panel p {
+  margin: 0;
+}
+
+.firmware-fleet-panel > div {
+  display: grid;
+  gap: 7px;
+}
+
+.firmware-update-dialog {
+  width: min(540px, calc(100vw - 28px));
+}
+
+.firmware-update-options {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.firmware-update-options p {
+  margin: 0 0 4px;
+  color: var(--compact-text-soft);
+  line-height: 1.5;
+}
+
+.firmware-update-options button:not(.text-button) {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.firmware-update-options button small {
+  font-weight: 500;
+  opacity: 0.76;
 }
 
 .device-exclude-button {

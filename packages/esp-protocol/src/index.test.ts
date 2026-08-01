@@ -7,23 +7,72 @@ import {
   CURRENT_ESP_FIRMWARE_VERSION,
   encodeCorrelatedLegacyRequest,
   encodeLegacyMessage,
+  ESP_FIRMWARE_ARTIFACT,
   ESP32_PWM_OVERWRITE_DURATION_MS,
   espAnnouncementSchema,
   espCommandResponseSchema,
   isSupportedEsp32PwmConfiguration,
   isCurrentEspFirmwareVersion,
+  supportsPullOta,
   LEGACY_CHUNK_DATA_BYTES,
   utf8ByteLength,
 } from "./index.js";
 
 describe("legacy ESP protocol", () => {
-  it("requires the refactored reliability firmware exactly", () => {
-    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("4.1.0");
+  it("requires the pull-OTA firmware exactly", () => {
+    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("5.0.0");
+    expect(ESP_FIRMWARE_ARTIFACT).toMatchObject({
+      version: "5.0.0",
+      sizeBytes: 1_174_576,
+      sha256:
+        "f655a0a1bc067c24ebec9578c2f638d1221bfbf6d3c4679785dd6e8851bfbee5",
+    });
     expect(ESP32_PWM_OVERWRITE_DURATION_MS).toBe(120_000);
-    expect(isCurrentEspFirmwareVersion("4.1.0")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(true);
+    expect(supportsPullOta("5.0.0")).toBe(true);
+    expect(supportsPullOta("6.1.0")).toBe(true);
+    expect(supportsPullOta("4.2.1")).toBe(false);
     expect(isCurrentEspFirmwareVersion("4.0.0")).toBe(false);
     expect(isCurrentEspFirmwareVersion("3.2w")).toBe(false);
-    expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);
+  });
+
+  it("accepts output and OTA telemetry while preserving legacy announcements", () => {
+    const base = {
+      id: "A1",
+      name: "Main",
+      freq: 5_000,
+      res: 8,
+      status: "online",
+      version: "5.0.0",
+      scheduleHash: "0",
+    };
+
+    expect(espAnnouncementSchema.safeParse(base).success).toBe(true);
+    expect(
+      espAnnouncementSchema.safeParse({
+        ...base,
+        outputsOff: false,
+        outputs: [
+          [16, 40],
+          [17, 0],
+        ],
+        ota: {
+          status: "downloading",
+          targetVersion: "5.0.1",
+          progress: 48,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      espAnnouncementSchema.safeParse({
+        ...base,
+        outputsOff: true,
+        outputs: [
+          [16, 0],
+          [16, 0],
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it("rejects PWM pairs the ESP32 LEDC source clock cannot represent", () => {

@@ -200,12 +200,63 @@ const deviceConfigurationSchema = z.strictObject({
   pwmResolutionBits: pwmResolutionBitsSchema,
 });
 
+export const firmwareUpdateModeSchema = z.enum(["immediate", "when_off"]);
+export const firmwareUpdateStatusSchema = z.enum([
+  "pending",
+  "waiting_for_device",
+  "waiting_for_off",
+  "accepted",
+  "downloading",
+  "verifying",
+  "rebooting",
+  "probation",
+  "succeeded",
+  "failed",
+  "usb_required",
+]);
+
+const reportedOutputStateSchema = z.strictObject({
+  pin: z.number().int().min(0).max(63),
+  valuePercentage: percentageSchema,
+});
+
+const reportedOtaStateSchema = z.strictObject({
+  status: z.enum([
+    "idle",
+    "accepted",
+    "downloading",
+    "verifying",
+    "rebooting",
+    "probation",
+    "succeeded",
+    "failed",
+    "rolling_back",
+  ]),
+  targetVersion: z.string().max(31),
+  progress: z.number().int().min(0).max(100),
+  error: boundedTextSchema.nullable(),
+});
+
+const deviceFirmwareUpdateSchema = z.strictObject({
+  targetVersion: boundedTextSchema,
+  mode: firmwareUpdateModeSchema,
+  status: firmwareUpdateStatusSchema,
+  progress: z.number().int().min(0).max(100),
+  operationId: identifierSchema.nullable(),
+  error: boundedTextSchema.nullable(),
+  requestedAt: isoTimestampSchema,
+  updatedAt: isoTimestampSchema,
+});
+
 const reportedDeviceConfigurationSchema = z.strictObject({
   name: boundedTextSchema.nullable(),
   pwmFrequencyHz: pwmFrequencyHzSchema.nullable(),
   pwmResolutionBits: pwmResolutionBitsSchema.nullable(),
   firmwareVersion: boundedTextSchema.nullable(),
   scheduleHash: canonicalUint32HashSchema.nullable(),
+  outputsOff: z.boolean().nullable(),
+  outputs: z.array(reportedOutputStateSchema).max(64),
+  ota: reportedOtaStateSchema.nullable(),
 });
 
 export const deviceSchema = z.strictObject({
@@ -214,6 +265,7 @@ export const deviceSchema = z.strictObject({
   mappingProfileId: identifierSchema.nullable(),
   desired: deviceConfigurationSchema,
   reported: reportedDeviceConfigurationSchema,
+  firmwareUpdate: deviceFirmwareUpdateSchema.nullable(),
   status: deviceStatusSchema,
   lastSeenAt: isoTimestampSchema.nullable(),
   lastError: z
@@ -222,6 +274,19 @@ export const deviceSchema = z.strictObject({
   enabled: z.boolean(),
   createdAt: isoTimestampSchema,
   updatedAt: isoTimestampSchema,
+});
+
+export const firmwareDeploymentSchema = z.strictObject({
+  currentVersion: boundedTextSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  sizeBytes: positiveSafeIntegerSchema,
+  fleetPolicy: z
+    .strictObject({
+      targetVersion: boundedTextSchema,
+      mode: firmwareUpdateModeSchema,
+      requestedAt: isoTimestampSchema,
+    })
+    .nullable(),
 });
 
 export const operationSummarySchema = z
@@ -866,6 +931,7 @@ export const controllerSnapshotSchema = z
     outputs: z.array(outputSchema),
     mappingProfiles: z.array(mappingProfileSchema),
     devices: z.array(deviceSchema),
+    firmware: firmwareDeploymentSchema,
     operations: recentOperationsSchema,
     unresolvedDeviceOperations: unresolvedDeviceOperationsSchema,
     importRuns: z.array(importRunSummarySchema).max(100),
@@ -1362,6 +1428,11 @@ export const setDeviceEnabledRequestSchema = z.strictObject({
   enabled: z.boolean(),
 });
 
+export const requestFirmwareUpdateSchema = z.strictObject({
+  expectedRevision: nonnegativeSafeIntegerSchema,
+  mode: firmwareUpdateModeSchema,
+});
+
 export const alertRuleSourceSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("device"), id: identifierSchema }),
   z.strictObject({ type: z.literal("output"), id: identifierSchema }),
@@ -1650,6 +1721,9 @@ export type Output = z.infer<typeof outputSchema>;
 export type PinMapping = z.infer<typeof pinMappingSchema>;
 export type MappingProfile = z.infer<typeof mappingProfileSchema>;
 export type Device = z.infer<typeof deviceSchema>;
+export type FirmwareDeployment = z.infer<typeof firmwareDeploymentSchema>;
+export type FirmwareUpdateMode = z.infer<typeof firmwareUpdateModeSchema>;
+export type FirmwareUpdateStatus = z.infer<typeof firmwareUpdateStatusSchema>;
 export type OperationSummary = z.infer<typeof operationSummarySchema>;
 export type RecentOperations = z.infer<typeof recentOperationsSchema>;
 export type UnresolvedDeviceOperations = z.infer<
@@ -1700,6 +1774,7 @@ export type PatchDeviceConfigurationRequest = z.infer<
 export type SetDeviceEnabledRequest = z.infer<
   typeof setDeviceEnabledRequestSchema
 >;
+export type RequestFirmwareUpdate = z.infer<typeof requestFirmwareUpdateSchema>;
 export type AlertRuleSource = z.infer<typeof alertRuleSourceSchema>;
 export type AlertRuleCondition = z.infer<typeof alertRuleConditionSchema>;
 export type AlertRuleInput = z.infer<typeof alertRuleInputSchema>;

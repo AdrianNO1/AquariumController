@@ -1,73 +1,85 @@
-# ESP32 firmware verification
+# ESP32 firmware
 
-The active firmware source is
-`firmware/esp32/ESP32Code/ESP32Code.ino`. It is a supported part of the
-application and must compile before release.
+The supported source is `firmware/esp32/ESP32Code/ESP32Code.ino`. Firmware
+5.0.0 adds controller-managed pull OTA, output-state telemetry, and automatic
+rollback without depending on the legacy `.old` tree.
 
-The sketch reads its Wi-Fi and MQTT settings from the ignored
-`firmware/esp32/ESP32Code/firmware-config.h`. On a fresh checkout, copy
-`firmware-config.example.h` to `firmware-config.h`, replace the Wi-Fi, MQTT, and
-NTP settings, and keep that file out of Git. The pinned verification build uses
-only the safe example values because it compiles but never flashes or connects
-the firmware.
+## Initial USB bootstrap
 
-Firmware 4.2.1 supports a username/password on its plaintext MQTT connection.
-Set both values to non-empty strings for an authenticated broker, or leave both
-empty only when the broker intentionally permits anonymous clients on an
-isolated trusted LAN. The sketch does not support MQTT TLS; do not configure a
-production broker that requires `mqtts://` for ESP clients without a future
-firmware change and physical validation.
+Copy `firmware-config.example.h` to the ignored `firmware-config.h`, enter the
+device's Wi-Fi, MQTT, and NTP settings, and flash firmware 5.0.0 once over USB.
+On its first 5.x boot the sketch stores those settings in the ESP32's NVS. Later
+generic OTA images reuse the persisted settings, so each release does not need
+device-specific credentials compiled into it.
 
-Firmware 4.2.1 also exposes a temporary ArduinoOTA smoke-test service after
-Wi-Fi connects. It generates its OTA password automatically at boot and prints
-the hostname, IP address, port, and password to the serial monitor. This push
-service verifies the wireless transport before controller-managed pull updates
-and signed release images are implemented; it is not the final fleet-update
-authentication design.
+Firmware older than 5.0.0 cannot pull an update and therefore needs this one
+USB bootstrap. The web UI identifies those devices as `USB required`.
 
-The `s <pin> <value> <overwrite>` command defines `value` as a normalized
-8-bit duty from 0 through 255. Firmware scales that value to the configured
-LEDC resolution before writing the pin, while its response echoes the original
-normalized value. Changing PWM resolution rescales attached output state so an
-active manual override preserves its duty until release or safety expiry.
+## Controller-managed OTA
 
-NTP synchronization is asynchronous: DNS or NTP failure cannot hold MQTT or
-manual control startup open. Attempts use a 15-second non-blocking deadline,
-retry after 60 seconds until successful, and re-arm after six hours if periodic
-SNTP updates stop. The MQTT `sync` command remains available as an immediate
-controller-provided time source. If neither source is reachable after a reboot,
-firmware intentionally trusts its last hourly EEPROM timestamp and runs the
-local schedule from that boundedly stale estimate. Every accepted sync updates
-the clock in RAM immediately. The first fresh checkpoint after boot is committed
-immediately; later corrections, including backward corrections, are coalesced
-to at most one EEPROM commit per hour. Failed commits remain pending and retry
-no more than once per hour.
+The controller bundles one approved binary and exposes it on the trusted LAN at
+`/api/firmware/esp32/current.bin`. An operator can request an update for one ESP
+or start an update-all rollout with either of these modes:
 
-Schedule activation is best-effort per pin. A failed LEDC attachment leaves that
-pin low while other scheduled pins continue, and the failed pin is retried once
-per minute. Physical attachment and write failures use the same diagnostic codes
-for scheduled and directly commanded outputs. Pins removed by a replacement
-schedule are forced low and detached.
-The first firmware diagnostic transition is written to SPIFFS immediately.
-Later transitions are coalesced to at most one write per hour; a failed write
-retries no more than once per hour. Repeated identical physical faults do not
-change diagnostic state or write flash. Each transition queues a non-blocking
-announcement after MQTT callback processing; failed publishes remain pending
-and retry no more than once per minute.
+- `Update now` starts the download immediately. LEDC hardware keeps the current
+  duty while the image downloads, but activating the image requires a brief
+  restart.
+- `Update when outputs are off` waits until the ESP reports every attached pin
+  at 0%, avoiding a visible restart while lights are on.
 
-Controller command batches may use
+The controller sends the target version, exact byte count, SHA-256, and local
+HTTP URL over the existing correlated MQTT command channel. There is no
+per-device OTA password or separate discovery mechanism. MQTT identifies the
+device, and the ESP downloads from the configured controller URL. This design
+assumes the controller, broker, and ESPs are confined to the trusted aquarium
+LAN; the current firmware supports neither HTTPS nor MQTT TLS.
+
+The ESP writes only to the inactive OTA partition. It rejects an unexpected
+HTTP status, content length, image size, or SHA-256 before selecting the image
+for boot. The old partition remains available during probation:
+
+- MQTT reconnect is attempted every five seconds while the local schedule
+  continues running.
+- A successful presence announcement confirms the new image.
+- If MQTT cannot be confirmed within five minutes, or the probation image boots
+  three times, the ESP selects the previous partition and restarts.
+- A reported download, verification, or rollback failure is not retried
+  automatically. An operator must explicitly retry it. Controller-side command
+  contention that occurs before an OTA command is accepted remains pending and
+  can be attempted after the next device announcement.
+
+An active update-all policy is persisted with its chosen mode. An outdated ESP
+that is powered later is enrolled when it announces itself. Devices already on
+the target version are left alone.
+
+## Runtime behavior
+
+The `s <pin> <value> <overwrite>` command defines `value` as a normalized 8-bit
+duty from 0 through 255. Firmware scales that value to the configured LEDC
+resolution and reports attached output pins as percentages. Output changes
+queue an announcement used by the controller's `when outputs are off` gate.
+
+NTP synchronization is asynchronous. DNS or NTP failure cannot hold MQTT or
+manual-control startup open. If neither source is reachable after a reboot, the
+firmware uses its last hourly EEPROM timestamp and continues the persisted local
+schedule. Schedule activation remains best-effort per pin, and physical output
+fault diagnostics remain wear-limited in SPIFFS.
+
+Controller command batches use
 `request:<requestId>|<semicolon-separated commands>`. Responses echo the
-request ID, preventing a delayed response from being mistaken for a newer
-operation. Unwrapped command batches remain available for local diagnostics.
+request ID so a delayed response cannot settle a newer operation.
 
-Build the pinned verification image from the repository root:
+## Reproducible build
+
+Build the pinned generic image from the repository root:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.2.1 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.0 .
 ```
 
-The image build verifies Arduino CLI 1.5.0 against its official archive SHA-256
-before extraction, installs ESP32 Arduino core 3.3.8, ArduinoJson 7.4.3, and
-PubSubClient 2.8, then compiles the real sketch for the generic ESP32 target.
-The final image contains only `ESP32Code.ino.bin`; it is a build artifact, not a
-runtime dependency of the controller.
+The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
+ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
+target using only the safe example configuration. The resulting application
+binary is `firmware/esp32/artifacts/ESP32Code-5.0.0.bin`; its exact size and
+SHA-256 are pinned in `@aquarium/esp-protocol` and revalidated by the controller
+at startup.

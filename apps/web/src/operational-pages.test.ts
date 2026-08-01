@@ -551,6 +551,41 @@ describe("operations route", () => {
     expect(screen.queryByText(/Controller state is loading/u)).toBeNull();
   });
 
+  it("confirms and starts a persistent update-all rollout", async () => {
+    const requestBodies: object[] = [];
+    server.use(
+      http.post(
+        "http://localhost/api/firmware/esp32/update-all",
+        async ({ request }) => {
+          requestBodies.push((await request.json()) as object);
+          return HttpResponse.json({
+            changed: false,
+            revision: 8,
+            event: null,
+          });
+        },
+      ),
+    );
+    const refresh = vi.fn();
+    const user = renderApp(
+      "/operations",
+      controllerState(createTestControlSnapshot(8), refresh),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Update all ESPs" }));
+    expect(
+      screen.getByRole("dialog", { name: "Update all ESP32 devices?" }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /Update now/u }));
+
+    await waitFor(() =>
+      expect(requestBodies).toEqual([
+        { expectedRevision: 8, mode: "immediate" },
+      ]),
+    );
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
   it("inspects and reconciles an unresolved outcome outside recent history and current mappings", async () => {
     const base = createTestControlSnapshot(8);
     const hiddenOperation = base.operations.items.find(

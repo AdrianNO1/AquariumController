@@ -7,6 +7,8 @@ import {
 import {
   CURRENT_ESP_FIRMWARE_VERSION,
   espFirmwareDiagnosticSchema,
+  espOtaStatusSchema,
+  espOutputStateSchema,
   isCurrentEspFirmwareVersion,
   isSupportedEsp32PwmConfiguration,
   type EspAnnouncement,
@@ -35,6 +37,9 @@ const registryAnnouncementSchema = z
     status: boundedTextSchema,
     version: boundedTextSchema,
     scheduleHash: canonicalUint32HashSchema,
+    outputsOff: z.boolean().optional(),
+    outputs: espOutputStateSchema.optional(),
+    ota: espOtaStatusSchema.optional(),
     lastError: espFirmwareDiagnosticSchema.optional(),
   })
   .superRefine((announcement, context) => {
@@ -237,6 +242,18 @@ export class DeviceRegistry {
         const mappingProfileId =
           existing?.mapping_profile_id ??
           (await matchingMappingProfileId(transaction, announcement.name));
+        const outputStateJson =
+          announcement.outputs === undefined ||
+          announcement.outputsOff === undefined
+            ? null
+            : JSON.stringify({
+                outputs: announcement.outputs,
+                outputsOff: announcement.outputsOff,
+              });
+        const otaStatusJson =
+          announcement.ota === undefined
+            ? null
+            : JSON.stringify(announcement.ota);
         if (
           existing?.last_seen_at_ms !== null &&
           existing?.last_seen_at_ms !== undefined &&
@@ -270,6 +287,8 @@ export class DeviceRegistry {
               reported_pwm_resolution_bits: announcement.res,
               firmware_version: announcement.version,
               reported_schedule_hash: announcement.scheduleHash,
+              output_state_json: outputStateJson,
+              ota_status_json: otaStatusJson,
               status:
                 announcement.status === "online" &&
                 error?.code !== "firmware_outdated"
@@ -332,6 +351,8 @@ export class DeviceRegistry {
           existing.reported_pwm_resolution_bits !== announcement.res ||
           existing.firmware_version !== announcement.version ||
           existing.reported_schedule_hash !== announcement.scheduleHash ||
+          existing.output_state_json !== outputStateJson ||
+          existing.ota_status_json !== otaStatusJson ||
           existing.status !== nextStatus ||
           existing.last_error_code !== (error?.code ?? null) ||
           existing.last_error_message !== (error?.message ?? null);
@@ -361,6 +382,8 @@ export class DeviceRegistry {
             reported_pwm_resolution_bits: announcement.res,
             firmware_version: announcement.version,
             reported_schedule_hash: announcement.scheduleHash,
+            output_state_json: outputStateJson,
+            ota_status_json: otaStatusJson,
             status: nextStatus,
             last_seen_at_ms: event.receivedAtMs,
             last_error_code: error?.code ?? null,

@@ -184,8 +184,28 @@ describe("controller snapshot repository", () => {
     expect(snapshot.devices[0]).toMatchObject({
       id: "device-main",
       desired: { name: "reef-main" },
-      reported: { scheduleHash: "42" },
+      reported: {
+        scheduleHash: "42",
+        outputsOff: false,
+        outputs: [{ pin: 12, valuePercentage: 75 }],
+        ota: {
+          status: "idle",
+          targetVersion: "",
+          progress: 0,
+          error: null,
+        },
+      },
+      firmwareUpdate: {
+        targetVersion: "5.0.0",
+        mode: "when_off",
+        status: "usb_required",
+      },
       status: "online",
+    });
+    expect(snapshot.firmware).toMatchObject({
+      currentVersion: "5.0.0",
+      sizeBytes: 1_174_576,
+      fleetPolicy: null,
     });
     expect(snapshot.operations.items.map((operation) => operation.id)).toEqual([
       "operation-apply",
@@ -689,12 +709,28 @@ async function seedPopulatedState(
       reported_pwm_resolution_bits: 8,
       firmware_version: "1.2.3",
       reported_schedule_hash: "42",
+      output_state_json: '{"outputsOff":false,"outputs":[[12,75]]}',
+      ota_status_json: '{"status":"idle","targetVersion":"","progress":0}',
       status: "online",
       last_seen_at_ms: BASE_TIME_MS + 1_000,
       created_at_ms: BASE_TIME_MS,
       updated_at_ms: BASE_TIME_MS + 1_000,
       metadata_json: '{"schemaVersion":1,"rack":"main"}',
       metadata_schema_version: 1,
+    })
+    .executeTakeFirstOrThrow();
+  await database
+    .insertInto("firmware_update_requests")
+    .values({
+      device_id: "device-main",
+      target_version: "5.0.0",
+      mode: "when_off",
+      status: "usb_required",
+      progress: 0,
+      operation_id: null,
+      error_message: "Install firmware 5.0.0 once over USB",
+      requested_at_ms: BASE_TIME_MS,
+      updated_at_ms: BASE_TIME_MS,
     })
     .executeTakeFirstOrThrow();
   await database

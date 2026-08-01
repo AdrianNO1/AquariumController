@@ -24,6 +24,7 @@ import {
   operationParamsSchema,
   patchDeviceConfigurationRequestSchema,
   reconcileManualOverrideRequestSchema,
+  requestFirmwareUpdateSchema,
   renameChannelRequestSchema,
   renameControlAreaRequestSchema,
   replaceMappingProfileRequestSchema,
@@ -63,6 +64,7 @@ import {
   type CancelManualOverrideRequest,
   type ExtendManualOverrideRequest,
   type ReconcileManualOverrideRequest,
+  type RequestFirmwareUpdate,
 } from "@aquarium/contracts";
 
 export class AquariumApiError extends Error {
@@ -329,6 +331,28 @@ export function setDeviceEnabled(
     `/api/devices/${encodeURIComponent(params.deviceId)}/enabled`,
     "PATCH",
     setDeviceEnabledRequestSchema.parse(request),
+  );
+}
+
+export function requestDeviceFirmwareUpdate(
+  deviceId: string,
+  request: RequestFirmwareUpdate,
+): Promise<MutationResult> {
+  const params = deviceParamsSchema.parse({ deviceId });
+  return requestConfigurationMutation(
+    `/api/devices/${encodeURIComponent(params.deviceId)}/firmware-update`,
+    "POST",
+    requestFirmwareUpdateSchema.parse(request),
+  );
+}
+
+export function requestFleetFirmwareUpdate(
+  request: RequestFirmwareUpdate,
+): Promise<MutationResult> {
+  return requestConfigurationMutation(
+    "/api/firmware/esp32/update-all",
+    "POST",
+    requestFirmwareUpdateSchema.parse(request),
   );
 }
 

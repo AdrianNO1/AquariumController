@@ -231,7 +231,7 @@ describe("ScheduleReconciliationService", () => {
     });
   });
 
-  it.each(["0", "1", "2w", "3.2w", "5.0.0"])(
+  it.each(["0", "1", "2w", "3.2w", "4.2.1"])(
     "marks non-current firmware %s explicitly unsupported",
     async (firmwareVersion) => {
       const database = await createDatabase();

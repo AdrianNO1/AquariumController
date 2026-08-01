@@ -51,6 +51,14 @@ export function buildLegacyWireCommand(
       return buildSyncTimeCommand(target, request.epochSeconds);
     case "analog_read":
       return buildAnalogReadCommand(target, request.pin);
+    case "firmware_update":
+      return buildFirmwareUpdateCommand(
+        target,
+        request.version,
+        request.url,
+        request.size,
+        request.sha256,
+      );
   }
 }
 
@@ -154,6 +162,30 @@ export function buildAnalogReadCommand(
 ): LegacyWireCommand {
   assertIntegerInRange(pin, MIN_PIN, MAX_PIN, "Analog-read pin");
   return command(target, `r ${pin}`, { kind: "analog_read", pin });
+}
+
+export function buildFirmwareUpdateCommand(
+  target: LegacyDeviceTarget,
+  version: string,
+  url: string,
+  size: number,
+  sha256: string,
+): LegacyWireCommand {
+  assertWireToken(version, "firmware version", 31);
+  assertIntegerInRange(size, 100_000, 1_900_000, "firmware image size");
+  if (!/^http:\/\/[^\s;]+$/u.test(url) || url.length > 240) {
+    throw new TypeError(
+      "Firmware URL must be a local HTTP URL without whitespace or semicolons",
+    );
+  }
+  if (!/^[a-f0-9]{64}$/u.test(sha256)) {
+    throw new TypeError("Firmware SHA-256 must be lowercase hexadecimal");
+  }
+  return command(
+    target,
+    `ota ${version} ${size} ${sha256} ${url}`,
+    exact("ota_accepted"),
+  );
 }
 
 function command(

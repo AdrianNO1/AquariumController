@@ -38,6 +38,13 @@ export function createTestControllerSnapshot(
     outputs: [],
     mappingProfiles: [],
     devices: [],
+    firmware: {
+      currentVersion: "5.0.0",
+      sha256:
+        "f655a0a1bc067c24ebec9578c2f638d1221bfbf6d3c4679785dd6e8851bfbee5",
+      sizeBytes: 1_174_576,
+      fleetPolicy: null,
+    },
     operations: { items: [], limit: 100, truncated: false },
     unresolvedDeviceOperations: {
       items: [],

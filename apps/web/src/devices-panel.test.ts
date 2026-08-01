@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"http://localhost/"}
 
-import type { Device, MappingProfile } from "@aquarium/contracts";
+import type {
+  Device,
+  FirmwareDeployment,
+  MappingProfile,
+} from "@aquarium/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -28,6 +32,12 @@ import {
 import { DevicesPanel } from "./DevicesPanel.js";
 
 const timestamp = "2026-07-13T10:00:00.000Z";
+const firmware: FirmwareDeployment = {
+  currentVersion: "5.0.0",
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+  sizeBytes: 1,
+  fleetPolicy: null,
+};
 const profile: MappingProfile = {
   id: "profile-main",
   name: "Main rack",
@@ -43,7 +53,7 @@ const devices: readonly Device[] = [
     name: "Online rack",
     hardwareId: "A1B2C3D4",
     status: "online",
-    firmwareVersion: "4.0.0",
+    firmwareVersion: "5.0.0",
     lastError: null,
   }),
   device({
@@ -51,7 +61,7 @@ const devices: readonly Device[] = [
     name: "Stale rack",
     hardwareId: "B2C3D4E5",
     status: "stale",
-    firmwareVersion: "4.0.0",
+    firmwareVersion: "5.0.0-beta.1",
     lastError: {
       code: "firmware_outdated",
       message: "Firmware 4.1.0 is available",
@@ -104,8 +114,10 @@ describe("DevicesPanel", () => {
     expect(screen.getByText("ID: A1B2C3D4")).toBeTruthy();
     expect(screen.getByText("ID: B2C3D4E5")).toBeTruthy();
     expect(screen.getByText("ID: C3D4E5F6")).toBeTruthy();
-    expect(screen.getByText(/4\.0\.0 .* current/u)).toBeTruthy();
-    expect(screen.getByText(/4\.0\.0 .* update available/u)).toBeTruthy();
+    expect(screen.getByText(/5\.0\.0 .* current/u)).toBeTruthy();
+    expect(
+      screen.getByText(/5\.0\.0-beta\.1 .* update available/u),
+    ).toBeTruthy();
     expect(screen.getByText(/3\.9\.2 .* upgrade required/u)).toBeTruthy();
     expect(screen.queryByText("Controls")).toBeNull();
   });
@@ -268,6 +280,42 @@ describe("DevicesPanel", () => {
     );
   });
 
+  it("confirms whether an available firmware update runs now or waits for outputs off", async () => {
+    let requestBody: object | null = null;
+    server.use(
+      http.post(
+        "http://localhost/api/devices/device-stale/firmware-update",
+        async ({ request }) => {
+          requestBody = (await request.json()) as object;
+          return HttpResponse.json({
+            changed: false,
+            revision: 8,
+            event: null,
+          });
+        },
+      ),
+    );
+    const refresh = vi.fn();
+    const user = userEvent.setup();
+    renderPanel(refresh);
+
+    await user.click(screen.getByRole("button", { name: "Update to 5.0.0" }));
+    expect(
+      screen.getByRole("dialog", { name: "Update Stale rack?" }),
+    ).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: /Update when outputs are off/u }),
+    );
+
+    await waitFor(() =>
+      expect(requestBody).toEqual({
+        expectedRevision: 8,
+        mode: "when_off",
+      }),
+    );
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
   it("requires edited configuration to be saved or discarded before backdrop close", async () => {
     const user = userEvent.setup();
     renderPanel();
@@ -319,6 +367,7 @@ function renderPanel(
       createElement(DevicesPanel, {
         devices: renderedDevices,
         mappingProfiles: [profile],
+        firmware,
         expectedRevision: 8,
         refresh,
       }),
@@ -356,7 +405,11 @@ function device({
       pwmResolutionBits: 8,
       firmwareVersion,
       scheduleHash: "1234",
+      outputsOff: true,
+      outputs: [],
+      ota: null,
     },
+    firmwareUpdate: null,
     status,
     lastSeenAt: status === "offline" ? null : timestamp,
     lastError,

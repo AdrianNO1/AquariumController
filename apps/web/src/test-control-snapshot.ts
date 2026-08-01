@@ -197,9 +197,13 @@ function device(
     desired: { name: id, pwmFrequencyHz: 1_000, pwmResolutionBits: 8 },
     reported: {
       ...reportedConfiguration,
-      firmwareVersion: "4.0.0",
+      firmwareVersion: "5.0.0",
       scheduleHash: "1234",
+      outputsOff: true,
+      outputs: [],
+      ota: null,
     },
+    firmwareUpdate: null,
     status,
     lastSeenAt: status === "offline" ? null : timestamp,
     lastError:

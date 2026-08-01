@@ -103,10 +103,13 @@ describe("control area routes", () => {
         device.id === "device-main"
           ? {
               ...device,
-              reported: { ...device.reported, firmwareVersion: "4.1.0" },
+              reported: {
+                ...device.reported,
+                firmwareVersion: "5.0.0-beta.1",
+              },
               lastError: {
                 code: "firmware_outdated",
-                message: "Firmware 4.1.0 can be updated",
+                message: "Firmware 5.0.0 can be updated",
               },
             }
           : {
@@ -179,7 +182,7 @@ describe("control area routes", () => {
       screen.getByRole("button", { name: "Close mapping profiles" }),
     );
 
-    expect(screen.getByText(/4\.1\.0.*update available/u)).toBeTruthy();
+    expect(screen.getByText(/5\.0\.0-beta\.1.*update available/u)).toBeTruthy();
     expect(screen.getByText(/3\.2\.0.*upgrade required/u)).toBeTruthy();
     const mainDevice = screen.getByRole("article", {
       name: "ESP32 device device-main",

@@ -12,11 +12,62 @@ import {
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "4.1.0";
+export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.0";
+export const MINIMUM_PULL_OTA_FIRMWARE_VERSION = "5.0.0";
+export const ESP_FIRMWARE_ARTIFACT = {
+  version: CURRENT_ESP_FIRMWARE_VERSION,
+  fileName: "ESP32Code-5.0.0.bin",
+  sizeBytes: 1_174_576,
+  sha256: "f655a0a1bc067c24ebec9578c2f638d1221bfbf6d3c4679785dd6e8851bfbee5",
+} as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
   return version === CURRENT_ESP_FIRMWARE_VERSION;
 }
+
+export function supportsPullOta(version: string): boolean {
+  const [major] = version.split(".");
+  return /^\d+$/u.test(major ?? "") && Number(major) >= 5;
+}
+
+export const espOtaStatusSchema = z.strictObject({
+  status: z.enum([
+    "idle",
+    "accepted",
+    "downloading",
+    "verifying",
+    "rebooting",
+    "probation",
+    "succeeded",
+    "failed",
+    "rolling_back",
+  ]),
+  targetVersion: z.string().max(31),
+  progress: z.number().int().min(0).max(100),
+  error: z.string().min(1).max(96).optional(),
+});
+
+export const espOutputStateSchema = z
+  .array(
+    z.tuple([
+      z.number().int().min(0).max(63),
+      z.number().int().min(0).max(100),
+    ]),
+  )
+  .max(64)
+  .superRefine((outputs, context) => {
+    const pins = new Set<number>();
+    for (const [index, [pin]] of outputs.entries()) {
+      if (pins.has(pin)) {
+        context.addIssue({
+          code: "custom",
+          path: [index, 0],
+          message: "Reported output pins must be unique",
+        });
+      }
+      pins.add(pin);
+    }
+  });
 
 export const espFirmwareDiagnosticSchema = z.strictObject({
   code: z.string().regex(/^[a-z0-9_]{1,48}$/u),
@@ -36,6 +87,9 @@ export const espAnnouncementSchema = z
     status: z.string().min(1),
     version: z.string().min(1),
     scheduleHash: z.string().regex(/^\d+$/),
+    outputsOff: z.boolean().optional(),
+    outputs: espOutputStateSchema.optional(),
+    ota: espOtaStatusSchema.optional(),
     lastError: espFirmwareDiagnosticSchema.optional(),
   })
   .superRefine((announcement, context) => {

@@ -1,6 +1,8 @@
 #include <WiFi.h>
-#include <ArduinoOTA.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
 #include <PubSubClient.h>
+#include <Update.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
 #include <map>
@@ -16,7 +18,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>  // for strlcpy, strlen
-#include <esp_system.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <mbedtls/sha256.h>
 #include "firmware-config.h"
 
 unsigned long lastReconnectAttempt = 0;
@@ -30,9 +34,8 @@ const int MAX_PIN = 63;
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "4.2.1";
+const char* VERSION = "5.0.0";
 const bool TEST = false;
-const uint16_t OTA_PORT = 3232;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
 const time_t MIN_VALID_UNIX_TIME = 1735689600; // January 1, 2025 UTC
@@ -44,6 +47,12 @@ const unsigned long PERSISTENCE_RETRY_INTERVAL_MS =
     TIME_CHECKPOINT_INTERVAL_MS;
 const unsigned long DIAGNOSTIC_PERSIST_INTERVAL_MS = 60UL * 60UL * 1000UL;
 const unsigned long DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS = 60UL * 1000UL;
+const unsigned long TELEMETRY_ANNOUNCEMENT_INTERVAL_MS = 1000;
+const unsigned long OTA_PROBATION_TIMEOUT_MS = 5UL * 60UL * 1000UL;
+const unsigned int OTA_MAX_PROBATION_BOOTS = 3;
+const size_t OTA_DOWNLOAD_BUFFER_SIZE = 4096;
+const size_t OTA_MINIMUM_IMAGE_SIZE = 100000;
+const size_t OTA_MAXIMUM_IMAGE_SIZE = 1900000;
 
 std::atomic<bool> ntpTimeAvailable(false);
 bool ntpSyncInProgress = false;
@@ -84,7 +93,7 @@ ChunkedMessage currentMessage;
 #define ID_MAX_LENGTH 8
 #define SCHEDULE_UPDATE_INTERVAL 1000  // Check schedule every 1000ms
 #define SCHEDULE_ATTACH_RETRY_INTERVAL 60000
-#define MQTT_PACKET_BUFFER_SIZE 512
+#define MQTT_PACKET_BUFFER_SIZE 2048
 #define MAX_REQUEST_ID_LENGTH 64
 #define MAX_LAST_ERROR_CODE_LENGTH 48
 #define MAX_LAST_ERROR_MESSAGE_LENGTH 160
@@ -101,10 +110,36 @@ std::map<int, PinState> pinStates;
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-bool otaStarted = false;
-String otaHostname;
-char otaPassword[17] = {0};
-unsigned int lastOtaProgressPercent = 101;
+String configuredWifiSsid;
+String configuredWifiPassword;
+String configuredMqttServer;
+uint16_t configuredMqttPort = 0;
+String configuredMqttUsername;
+String configuredMqttPassword;
+String configuredNtpServer;
+
+struct OtaRequest {
+    String targetVersion;
+    String url;
+    String sha256;
+    size_t size;
+    bool pending;
+};
+
+struct OtaReport {
+    String status;
+    String targetVersion;
+    String error;
+    unsigned int progress;
+};
+
+OtaRequest otaRequest = {"", "", "", 0, false};
+OtaReport otaReport = {"idle", "", "", 0};
+bool otaProbationActive = false;
+unsigned long otaProbationStartedAt = 0;
+esp_partition_subtype_t otaPreviousPartitionSubtype = ESP_PARTITION_SUBTYPE_APP_OTA_MIN;
+bool telemetryAnnouncementPending = false;
+unsigned long telemetryAnnouncementAttemptAt = 0;
 
 bool attachedPins[64] = {false};
 int lastPinValues[64] = {0};
@@ -756,6 +791,7 @@ bool reattachConfiguredPins(
         for (auto& channel : activeChannels) {
             channel.currentValue = -1;
         }
+        queueOutputAnnouncement();
         return true;
     }
 
@@ -830,6 +866,7 @@ bool reattachConfiguredPins(
         }
         Serial.println("LEDC rollback failed for pin " + String(pin) + "; output forced off");
     }
+    queueOutputAnnouncement();
     return false;
 }
 
@@ -1041,6 +1078,7 @@ void rollbackNewSchedulePins(bool newlyAttached[MAX_PIN + 1]) {
         digitalWrite(pin, LOW);
         lastPinValues[pin] = 0;
     }
+    queueOutputAnnouncement();
 }
 
 ScheduleAttachResult attachMissingSchedulePins(
@@ -1099,6 +1137,7 @@ ScheduleAttachResult attachMissingSchedulePins(
         lastPinValues[pin] = 0;
         resolveLastErrorForPin("pin_write_failed", pin);
     }
+    queueOutputAnnouncement();
     return result;
 }
 
@@ -1166,6 +1205,7 @@ void turnOffRemovedSchedulePins(JsonArray& nextChannels) {
             "Replacement schedule removed and detached pin " + String(pin)
         );
     }
+    queueOutputAnnouncement();
 }
 
 bool parseSyncTime(const String& value, unsigned long& parsed) {
@@ -1238,6 +1278,7 @@ void processSchedule(const String& schedule) {
     }
     lastScheduleAttachRetry = millis();
     reportScheduleAttachResult(attachResult);
+    queueOutputAnnouncement();
 }
 
 void retryMissingSchedulePins() {
@@ -1285,6 +1326,7 @@ void retryMissingSchedulePins() {
         Serial.println("Recovered scheduled pin " + String(pin));
     }
     reportScheduleAttachResult(result);
+    queueOutputAnnouncement();
 }
 
 const int MAX_RETRIES = 3;
@@ -1309,120 +1351,427 @@ bool publishWithRetry(const char* topic, const char* payload) {
 }
 
 
-void stopOta() {
-	if (!otaStarted) {
-		return;
-	}
+bool loadNetworkConfiguration() {
+    Preferences preferences;
+    if (!preferences.begin("aquarium", false)) {
+        Serial.println("Could not open persistent network configuration");
+        return false;
+    }
 
-	ArduinoOTA.end();
-	otaStarted = false;
-	Serial.println("OTA service stopped");
+    if (!preferences.getBool("cfgReady", false)) {
+        Serial.println("Migrating compile-time network settings to persistent storage");
+        bool stored =
+            preferences.putString("wifiSsid", ssid) > 0 &&
+            preferences.putString("wifiPass", password) > 0 &&
+            preferences.putString("mqttHost", mqtt_server) > 0 &&
+            preferences.putUShort("mqttPort", mqtt_port) > 0 &&
+            preferences.putString("ntpHost", ntp_server) > 0;
+        if (strlen(mqtt_username) > 0) {
+            stored = preferences.putString("mqttUser", mqtt_username) > 0 && stored;
+        } else {
+            preferences.remove("mqttUser");
+        }
+        if (strlen(mqtt_password) > 0) {
+            stored = preferences.putString("mqttPass", mqtt_password) > 0 && stored;
+        } else {
+            preferences.remove("mqttPass");
+        }
+        if (!stored || preferences.putBool("cfgReady", true) == 0) {
+            preferences.end();
+            Serial.println("Could not persist the bootstrap network configuration");
+            return false;
+        }
+    }
+
+    configuredWifiSsid = preferences.getString("wifiSsid", "");
+    configuredWifiPassword = preferences.getString("wifiPass", "");
+    configuredMqttServer = preferences.getString("mqttHost", "");
+    configuredMqttPort = preferences.getUShort("mqttPort", 0);
+    configuredMqttUsername = preferences.getString("mqttUser", "");
+    configuredMqttPassword = preferences.getString("mqttPass", "");
+    configuredNtpServer = preferences.getString("ntpHost", "");
+    preferences.end();
+
+    const bool credentialsPaired =
+        configuredMqttUsername.isEmpty() == configuredMqttPassword.isEmpty();
+    if (
+        configuredWifiSsid.isEmpty() || configuredMqttServer.isEmpty() ||
+        configuredMqttPort == 0 || configuredNtpServer.isEmpty() ||
+        !credentialsPaired
+    ) {
+        Serial.println("Persistent network configuration is incomplete");
+        return false;
+    }
+    Serial.println("Persistent network configuration loaded");
+    return true;
 }
 
-void startOtaIfConnected() {
-	if (otaStarted || WiFi.status() != WL_CONNECTED) {
-		return;
-	}
-
-	if (otaPassword[0] == '\0') {
-		const uint32_t firstPasswordHalf = esp_random();
-		const uint32_t secondPasswordHalf = esp_random();
-		snprintf(
-			otaPassword,
-			sizeof(otaPassword),
-			"%08lX%08lX",
-			static_cast<unsigned long>(firstPasswordHalf),
-			static_cast<unsigned long>(secondPasswordHalf)
-		);
-		otaHostname = "aquarium-" + deviceId;
-	}
-
-	ArduinoOTA.setPort(OTA_PORT);
-	ArduinoOTA.setHostname(otaHostname.c_str());
-	ArduinoOTA.setPassword(otaPassword);
-	ArduinoOTA.setRebootOnSuccess(true);
-	ArduinoOTA.onStart([]() {
-		lastOtaProgressPercent = 101;
-		const char* target = ArduinoOTA.getCommand() == U_FLASH
-			? "firmware"
-			: "filesystem";
-		Serial.println();
-		Serial.println("OTA update starting");
-		Serial.println("OTA target: " + String(target));
-	});
-	ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-		const unsigned int percent = total == 0
-			? 0
-			: static_cast<unsigned int>(
-				(static_cast<uint64_t>(progress) * 100U) / total
-			);
-		if (
-			percent == 100 ||
-			lastOtaProgressPercent == 101 ||
-			percent / 10 != lastOtaProgressPercent / 10
-		) {
-			lastOtaProgressPercent = percent;
-			Serial.printf("OTA progress: %u%%\n", percent);
-		}
-	});
-	ArduinoOTA.onEnd([]() {
-		Serial.println("OTA update complete; rebooting");
-		Serial.flush();
-	});
-	ArduinoOTA.onError([](ota_error_t error) {
-		Serial.printf("OTA error %u: ", static_cast<unsigned int>(error));
-		switch (error) {
-			case OTA_AUTH_ERROR:
-				Serial.println("authentication failed");
-				break;
-			case OTA_BEGIN_ERROR:
-				Serial.println("update initialization failed");
-				break;
-			case OTA_CONNECT_ERROR:
-				Serial.println("uploader connection failed");
-				break;
-			case OTA_RECEIVE_ERROR:
-				Serial.println("firmware receive failed");
-				break;
-			case OTA_END_ERROR:
-				Serial.println("firmware validation failed");
-				break;
-			default:
-				Serial.println("unknown failure");
-				break;
-		}
-	});
-	ArduinoOTA.begin();
-	otaStarted = true;
-
-	Serial.println();
-	Serial.println("=== OTA CONNECTION INFO ===");
-	Serial.println("Firmware: " + String(VERSION));
-	Serial.println("Device ID: " + deviceId);
-	Serial.println("Hostname: " + otaHostname);
-	Serial.println("IP address: " + WiFi.localIP().toString());
-	Serial.println("Port: " + String(OTA_PORT));
-	Serial.println("Password: " + String(otaPassword));
-	Serial.println("=== END OTA CONNECTION INFO ===");
-	Serial.println();
+void clearOtaMarker(Preferences& preferences) {
+    preferences.remove("otaPending");
+    preferences.remove("otaTarget");
+    preferences.remove("otaPrev");
+    preferences.remove("otaBoots");
 }
 
-void serviceOta() {
-	if (WiFi.status() != WL_CONNECTED) {
-		stopOta();
-		return;
-	}
+bool selectPreviousOtaPartition() {
+    const esp_partition_t* previous = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP,
+        otaPreviousPartitionSubtype,
+        nullptr
+    );
+    if (previous == nullptr) {
+        Serial.println("Previous OTA partition was not found");
+        return false;
+    }
+    esp_err_t result = esp_ota_set_boot_partition(previous);
+    if (result != ESP_OK) {
+        Serial.println("Could not select the previous OTA partition: " + String(result));
+        return false;
+    }
+    return true;
+}
 
-	startOtaIfConnected();
-	ArduinoOTA.handle();
+void rollbackOta(const String& reason) {
+    Serial.println("OTA probation failed: " + reason);
+    otaReport.status = "rolling_back";
+    otaReport.error = reason;
+    otaReport.progress = 0;
+    if (client.connected()) {
+        announcePresence();
+    }
+    if (!selectPreviousOtaPartition()) {
+        otaReport.status = "failed";
+        otaReport.error = "rollback_partition_unavailable";
+        telemetryAnnouncementPending = true;
+        return;
+    }
+    Serial.println("Rebooting into the previous firmware partition");
+    Serial.flush();
+    delay(250);
+    ESP.restart();
+}
+
+void initializeOtaBootState() {
+    Preferences preferences;
+    if (!preferences.begin("aquarium", false)) {
+        Serial.println("Could not inspect OTA probation state");
+        return;
+    }
+    if (!preferences.getBool("otaPending", false)) {
+        preferences.end();
+        return;
+    }
+
+    const String targetVersion = preferences.getString("otaTarget", "");
+    otaPreviousPartitionSubtype = static_cast<esp_partition_subtype_t>(
+        preferences.getUChar(
+            "otaPrev",
+            static_cast<uint8_t>(ESP_PARTITION_SUBTYPE_APP_OTA_MIN)
+        )
+    );
+    if (targetVersion != VERSION) {
+        clearOtaMarker(preferences);
+        preferences.end();
+        otaReport = {"failed", targetVersion, "rolled_back", 0};
+        telemetryAnnouncementPending = true;
+        Serial.println("Previous firmware restored after OTA probation failure");
+        return;
+    }
+
+    unsigned int probationBoots = preferences.getUInt("otaBoots", 0) + 1;
+    preferences.putUInt("otaBoots", probationBoots);
+    preferences.end();
+    otaReport = {"probation", targetVersion, "", 100};
+    otaProbationActive = true;
+    otaProbationStartedAt = millis();
+    telemetryAnnouncementPending = true;
+    Serial.println(
+        "OTA probation boot " + String(probationBoots) + " of " +
+        String(OTA_MAX_PROBATION_BOOTS)
+    );
+    if (probationBoots >= OTA_MAX_PROBATION_BOOTS) {
+        rollbackOta("boot_loop_detected");
+    }
+}
+
+void confirmOtaProbation() {
+    if (!otaProbationActive) {
+        return;
+    }
+    esp_ota_mark_app_valid_cancel_rollback();
+    Preferences preferences;
+    if (preferences.begin("aquarium", false)) {
+        clearOtaMarker(preferences);
+        preferences.end();
+    }
+    otaProbationActive = false;
+    otaReport.status = "succeeded";
+    otaReport.error = "";
+    otaReport.progress = 100;
+    telemetryAnnouncementPending = true;
+    Serial.println("OTA probation succeeded after MQTT announcement");
+}
+
+void serviceOtaProbation() {
+    if (
+        otaProbationActive &&
+        millis() - otaProbationStartedAt >= OTA_PROBATION_TIMEOUT_MS
+    ) {
+        rollbackOta("mqtt_confirmation_timeout");
+    }
+}
+
+bool isValidOtaToken(const String& value, size_t maximumLength) {
+    if (value.isEmpty() || value.length() > maximumLength) {
+        return false;
+    }
+    for (size_t index = 0; index < value.length(); index++) {
+        const char character = value[index];
+        if (!(
+            (character >= 'a' && character <= 'z') ||
+            (character >= 'A' && character <= 'Z') ||
+            (character >= '0' && character <= '9') ||
+            character == '.' || character == '-' || character == '_'
+        )) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isValidSha256(const String& value) {
+    if (value.length() != 64) {
+        return false;
+    }
+    for (size_t index = 0; index < value.length(); index++) {
+        const char character = value[index];
+        if (!(
+            (character >= '0' && character <= '9') ||
+            (character >= 'a' && character <= 'f') ||
+            (character >= 'A' && character <= 'F')
+        )) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool parseOtaArguments(const String& args, OtaRequest& request) {
+    int firstSpace = args.indexOf(' ');
+    int secondSpace = args.indexOf(' ', firstSpace + 1);
+    int thirdSpace = args.indexOf(' ', secondSpace + 1);
+    if (firstSpace <= 0 || secondSpace <= firstSpace || thirdSpace <= secondSpace) {
+        return false;
+    }
+    request.targetVersion = args.substring(0, firstSpace);
+    const String sizeText = args.substring(firstSpace + 1, secondSpace);
+    request.sha256 = args.substring(secondSpace + 1, thirdSpace);
+    request.url = args.substring(thirdSpace + 1);
+    int parsedSize = 0;
+    if (
+        !isValidOtaToken(request.targetVersion, 31) ||
+        !parseBoundedDecimal(sizeText, OTA_MAXIMUM_IMAGE_SIZE, parsedSize) ||
+        parsedSize < static_cast<int>(OTA_MINIMUM_IMAGE_SIZE) ||
+        !isValidSha256(request.sha256) || request.url.length() > 240 ||
+        !request.url.startsWith("http://") || request.url.indexOf(' ') >= 0
+    ) {
+        return false;
+    }
+    request.size = static_cast<size_t>(parsedSize);
+    request.pending = true;
+    return true;
+}
+
+void setOtaFailure(const String& error) {
+    otaRequest.pending = false;
+    otaReport.status = "failed";
+    otaReport.targetVersion = otaRequest.targetVersion;
+    otaReport.error = error;
+    otaReport.progress = 0;
+    telemetryAnnouncementPending = true;
+    Serial.println("OTA update failed: " + error);
+    if (client.connected()) {
+        announcePresence();
+    }
+}
+
+String sha256Hex(const unsigned char digest[32]) {
+    const char hex[] = "0123456789abcdef";
+    String result;
+    result.reserve(64);
+    for (size_t index = 0; index < 32; index++) {
+        result += hex[digest[index] >> 4];
+        result += hex[digest[index] & 0x0f];
+    }
+    return result;
+}
+
+void publishOtaProgress(const String& status, unsigned int progress) {
+    otaReport.status = status;
+    otaReport.targetVersion = otaRequest.targetVersion;
+    otaReport.error = "";
+    otaReport.progress = progress;
+    telemetryAnnouncementPending = true;
+    if (client.connected()) {
+        announcePresence();
+        client.loop();
+    }
+}
+
+void performOtaUpdate() {
+    otaRequest.pending = false;
+    publishOtaProgress("downloading", 0);
+
+    HTTPClient http;
+    if (!http.begin(otaRequest.url)) {
+        setOtaFailure("http_initialization_failed");
+        return;
+    }
+    http.setConnectTimeout(10000);
+    http.setTimeout(10000);
+    const int statusCode = http.GET();
+    if (statusCode != HTTP_CODE_OK) {
+        http.end();
+        setOtaFailure("http_status_" + String(statusCode));
+        return;
+    }
+    const int contentLength = http.getSize();
+    if (contentLength != static_cast<int>(otaRequest.size)) {
+        http.end();
+        setOtaFailure("image_size_mismatch");
+        return;
+    }
+    if (!Update.begin(otaRequest.size, U_FLASH)) {
+        http.end();
+        setOtaFailure("update_begin_failed_" + String(Update.getError()));
+        return;
+    }
+
+    mbedtls_sha256_context shaContext;
+    mbedtls_sha256_init(&shaContext);
+    if (mbedtls_sha256_starts(&shaContext, 0) != 0) {
+        Update.abort();
+        http.end();
+        mbedtls_sha256_free(&shaContext);
+        setOtaFailure("sha256_initialization_failed");
+        return;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buffer[OTA_DOWNLOAD_BUFFER_SIZE];
+    size_t received = 0;
+    unsigned int publishedProgress = 0;
+    unsigned long lastDataAt = millis();
+    bool downloadFailed = false;
+    while (received < otaRequest.size) {
+        size_t available = stream->available();
+        if (available == 0) {
+            if (!http.connected() || millis() - lastDataAt >= 10000) {
+                downloadFailed = true;
+                break;
+            }
+            client.loop();
+            delay(5);
+            continue;
+        }
+        size_t toRead = min(
+            available,
+            min(sizeof(buffer), otaRequest.size - received)
+        );
+        int read = stream->readBytes(buffer, toRead);
+        if (read <= 0) {
+            downloadFailed = true;
+            break;
+        }
+        lastDataAt = millis();
+        if (mbedtls_sha256_update(&shaContext, buffer, read) != 0) {
+            downloadFailed = true;
+            break;
+        }
+        if (Update.write(buffer, read) != static_cast<size_t>(read)) {
+            downloadFailed = true;
+            break;
+        }
+        received += static_cast<size_t>(read);
+        unsigned int progress = static_cast<unsigned int>(
+            (static_cast<uint64_t>(received) * 100U) / otaRequest.size
+        );
+        if (progress == 100 || progress / 10 > publishedProgress / 10) {
+            publishedProgress = progress;
+            Serial.printf("OTA download progress: %u%%\n", progress);
+            publishOtaProgress("downloading", progress);
+        }
+    }
+
+    unsigned char digest[32];
+    const int finishResult = mbedtls_sha256_finish(&shaContext, digest);
+    mbedtls_sha256_free(&shaContext);
+    http.end();
+    if (downloadFailed || received != otaRequest.size || finishResult != 0) {
+        Update.abort();
+        setOtaFailure("firmware_download_failed");
+        return;
+    }
+
+    publishOtaProgress("verifying", 100);
+    const String actualSha256 = sha256Hex(digest);
+    if (!actualSha256.equalsIgnoreCase(otaRequest.sha256)) {
+        Update.abort();
+        setOtaFailure("sha256_mismatch");
+        return;
+    }
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (running == nullptr) {
+        Update.abort();
+        setOtaFailure("running_partition_unavailable");
+        return;
+    }
+    Preferences preferences;
+    if (!preferences.begin("aquarium", false)) {
+        setOtaFailure("probation_marker_unavailable");
+        return;
+    }
+    bool markerStored =
+        preferences.putString("otaTarget", otaRequest.targetVersion) > 0 &&
+        preferences.putUChar("otaPrev", static_cast<uint8_t>(running->subtype)) > 0 &&
+        preferences.putUInt("otaBoots", 0) > 0 &&
+        preferences.putBool("otaPending", true) > 0;
+    preferences.end();
+    if (!markerStored) {
+        Update.abort();
+        setOtaFailure("probation_marker_write_failed");
+        return;
+    }
+    if (!Update.end(true)) {
+        Preferences cleanup;
+        if (cleanup.begin("aquarium", false)) {
+            clearOtaMarker(cleanup);
+            cleanup.end();
+        }
+        setOtaFailure("update_finalize_failed_" + String(Update.getError()));
+        return;
+    }
+
+    publishOtaProgress("rebooting", 100);
+    Serial.println("OTA image installed; rebooting into probation");
+    Serial.flush();
+    delay(250);
+    ESP.restart();
+}
+
+void serviceFirmwareUpdate() {
+    if (otaRequest.pending && !otaProbationActive) {
+        performOtaUpdate();
+    }
+    serviceOtaProbation();
 }
 
 void setup_wifi() {
 	Serial.println("Connecting to WiFi...");
 	Serial.print("SSID: ");
-	Serial.println(ssid);
+	Serial.println(configuredWifiSsid);
 	
-	WiFi.begin(ssid, password);
+	WiFi.begin(configuredWifiSsid.c_str(), configuredWifiPassword.c_str());
 
 	WiFi.setSleep(false);           // Arduino-style call
     esp_wifi_set_ps(WIFI_PS_NONE);  // IDF-style call, does the same
@@ -1453,6 +1802,30 @@ unsigned long calculateHash(const String& str) {
     return hash;
 }
 
+void queueOutputAnnouncement() {
+	telemetryAnnouncementPending = true;
+}
+
+unsigned int outputPercentage(int pwmValue) {
+	const int maximumDuty = (1 << resolution) - 1;
+	if (maximumDuty <= 0 || pwmValue <= 0) {
+		return 0;
+	}
+	return static_cast<unsigned int>(
+		(static_cast<uint64_t>(pwmValue) * 100U + maximumDuty / 2) /
+		maximumDuty
+	);
+}
+
+bool allOutputsAreOff() {
+	for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+		if (attachedPins[pin] && lastPinValues[pin] != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 String buildPresenceMessage() {
 	JsonDocument doc;
 	doc["name"] = deviceName;
@@ -1461,6 +1834,23 @@ String buildPresenceMessage() {
 	doc["id"] = deviceId;
 	doc["status"] = "online";
   	doc["version"] = VERSION;
+	doc["outputsOff"] = allOutputsAreOff();
+	JsonArray outputs = doc["outputs"].to<JsonArray>();
+	for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+		if (!attachedPins[pin]) {
+			continue;
+		}
+		JsonArray output = outputs.add<JsonArray>();
+		output.add(pin);
+		output.add(outputPercentage(lastPinValues[pin]));
+	}
+	JsonObject ota = doc["ota"].to<JsonObject>();
+	ota["status"] = otaReport.status;
+	ota["targetVersion"] = otaReport.targetVersion;
+	ota["progress"] = otaReport.progress;
+	if (!otaReport.error.isEmpty()) {
+		ota["error"] = otaReport.error;
+	}
 	if (lastError.code.length() > 0) {
 		JsonObject error = doc["lastError"].to<JsonObject>();
 		error["code"] = lastError.code;
@@ -1498,7 +1888,7 @@ String buildPresenceMessage() {
 	return message;
 }
 
-void announcePresence() {
+bool announcePresence() {
 	String message = buildPresenceMessage();
 	bool published = TEST
 		? publishWithRetry("test/aquarium/announce", message.c_str())
@@ -1506,25 +1896,33 @@ void announcePresence() {
 	if (published) {
 		diagnosticAnnouncementPending = false;
 		diagnosticAnnouncementAttempted = false;
+		telemetryAnnouncementPending = false;
 		Serial.println("Announced presence: " + message);
 	}
+	return published;
 }
 
 void serviceDiagnosticAnnouncement() {
-	if (!diagnosticAnnouncementPending || !client.connected()) {
+	if (
+		(!diagnosticAnnouncementPending && !telemetryAnnouncementPending) ||
+		!client.connected()
+	) {
 		return;
 	}
 	unsigned long currentMillis = millis();
-	if (
-		diagnosticAnnouncementAttempted &&
-		currentMillis - diagnosticAnnouncementAttemptAt <
-			DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS
-	) {
+	const unsigned long retryInterval = telemetryAnnouncementPending
+		? TELEMETRY_ANNOUNCEMENT_INTERVAL_MS
+		: DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS;
+	const unsigned long priorAttempt = telemetryAnnouncementPending
+		? telemetryAnnouncementAttemptAt
+		: diagnosticAnnouncementAttemptAt;
+	if (priorAttempt > 0 && currentMillis - priorAttempt < retryInterval) {
 		return;
 	}
 
 	diagnosticAnnouncementAttempted = true;
 	diagnosticAnnouncementAttemptAt = currentMillis;
+	telemetryAnnouncementAttemptAt = currentMillis;
 	String message = buildPresenceMessage();
 	const char* topic = TEST
 		? "test/aquarium/announce"
@@ -1532,6 +1930,7 @@ void serviceDiagnosticAnnouncement() {
 	if (client.publish(topic, message.c_str())) {
 		diagnosticAnnouncementPending = false;
 		diagnosticAnnouncementAttempted = false;
+		telemetryAnnouncementPending = false;
 		Serial.println("Published queued diagnostic announcement: " + message);
 	} else {
 		Serial.println("Queued diagnostic announcement publish failed; retry remains pending");
@@ -1645,6 +2044,7 @@ String handleCommand(String command, String args) {
 						response = "E: LEDC write failed";
 					} else {
 					lastPinValues[pin] = pwmValue;
+					queueOutputAnnouncement();
 					
 					// Update pin state with overwrite information
 					if (overwrite == 1) {
@@ -1666,6 +2066,25 @@ String handleCommand(String command, String args) {
 		}
 	}
 	
+	else if (command == "ota") {
+		OtaRequest parsedRequest = {"", "", "", 0, false};
+		if (!parseOtaArguments(args, parsedRequest)) {
+			response = "E: Invalid OTA request";
+		} else if (otaProbationActive || otaRequest.pending) {
+			response = "E: OTA busy";
+		} else if (parsedRequest.targetVersion == VERSION) {
+			response = "E: Firmware already current";
+		} else {
+			otaRequest = parsedRequest;
+			otaReport = {"accepted", otaRequest.targetVersion, "", 0};
+			telemetryAnnouncementPending = true;
+			Serial.println(
+				"Accepted OTA update to firmware " + otaRequest.targetVersion
+			);
+			response = "ota_accepted";
+		}
+	}
+
 	else if (command == "p" || command == "e") {
 		if (command == "p") {
 			response = "o";
@@ -1868,7 +2287,7 @@ void beginNtpSync() {
     ntpSyncEverAttempted = true;
 
     Serial.println("Starting asynchronous NTP synchronization");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntp_server);
+    configTime(gmtOffset_sec, daylightOffset_sec, configuredNtpServer.c_str());
 }
 
 void serviceTimeSynchronization() {
@@ -2078,6 +2497,7 @@ int getCurrentMinuteOfDay() {
 void setup() {
 	Serial.begin(115200);
 	Serial.println("\nStarting up...");
+	initializeOtaBootState();
 	
 	// Initialize EEPROM with proper partition verification
 	if (!EEPROM.begin(EEPROM_SIZE)) {
@@ -2100,7 +2520,7 @@ void setup() {
         recordLastError(
             "mqtt_buffer_allocation_failed",
             "error",
-            "Could not allocate the 512-byte MQTT packet buffer"
+            "Could not allocate the 2048-byte MQTT packet buffer"
         );
     } else {
         resolveLastError("mqtt_buffer_allocation_failed");
@@ -2112,18 +2532,17 @@ void setup() {
 		processSchedule(savedSchedule);
 	}
 	
-	if ((strlen(mqtt_username) == 0) != (strlen(mqtt_password) == 0)) {
-		Serial.println("MQTT username and password must either both be set or both be empty");
+	if (!loadNetworkConfiguration()) {
+		Serial.println("Network configuration is unavailable; stopping startup");
 		while (true) {
 			delay(1000);
 		}
 	}
 
 	setup_wifi();
-	startOtaIfConnected();
 	initializeTime();
 	
-	client.setServer(mqtt_server, mqtt_port);
+	client.setServer(configuredMqttServer.c_str(), configuredMqttPort);
 	client.setKeepAlive(15);
 	client.setCallback(callback);
 	
@@ -2135,7 +2554,6 @@ void loop() {
 		WiFi.reconnect();
 		delay(200);
 	}
-	serviceOta();
 
 	serviceTimeSynchronization();
 
@@ -2150,15 +2568,19 @@ void loop() {
 			clientId += String(random(0xffff), HEX);
 			
 			Serial.println("Attempting MQTT connection with client ID: " + clientId);
-			Serial.println("Broker: " + String(mqtt_server));
+			Serial.println("Broker: " + configuredMqttServer);
 			
 			// Print WiFi status
 			Serial.println("WiFi status - SSID: " + String(WiFi.SSID()) + 
 										" Signal strength: " + String(WiFi.RSSI()) + "dBm");
 			
-			const bool mqttConnected = strlen(mqtt_username) == 0
+			const bool mqttConnected = configuredMqttUsername.isEmpty()
 				? client.connect(clientId.c_str())
-				: client.connect(clientId.c_str(), mqtt_username, mqtt_password);
+				: client.connect(
+					clientId.c_str(),
+					configuredMqttUsername.c_str(),
+					configuredMqttPassword.c_str()
+				);
 			if (mqttConnected) {
 				Serial.println("MQTT connected");
 				if (TEST) {
@@ -2166,7 +2588,9 @@ void loop() {
 				} else {
 					client.subscribe("aquarium/command");
 				}
-				announcePresence();
+				if (announcePresence()) {
+					confirmOtaProbation();
+				}
 			} else {
 				Serial.print("MQTT connection failed, rc=");
 				Serial.println(client.state());
@@ -2256,6 +2680,7 @@ void loop() {
 									break;
 								}
 								lastPinValues[pin] = pwmValue;
+								queueOutputAnnouncement();
 								resolveLastErrorForPin("pin_write_failed", pin);
 								auto scheduledPinState = pinStates.find(pin);
 								if (scheduledPinState != pinStates.end()) {
@@ -2283,6 +2708,7 @@ void loop() {
  
 	client.loop();
 	serviceDiagnosticAnnouncement();
+	serviceFirmwareUpdate();
 
     // ------------------------------------------------------------------
     // Daily maintenance: restart WiFi and MQTT at 04:00 to reclaim memory
@@ -2303,7 +2729,6 @@ void loop() {
             }
 
             // Reconnect WiFi
-			stopOta();
             WiFi.disconnect(true);
             delay(500);
             setup_wifi();
@@ -2356,6 +2781,7 @@ void checkOverwriteExpiries() {
                 resolveLastErrorForPin("pin_write_failed", pin);
                 state.isOverwritten = false;
                 lastPinValues[pin] = 0;
+				queueOutputAnnouncement();
 				state.lastValue = 0;
 			} else {
                 state.isOverwritten = false;

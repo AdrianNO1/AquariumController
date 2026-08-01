@@ -424,6 +424,7 @@ function LoadedControlArea({
 
       <DevicesPanel
         devices={model.devices}
+        firmware={model.firmware}
         mappingProfiles={model.mappingProfiles}
         expectedRevision={model.revision}
         refresh={refresh}

@@ -17,6 +17,7 @@ import {
   parseStoredStateOutboxEnvelope,
   STATE_CHANNEL_COLOR_MIGRATION_NAME,
   STATE_CONTROL_AREA_MIGRATION_NAME,
+  STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
   STATE_INITIAL_MIGRATION_NAME,
   STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
   STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
@@ -89,6 +90,7 @@ describe("runtime migrations", () => {
       STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
       STATE_CHANNEL_COLOR_MIGRATION_NAME,
       STATE_CONTROL_AREA_MIGRATION_NAME,
+      STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
     ]);
     expect(eventsResults.map((result) => result.migrationName)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -103,6 +105,7 @@ describe("runtime migrations", () => {
       STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
       STATE_CHANNEL_COLOR_MIGRATION_NAME,
       STATE_CONTROL_AREA_MIGRATION_NAME,
+      STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
     ]);
     expect(await readMigrationNames(events)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -119,13 +122,17 @@ describe("runtime migrations", () => {
         'scheduler_guards',
         'alert_condition_states',
         'notification_deliveries',
-        'operator_concurrency'
+        'operator_concurrency',
+        'firmware_rollout_policy',
+        'firmware_update_requests'
       )
       ORDER BY name
     `.execute(state);
     expect(tableResult.rows).toEqual([
       { name: "alert_condition_states", strict: 1 },
       { name: "device_schedule_artifacts", strict: 1 },
+      { name: "firmware_rollout_policy", strict: 1 },
+      { name: "firmware_update_requests", strict: 1 },
       { name: "notification_deliveries", strict: 1 },
       { name: "operator_concurrency", strict: 1 },
       { name: "scheduler_guards", strict: 1 },
@@ -136,6 +143,19 @@ describe("runtime migrations", () => {
         .selectAll()
         .executeTakeFirstOrThrow(),
     ).resolves.toEqual({ singleton_key: 1, last_operator_revision: 0 });
+    await expect(
+      state
+        .selectFrom("firmware_rollout_policy")
+        .selectAll()
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({
+      singleton_key: 1,
+      target_version: "5.0.0",
+      mode: "when_off",
+      enabled: 0,
+      requested_at_ms: 0,
+      updated_at_ms: 0,
+    });
 
     const eventIndexes = await readSchemaObjectNames(events, "index");
     for (const name of [
@@ -192,6 +212,11 @@ describe("runtime migrations", () => {
       },
       {
         migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -264,6 +289,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -288,6 +318,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
         direction: "Down",
@@ -396,6 +431,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -417,6 +457,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_RUNTIME_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
         direction: "Down",
@@ -584,6 +629,11 @@ describe("runtime migrations", () => {
       EVENTS_INITIAL_MIGRATION_NAME,
     );
     expect(stateDown).toMatchObject([
+      {
+        migrationName: STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CONTROL_AREA_MIGRATION_NAME,
         direction: "Down",
