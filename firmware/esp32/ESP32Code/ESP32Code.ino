@@ -45,12 +45,13 @@ const int ALLOWED_ANALOG_INPUT_PINS[] = {32, 33, 34, 35, 36, 39};
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "5.0.5";
+const char* VERSION = "5.0.6";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
 const time_t MIN_VALID_UNIX_TIME = 1735689600; // January 1, 2025 UTC
 const unsigned long NTP_SYNC_TIMEOUT_MS = 15000;
+const unsigned long WIFI_FAILURE_DIAGNOSTIC_MS = 15000;
 const unsigned long NTP_RETRY_INTERVAL_MS = 60000;
 const unsigned long NTP_RESYNC_INTERVAL_MS = 6UL * 60UL * 60UL * 1000UL;
 const unsigned long TIME_CHECKPOINT_INTERVAL_MS = 60UL * 60UL * 1000UL;
@@ -133,6 +134,10 @@ unsigned long otaProbationStartedAt = 0;
 esp_partition_subtype_t otaPreviousPartitionSubtype = ESP_PARTITION_SUBTYPE_APP_OTA_MIN;
 bool telemetryAnnouncementPending = false;
 unsigned long telemetryAnnouncementAttemptAt = 0;
+bool eepromAvailable = false;
+bool networkConfigurationAvailable = false;
+bool mqttBufferAvailable = false;
+unsigned long wifiDisconnectedAt = 0;
 
 bool attachedPins[64] = {false};
 int lastPinValues[64] = {0};
@@ -174,6 +179,7 @@ TimeInfo timeInfo;
 // an explicit MQTT sync replaces it with fresher time when either is reachable.
 bool scheduleTimeAvailableThisBoot = false;
 bool scheduleTimeGateNoticePrinted = false;
+bool invalidTimeCheckpointAtBoot = false;
 
 struct FirmwareLastError {
     String code;
@@ -213,13 +219,13 @@ unsigned long timeCheckpointSuccessAt = 0;
 // EEPROM addresses for time management
 #define TIME_INFO_ADDR 200    // Start address for TimeInfo struct
 
-// Generate random ID if none exists
+// Derive a stable hardware ID if EEPROM has no stored identity.
 String generateId() {
-	const char charset[] = "0123456789ABCDEF";
-	String id = "";
-	for (int i = 0; i < 8; i++) {
-		id += charset[random(16)];
-	}
+	char idBuffer[9];
+	const uint32_t chipIdentifier =
+		static_cast<uint32_t>(ESP.getEfuseMac() & 0xffffffffULL);
+	snprintf(idBuffer, sizeof(idBuffer), "%08lX", static_cast<unsigned long>(chipIdentifier));
+	String id(idBuffer);
 	Serial.println("Generated new ID: " + id);
 	return id;
 }
@@ -250,6 +256,10 @@ String readFromEEPROM(int startAddr, int maximumLength) {
 
 // Write string to EEPROM
 bool writeToEEPROM(int startAddr, String data, int maximumLength) {
+    if (!eepromAvailable) {
+        Serial.println("EEPROM is unavailable");
+        return false;
+    }
     int endAddr = startAddr + maximumLength;
     if (startAddr < 0 || maximumLength < 1 || endAddr >= EEPROM_SIZE) {
         Serial.println("Invalid EEPROM write range");
@@ -512,6 +522,16 @@ void recordLastError(
         Serial.println("Refusing to record an invalid firmware diagnostic");
         return;
     }
+    if (
+        lastError.active && lastError.severity == "error" &&
+        severity == "warning"
+    ) {
+        Serial.println(
+            "Firmware warning " + code +
+            " suppressed while error " + lastError.code + " is active"
+        );
+        return;
+    }
     if (lastError.code == code && lastError.severity == severity &&
         lastError.message == boundedMessage && lastError.active) {
         return;
@@ -646,6 +666,11 @@ String loadSchedule() {
     File file = SPIFFS.open(schedulePath, "r");
     if (!file) {
         Serial.println("Failed to open schedule file for reading");
+        recordLastError(
+            "schedule_restore_failed",
+            "error",
+            "Could not open the persisted schedule"
+        );
         return "";
     }
     
@@ -657,6 +682,11 @@ String loadSchedule() {
     if (file.available()) {
         file.close();
         Serial.println("Saved schedule exceeds the firmware buffer; refusing restore");
+        recordLastError(
+            "schedule_restore_failed",
+            "error",
+            "Persisted schedule exceeds the firmware buffer"
+        );
         return "";
     }
     
@@ -1261,6 +1291,11 @@ bool parseSyncTime(const String& value, unsigned long& parsed) {
 void processSchedule(const String& schedule) {
     if (schedule.length() >= sizeof(currentSchedule)) {
         Serial.println("Schedule exceeds the firmware buffer; keeping outputs safely unchanged");
+        recordLastError(
+            "schedule_restore_failed",
+            "error",
+            "Persisted schedule exceeds the firmware buffer"
+        );
         return;
     }
     JsonDocument doc;
@@ -1268,12 +1303,24 @@ void processSchedule(const String& schedule) {
     
     if (error) {
         Serial.println("Failed to parse schedule");
+        recordLastError(
+            "schedule_restore_failed",
+            "error",
+            "Persisted schedule JSON is invalid"
+        );
         return;
     }
     if (!schedulePinsAreValid(doc)) {
         Serial.println("Schedule structure is invalid; keeping outputs safely unchanged");
+        recordLastError(
+            "schedule_restore_failed",
+            "error",
+            "Persisted schedule structure is invalid"
+        );
         return;
     }
+
+    resolveLastError("schedule_restore_failed");
 
     JsonArray channels = doc["c"].as<JsonArray>();
     bool newlyAttached[MAX_PIN + 1] = {false};
@@ -1525,12 +1572,28 @@ void confirmOtaProbation() {
     if (!otaProbationActive) {
         return;
     }
-    esp_ota_mark_app_valid_cancel_rollback();
-    Preferences preferences;
-    if (preferences.begin("aquarium", false)) {
-        clearOtaMarker(preferences);
-        preferences.end();
+    const esp_err_t confirmationResult =
+        esp_ota_mark_app_valid_cancel_rollback();
+    if (confirmationResult != ESP_OK) {
+        otaReport.status = "failed";
+        otaReport.error =
+            "confirmation_failed_" + String(confirmationResult);
+        otaReport.progress = 100;
+        telemetryAnnouncementPending = true;
+        Serial.println("Could not confirm the OTA probation image");
+        return;
     }
+    Preferences preferences;
+    if (!preferences.begin("aquarium", false)) {
+        otaReport.status = "failed";
+        otaReport.error = "probation_marker_unavailable";
+        otaReport.progress = 100;
+        telemetryAnnouncementPending = true;
+        Serial.println("Could not clear the OTA probation marker");
+        return;
+    }
+    clearOtaMarker(preferences);
+    preferences.end();
     otaProbationActive = false;
     otaReport.status = "succeeded";
     otaReport.error = "";
@@ -1811,12 +1874,21 @@ void setup_wifi() {
 	}
 	
 	if (WiFi.status() == WL_CONNECTED) {
+		wifiDisconnectedAt = 0;
 		Serial.println("\nWiFi connected");
 		Serial.println("IP address: " + WiFi.localIP().toString());
 		Serial.println("Signal strength (RSSI): " + String(WiFi.RSSI()) + " dBm");
 	} else {
 		Serial.println("\nWiFi connection failed!");
 		Serial.println("WiFi status: " + String(WiFi.status()));
+		if (wifiDisconnectedAt == 0) {
+			wifiDisconnectedAt = millis();
+		}
+		recordLastError(
+			"wifi_connection_failed",
+			"warning",
+			"WiFi connection could not be established"
+		);
 	}
 }
 
@@ -1928,6 +2000,28 @@ void finishPublishedAnnouncement() {
 	) {
 		spiffsReformattedThisBoot = false;
 		resolveLastError("spiffs_reformatted");
+	} else if (
+		lastError.active &&
+		(
+			lastError.code == "wifi_connection_failed" ||
+			lastError.code == "mqtt_connection_failed" ||
+			lastError.code == "mqtt_subscription_failed" ||
+			lastError.code == "mqtt_response_publish_failed" ||
+			(
+				lastError.code == "network_configuration_unavailable" &&
+				networkConfigurationAvailable
+			) ||
+			(
+				lastError.code == "eeprom_initialization_failed" &&
+				eepromAvailable
+			) ||
+			(
+				lastError.code == "mqtt_buffer_allocation_failed" &&
+				mqttBufferAvailable
+			)
+		)
+	) {
+		resolveLastError(lastError.code);
 	}
 }
 
@@ -2198,6 +2292,7 @@ String handleCommand(String command, String args) {
 			timeInfo.timeInitialized = true;
 			scheduleTimeAvailableThisBoot = true;
 			queueTimeCheckpoint(true);
+			resolveLastError("time_checkpoint_invalid");
 			
 			struct tm timeinfo;
 			localtime_r(&syncTime, &timeinfo);
@@ -2327,6 +2422,8 @@ void serviceTimeSynchronization() {
             timeInfo.timeInitialized = true;
             scheduleTimeAvailableThisBoot = true;
             queueTimeCheckpoint(true);
+            resolveLastError("ntp_sync_failed");
+            resolveLastError("time_checkpoint_invalid");
 
             ntpSyncInProgress = false;
             ntpSyncHasCompleted = true;
@@ -2339,6 +2436,11 @@ void serviceTimeSynchronization() {
             Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
         } else {
             Serial.println("NTP reported an invalid time; waiting for the next retry");
+            recordLastError(
+                "ntp_sync_failed",
+                "warning",
+                "NTP returned an invalid schedule clock"
+            );
         }
     }
 
@@ -2353,6 +2455,11 @@ void serviceTimeSynchronization() {
         if (currentMillis - ntpSyncStartedAt >= NTP_SYNC_TIMEOUT_MS) {
             ntpSyncInProgress = false;
             Serial.println("NTP synchronization timed out; control remains online and retry is scheduled");
+            recordLastError(
+                "ntp_sync_failed",
+                "warning",
+                "NTP schedule-clock synchronization timed out"
+            );
         }
         return;
     }
@@ -2388,7 +2495,7 @@ bool isUsableUnixTime(time_t value) {
 }
 
 bool persistTimeCheckpoint() {
-    if (!timeInfo.timeInitialized) {
+    if (!timeInfo.timeInitialized || !eepromAvailable) {
         return false;
     }
     time_t currentTime = getCurrentTime();
@@ -2402,8 +2509,14 @@ bool persistTimeCheckpoint() {
     EEPROM.put(TIME_INFO_ADDR, timeInfo);
     if (!EEPROM.commit()) {
         Serial.println("Time checkpoint EEPROM commit failed");
+        recordLastError(
+            "time_checkpoint_failed",
+            "warning",
+            "Could not persist the current schedule clock"
+        );
         return false;
     }
+    resolveLastError("time_checkpoint_failed");
     Serial.println("Time checkpoint saved to EEPROM");
     return true;
 }
@@ -2476,6 +2589,7 @@ void loadTimeInfo() {
     if (!isUsableUnixTime(timeInfo.lastSavedTime)) {
         Serial.println("Invalid time data in EEPROM, resetting");
         timeInfo.timeInitialized = false;
+        invalidTimeCheckpointAtBoot = true;
         timeCheckpointSuccessAt = millis();
         return;
     }
@@ -2570,13 +2684,19 @@ void setup() {
 	Serial.println("\nStarting up...");
 	initializeOtaBootState();
 	
-	// Initialize EEPROM with proper partition verification
-	if (!EEPROM.begin(EEPROM_SIZE)) {
+	// Continue local control with conservative defaults if EEPROM is unavailable.
+	eepromAvailable = EEPROM.begin(EEPROM_SIZE);
+	if (eepromAvailable) {
+		initializeEEPROM();
+		loadTimeInfo();
+	} else {
 		Serial.println("Failed to initialize EEPROM!");
+		deviceName = DEFAULT_DEVICE_NAME;
+		deviceId = generateId();
+		freq = DEFAULT_FREQ;
+		resolution = DEFAULT_RES;
+		timeInfo = {0, 0, 0, false};
 	}
-	
-	initializeEEPROM();
-	loadTimeInfo(); // Load time info from EEPROM
 
     spiffsAvailable = mountSpiffsWithRecovery();
     if (!spiffsAvailable) {
@@ -2597,16 +2717,32 @@ void setup() {
             );
         }
     }
+	if (
+		invalidTimeCheckpointAtBoot &&
+		(lastError.code.length() == 0 || !lastError.active)
+	) {
+		recordLastError(
+			"time_checkpoint_invalid",
+			"warning",
+			"Persisted schedule clock was invalid and has been discarded"
+		);
+	}
+	if (!eepromAvailable) {
+		recordLastError(
+			"eeprom_initialization_failed",
+			"error",
+			"EEPROM could not be initialized; persistent configuration and clock storage are unavailable"
+		);
+	}
 
-    if (!client.setBufferSize(MQTT_PACKET_BUFFER_SIZE)) {
+    mqttBufferAvailable = client.setBufferSize(MQTT_PACKET_BUFFER_SIZE);
+    if (!mqttBufferAvailable) {
         Serial.println("Failed to allocate the required MQTT packet buffer");
         recordLastError(
             "mqtt_buffer_allocation_failed",
             "error",
             "Could not allocate the 6144-byte MQTT packet buffer"
         );
-    } else {
-        resolveLastError("mqtt_buffer_allocation_failed");
     }
 
   	// Load saved schedule if it exists
@@ -2615,17 +2751,19 @@ void setup() {
 		processSchedule(savedSchedule);
 	}
 	
-	if (!loadNetworkConfiguration()) {
-		Serial.println("Network configuration is unavailable; stopping startup");
-		while (true) {
-			delay(1000);
-		}
+	networkConfigurationAvailable = loadNetworkConfiguration();
+	if (!networkConfigurationAvailable) {
+		Serial.println("Network configuration is unavailable; continuing local control without networking");
+		recordLastError(
+			"network_configuration_unavailable",
+			"error",
+			"Persistent network configuration is unavailable; local schedules remain active"
+		);
+	} else {
+		setup_wifi();
+		initializeTime();
+		client.setServer(configuredMqttServer.c_str(), configuredMqttPort);
 	}
-
-	setup_wifi();
-	initializeTime();
-	
-	client.setServer(configuredMqttServer.c_str(), configuredMqttPort);
 	client.setKeepAlive(15);
 	client.setCallback(callback);
 	
@@ -2633,22 +2771,40 @@ void setup() {
 }
 
 void loop() {
-	if (WiFi.status() != WL_CONNECTED) {
+	if (networkConfigurationAvailable && WiFi.status() != WL_CONNECTED) {
+		if (wifiDisconnectedAt == 0) {
+			wifiDisconnectedAt = millis();
+		} else if (
+			millis() - wifiDisconnectedAt >= WIFI_FAILURE_DIAGNOSTIC_MS
+		) {
+			recordLastError(
+				"wifi_connection_failed",
+				"warning",
+				"WiFi connection was lost and could not be restored"
+			);
+		}
 		WiFi.reconnect();
 		delay(200);
+	} else if (WiFi.status() == WL_CONNECTED) {
+		wifiDisconnectedAt = 0;
 	}
 
-	serviceTimeSynchronization();
+	if (networkConfigurationAvailable) {
+		serviceTimeSynchronization();
+	}
 
-	if (!client.connected()) {
+	if (
+		networkConfigurationAvailable &&
+		mqttBufferAvailable &&
+		WiFi.status() == WL_CONNECTED &&
+		!client.connected()
+	) {
 		unsigned long currentMillis = millis();
 		if (currentMillis - lastReconnectAttempt >= reconnectInterval) {
 			lastReconnectAttempt = currentMillis;
 			Serial.println("MQTT disconnected, attempting to reconnect...");
 			
-			// Generate a random client ID
-			String clientId = "ESP32Client-";
-			clientId += String(random(0xffff), HEX);
+			String clientId = "Aquarium-" + deviceId;
 			
 			Serial.println("Attempting MQTT connection with client ID: " + clientId);
 			Serial.println("Broker: " + configuredMqttServer);
@@ -2666,12 +2822,17 @@ void loop() {
 				);
 			if (mqttConnected) {
 				Serial.println("MQTT connected");
-				if (TEST) {
-					client.subscribe("test/aquarium/command");
-				} else {
-					client.subscribe("aquarium/command");
-				}
-				if (announcePresence()) {
+				const bool subscribed = TEST
+					? client.subscribe("test/aquarium/command")
+					: client.subscribe("aquarium/command");
+				if (!subscribed) {
+					recordLastError(
+						"mqtt_subscription_failed",
+						"error",
+						"Could not subscribe to the aquarium command topic"
+					);
+					client.disconnect();
+				} else if (announcePresence()) {
 					confirmOtaProbation();
 				}
 			} else {
@@ -2690,6 +2851,11 @@ void loop() {
 					case 4: Serial.println("MQTT_CONNECT_BAD_CREDENTIALS"); break;
 					case 5: Serial.println("MQTT_CONNECT_UNAUTHORIZED"); break;
 				}
+				recordLastError(
+					"mqtt_connection_failed",
+					"warning",
+					"MQTT broker connection failed with state " + String(client.state())
+				);
 				Serial.println("Retrying in 5 seconds");
 			}
 		}
@@ -2719,7 +2885,17 @@ void loop() {
 			if (timeInfo.timeInitialized && scheduleTimeAvailableThisBoot) {
 				// Get current minute of day (0-1439). Midnight is a valid zero.
 				int currentMinute = getCurrentMinuteOfDay();
-				deserializeJson(globalDoc, currentSchedule);
+				DeserializationError scheduleError =
+					deserializeJson(globalDoc, currentSchedule);
+				if (scheduleError) {
+					recordLastError(
+						"schedule_runtime_parse_failed",
+						"error",
+						"Active schedule JSON could not be parsed"
+					);
+					return;
+				}
+				resolveLastError("schedule_runtime_parse_failed");
 				
 				// Process each channel in the array
 				JsonArray channels = globalDoc["c"].as<JsonArray>();
@@ -2794,7 +2970,11 @@ void loop() {
     // Daily maintenance: restart WiFi and MQTT at 04:00 to reclaim memory
     // ------------------------------------------------------------------
     static unsigned long lastMaintenanceCheck = 0;
-    if (timeInfo.timeInitialized && millis() - lastMaintenanceCheck > 60000) {
+    if (
+        networkConfigurationAvailable &&
+        timeInfo.timeInitialized &&
+        millis() - lastMaintenanceCheck > 60000
+    ) {
         lastMaintenanceCheck = millis();
         time_t now = getCurrentTime();
         struct tm timeinfo;
@@ -2922,14 +3102,21 @@ void processCompleteMessage(String message) {
     if (commands.size() > 0) {
         String responseStr;
         serializeJson(responses, responseStr);
-        if (TEST) {
-            Serial.println("Publishing response to test/aquarium/response: " + responseStr);
-            publishWithRetry("test/aquarium/response", responseStr.c_str());
-            Serial.println("Published to test/aquarium/response");
+        const char* responseTopic = TEST
+            ? "test/aquarium/response"
+            : "aquarium/response";
+        Serial.println(
+            "Publishing response to " + String(responseTopic) + ": " +
+            responseStr
+        );
+        if (publishWithRetry(responseTopic, responseStr.c_str())) {
+            Serial.println("Published to " + String(responseTopic));
         } else {
-            Serial.println("Publishing response to aquarium/response: " + responseStr);
-            publishWithRetry("aquarium/response", responseStr.c_str());
-            Serial.println("Published to aquarium/response");
+            recordLastError(
+                "mqtt_response_publish_failed",
+                "warning",
+                "MQTT command response could not be published"
+            );
         }
     }
 }

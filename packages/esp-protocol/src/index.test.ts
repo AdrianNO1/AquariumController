@@ -23,6 +23,7 @@ import {
   isSupportedEspFirmwareVersion,
   isSupportedEsp32PwmConfiguration,
   isCurrentEspFirmwareVersion,
+  parseEspErrorResponse,
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   supportsPullOta,
 } from "./index.js";
@@ -60,6 +61,19 @@ describe("legacy ESP protocol", () => {
     expect(source).toContain("const unsigned char maximumRepairFailures = 2;");
     expect(source).not.toContain('message == "clear"');
     expect(source).not.toContain("clearEEPROM");
+    expect(source).toContain(
+      "networkConfigurationAvailable = loadNetworkConfiguration();",
+    );
+    expect(source).toContain(
+      '"Persistent network configuration is unavailable; local schedules remain active"',
+    );
+    expect(source).toContain("const bool subscribed = TEST");
+    expect(source).toContain("esp_ota_mark_app_valid_cancel_rollback();");
+    expect(source).toContain("const esp_err_t confirmationResult");
+    expect(source).toContain('String clientId = "Aquarium-" + deviceId;');
+    expect(source).not.toMatch(
+      /if \(!loadNetworkConfiguration\(\)\)[\s\S]{0,200}while \(true\)/u,
+    );
   });
 
   it("keeps pull-OTA metadata synchronized with the bundled binary", () => {
@@ -173,6 +187,16 @@ describe("legacy ESP protocol", () => {
         responses: [{ index: 0, response: "o" }],
       }).success,
     ).toBe(false);
+  });
+
+  it("distinguishes bounded firmware errors from malformed responses", () => {
+    expect(parseEspErrorResponse("E: LEDC write failed")).toBe(
+      "LEDC write failed",
+    );
+    expect(parseEspErrorResponse("unexpected")).toBeNull();
+    expect(parseEspErrorResponse("E: ")).toBeNull();
+    expect(parseEspErrorResponse(`E: ${"x".repeat(161)}`)).toBeNull();
+    expect(parseEspErrorResponse("E: invalid\nresponse")).toBeNull();
   });
 
   it("rejects payloads above the firmware MQTT command limit by UTF-8 byte length", () => {

@@ -11,15 +11,15 @@ import {
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.5";
+export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.6";
 export const MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION = "5.0.0";
 export const MINIMUM_PULL_OTA_FIRMWARE_VERSION =
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION;
 export const ESP_FIRMWARE_ARTIFACT = {
   version: CURRENT_ESP_FIRMWARE_VERSION,
-  fileName: "ESP32Code-5.0.5.bin",
-  sizeBytes: 1_174_448,
-  sha256: "7f7f59d8bd4acb12d38c8836d390f49f1f3f3f7a0e644c6aee33b46d040476ea",
+  fileName: "ESP32Code-5.0.6.bin",
+  sizeBytes: 1_179_280,
+  sha256: "9ea2181245aa2d200583982260014895968910bcd22f4269a634a171706320d8",
 } as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
@@ -133,6 +133,29 @@ export const espCommandResponseSchema = z.strictObject({
 });
 
 export type EspCommandResponse = z.infer<typeof espCommandResponseSchema>;
+
+const ESP_ERROR_RESPONSE_PREFIX = "E: ";
+const ESP_ERROR_RESPONSE_MAX_MESSAGE_LENGTH = 160;
+
+/** Returns a validated firmware-reported command error, excluding wire faults. */
+export function parseEspErrorResponse(response: string): string | null {
+  if (!response.startsWith(ESP_ERROR_RESPONSE_PREFIX)) {
+    return null;
+  }
+  const message = response.slice(ESP_ERROR_RESPONSE_PREFIX.length);
+  if (
+    message.length < 1 ||
+    message.length > ESP_ERROR_RESPONSE_MAX_MESSAGE_LENGTH ||
+    message.trim() !== message ||
+    Array.from(message).some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 0x20 || code > 0x7e;
+    })
+  ) {
+    return null;
+  }
+  return message;
+}
 
 export interface EspTopicSet {
   readonly command: string;

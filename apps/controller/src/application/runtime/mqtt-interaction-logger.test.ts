@@ -103,7 +103,7 @@ describe("MQTT interaction volume policy", () => {
         command: "A1 p",
         targetId: "A1",
         status: "failed",
-        response: "bad",
+        response: "E: Invalid command",
         expectedResponse: { kind: "exact", value: "o" },
       },
       atMs: 800,
@@ -129,11 +129,20 @@ describe("MQTT interaction volume policy", () => {
       },
       {
         kind: "mqtt.command-response",
-        severity: "warning",
+        severity: "error",
         outcome: "failed",
-        retention_class: "audit",
+        retention_class: "critical",
       },
     ]);
+    const reportedError = await database
+      .selectFrom("interactions")
+      .select("payload_json")
+      .where("kind", "=", "mqtt.command-response")
+      .executeTakeFirstOrThrow();
+    expect(JSON.parse(reportedError.payload_json ?? "null")).toMatchObject({
+      deviceReportedError: "Invalid command",
+      payloadStored: false,
+    });
     await expect(
       database
         .selectFrom("interactions")
@@ -211,5 +220,64 @@ describe("MQTT interaction volume policy", () => {
         return JSON.parse(payloadJson);
       }),
     ).toMatchObject([{ active: true }, { active: false }]);
+  });
+
+  it("durably logs terminal OTA telemetry without duplicating announcements", async () => {
+    const database = await openEventsDatabase({ filename: ":memory:" });
+    openDatabases.push(database);
+    const logger = new MqttInteractionLogger(
+      new InteractionRepository(database),
+      createEspTopicSet(true),
+    );
+    const announcement = {
+      id: "A1",
+      name: "One",
+      freq: 5_000,
+      res: 8,
+      status: "online",
+      version: "5.0.6",
+      scheduleHash: "0",
+      ota: {
+        status: "failed" as const,
+        targetVersion: "5.0.6",
+        progress: 0,
+        error: "sha256_mismatch",
+      },
+    };
+
+    await Promise.all(
+      [100, 200].map((receivedAtMs) =>
+        logger.logAnnouncement({
+          announcement,
+          receivedAtMs,
+          payloadBytes: 120,
+        }),
+      ),
+    );
+
+    const rows = await database
+      .selectFrom("interactions")
+      .select([
+        "kind",
+        "severity",
+        "outcome",
+        "retention_class",
+        "payload_json",
+      ])
+      .where("kind", "=", "mqtt.device-ota-status")
+      .execute();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: "mqtt.device-ota-status",
+      severity: "error",
+      outcome: "failed",
+      retention_class: "critical",
+    });
+    expect(JSON.parse(rows[0]?.payload_json ?? "null")).toEqual({
+      status: "failed",
+      targetVersion: "5.0.6",
+      progress: 0,
+      error: "sha256_mismatch",
+    });
   });
 });

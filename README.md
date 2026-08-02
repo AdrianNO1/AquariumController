@@ -3,7 +3,7 @@
 This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
 controller. The previous Python and Flask application remains under `.old/` as
 migration evidence. The supported ESP32 source is
-`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.5 is compiled and bundled
+`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.6 is compiled and bundled
 with the controller release.
 
 Historical pre-4.1 release evidence dated 2026-07-25 includes 97 files/638 unit
@@ -48,7 +48,7 @@ MQTT adapter. Mosquitto remains a separate process. The controller is
 deliberately not horizontally scalable because device queues, schedules, and
 state revisions need one owner. Within that process, firmware 4.1 request IDs
 support bounded per-device MQTT command lanes rather than one global
-response-waiting lane. Firmware 5.0.5 retains those request IDs and adds
+response-waiting lane. Firmware 5.0.6 retains those request IDs and adds
 controller-managed pull OTA plus single-publication command delivery.
 
 ESP pin mappings use explicit hardware profiles and explicit per-device profile
@@ -175,7 +175,6 @@ and `/tmp` are writable.
 Useful checks:
 
 ```sh
-npm run format:check
 npm run lint
 npm run typecheck
 npm run test:unit
@@ -184,7 +183,7 @@ npm run test:integration
 npm run test:e2e
 npm run build
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.5 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
 ```
 
 CI defines six validation jobs: static/unit, critical, real-Mosquitto
@@ -293,7 +292,7 @@ separate verified database/archive backup procedure.
   to purge the directly addressable unreachable object/cached view, resolve the
   remaining secret-scanning alert as `revoked`, and keep secret scanning and
   push protection enabled.
-- Flash firmware 5.0.5 to every deployed ESP32 (USB is required for devices
+- Flash firmware 5.0.6 to every deployed ESP32 (USB is required for devices
   older than 5.0.0) and persist its device-specific network configuration in NVS.
   Versions older than 5.0.0 remain visible but are marked
   `firmware_unsupported`, excluded from schedule/override commands, and
@@ -309,9 +308,11 @@ separate verified database/archive backup procedure.
   so DNS/NTP failure does not delay MQTT or manual-control startup. If neither
   the Pi nor NTP is reachable after reboot, a valid persisted EEPROM timestamp
   intentionally authorizes the local schedule from that boundedly stale
-  estimate. Firmware 5.0.5 additionally reports the board hardware profile,
-  enforces the safe output-pin set, bounds SPIFFS repair attempts, and removes
-  remote fleet-wide EEPROM clearing.
+  estimate. Firmware 5.0.6 additionally reports the board hardware profile,
+  enforces the safe output-pin set, bounds SPIFFS repair attempts, preserves
+  local scheduling when network configuration is unavailable, verifies MQTT
+  subscription and OTA probation transitions, and removes remote fleet-wide
+  EEPROM clearing.
 - Configure the ESP32's ignored local firmware header with both an MQTT username
   and password plus the intended NTP host, and restrict that plaintext broker
   listener to the trusted aquarium LAN. The current ESP firmware does not

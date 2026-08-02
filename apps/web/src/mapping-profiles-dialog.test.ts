@@ -117,7 +117,7 @@ const assignedDevice: Device = {
     name: "Main rack ESP",
     pwmFrequencyHz: 5_000,
     pwmResolutionBits: 8,
-    firmwareVersion: "5.0.5",
+    firmwareVersion: "5.0.6",
     scheduleHash: "0",
     outputsOff: true,
     outputs: [],

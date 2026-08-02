@@ -1,4 +1,8 @@
-import { utf8ByteLength, type EspTopicSet } from "@aquarium/esp-protocol";
+import {
+  parseEspErrorResponse,
+  utf8ByteLength,
+  type EspTopicSet,
+} from "@aquarium/esp-protocol";
 
 import type {
   LegacyAnnouncementEvent,
@@ -32,48 +36,96 @@ export class MqttInteractionLogger {
   readonly #repository: InteractionRepository;
   readonly #topics: EspTopicSet;
   readonly #lastDiagnosticSignatures = new Map<string, string>();
+  readonly #lastOtaSignatures = new Map<string, string>();
+  #announcementTail: Promise<void> = Promise.resolve();
 
   constructor(repository: InteractionRepository, topics: EspTopicSet) {
     this.#repository = repository;
     this.#topics = topics;
   }
 
-  async logAnnouncement(event: LegacyAnnouncementEvent): Promise<void> {
+  logAnnouncement(event: LegacyAnnouncementEvent): Promise<void> {
+    const run = this.#announcementTail.then(
+      () => this.#logAnnouncement(event),
+      () => this.#logAnnouncement(event),
+    );
+    this.#announcementTail = run.catch(() => undefined);
+    return run;
+  }
+
+  async #logAnnouncement(event: LegacyAnnouncementEvent): Promise<void> {
     const diagnostic = event.announcement.lastError;
     if (diagnostic === undefined) {
       this.#lastDiagnosticSignatures.delete(event.announcement.id);
+    } else {
+      const signature = `${diagnostic.sequence}\0${diagnostic.code}\0${diagnostic.active}`;
+      if (
+        this.#lastDiagnosticSignatures.get(event.announcement.id) !== signature
+      ) {
+        await this.#repository.log({
+          occurredAtMs: event.receivedAtMs,
+          direction: "inbound",
+          kind: "mqtt.device-diagnostic",
+          severity: diagnostic.severity,
+          topic: this.#topics.announce,
+          deviceId: event.announcement.id,
+          outcome: diagnostic.active ? "failed" : "succeeded",
+          byteCount: event.payloadBytes,
+          retentionClass:
+            diagnostic.active && diagnostic.severity === "error"
+              ? "critical"
+              : "audit",
+          payload: {
+            code: diagnostic.code,
+            message: diagnostic.message,
+            sequence: diagnostic.sequence,
+            active: diagnostic.active,
+            recordedAtEpochSeconds: diagnostic.at,
+          },
+          payloadSchemaVersion: 1,
+        });
+        this.#lastDiagnosticSignatures.set(event.announcement.id, signature);
+      }
+    }
+
+    const ota = event.announcement.ota;
+    if (ota === undefined) {
+      this.#lastOtaSignatures.delete(event.announcement.id);
+      return;
+    }
+    const otaSignature = `${ota.status}\0${ota.targetVersion}\0${ota.progress}\0${ota.error ?? ""}`;
+    if (this.#lastOtaSignatures.get(event.announcement.id) === otaSignature) {
+      return;
+    }
+    this.#lastOtaSignatures.set(event.announcement.id, otaSignature);
+    if (!["failed", "rolling_back", "succeeded"].includes(ota.status)) {
       return;
     }
 
-    const signature = `${diagnostic.sequence}\0${diagnostic.code}\0${diagnostic.active}`;
-    if (
-      this.#lastDiagnosticSignatures.get(event.announcement.id) === signature
-    ) {
-      return;
+    const failed = ota.status === "failed" || ota.status === "rolling_back";
+    try {
+      await this.#repository.log({
+        occurredAtMs: event.receivedAtMs,
+        direction: "inbound",
+        kind: "mqtt.device-ota-status",
+        severity: failed ? "error" : "info",
+        topic: this.#topics.announce,
+        deviceId: event.announcement.id,
+        outcome: failed ? "failed" : "succeeded",
+        byteCount: event.payloadBytes,
+        retentionClass: failed ? "critical" : "audit",
+        payload: {
+          status: ota.status,
+          targetVersion: ota.targetVersion,
+          progress: ota.progress,
+          ...(ota.error === undefined ? {} : { error: ota.error }),
+        },
+        payloadSchemaVersion: 1,
+      });
+    } catch (error) {
+      this.#lastOtaSignatures.delete(event.announcement.id);
+      throw error;
     }
-    await this.#repository.log({
-      occurredAtMs: event.receivedAtMs,
-      direction: "inbound",
-      kind: "mqtt.device-diagnostic",
-      severity: diagnostic.severity,
-      topic: this.#topics.announce,
-      deviceId: event.announcement.id,
-      outcome: diagnostic.active ? "failed" : "succeeded",
-      byteCount: event.payloadBytes,
-      retentionClass:
-        diagnostic.active && diagnostic.severity === "error"
-          ? "critical"
-          : "audit",
-      payload: {
-        code: diagnostic.code,
-        message: diagnostic.message,
-        sequence: diagnostic.sequence,
-        active: diagnostic.active,
-        recordedAtEpochSeconds: diagnostic.at,
-      },
-      payloadSchemaVersion: 1,
-    });
-    this.#lastDiagnosticSignatures.set(event.announcement.id, signature);
   }
 
   async logTransportInteraction(
@@ -270,21 +322,36 @@ function commandOutcomeLogInput(
   topics: EspTopicSet,
 ): InteractionLogInput {
   if (outcome.status === "succeeded" || outcome.status === "failed") {
+    const deviceReportedError =
+      outcome.status === "failed"
+        ? parseEspErrorResponse(outcome.response)
+        : null;
     return {
       occurredAtMs,
       direction: "inbound",
       kind: "mqtt.command-response",
-      severity: outcome.status === "succeeded" ? "debug" : "warning",
+      severity:
+        outcome.status === "succeeded"
+          ? "debug"
+          : deviceReportedError === null
+            ? "warning"
+            : "error",
       topic: topics.response,
       deviceId: outcome.targetId,
       correlationId,
       outcome: outcome.status,
       byteCount: utf8ByteLength(outcome.response),
-      retentionClass: outcome.status === "succeeded" ? "raw" : "audit",
+      retentionClass:
+        outcome.status === "succeeded"
+          ? "raw"
+          : deviceReportedError === null
+            ? "audit"
+            : "critical",
       payload: {
         commandIndex: outcome.index,
         payloadStored: false,
         responseMatched: outcome.status === "succeeded",
+        ...(deviceReportedError === null ? {} : { deviceReportedError }),
       },
       payloadSchemaVersion: 1,
     };

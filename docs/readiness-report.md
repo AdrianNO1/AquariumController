@@ -2,7 +2,7 @@
 
 Assessment date: 2026-08-02
 
-Basis: the current firmware 5.0.5 and per-device-lane branch, plus the explicitly
+Basis: the current firmware 5.0.6 and per-device-lane branch, plus the explicitly
 historical pre-4.1 release evidence recorded below. The aquarium Raspberry Pi
 was not contacted or used for this assessment.
 
@@ -52,8 +52,8 @@ branch's protected validation and merge succeed.
 
 | Boundary                          | Evidence                                                                     | Remaining boundary                                                         |
 | --------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Current ESP32 firmware 5.0.5      | Pinned compiler build passes at 89% flash and 16% global RAM                 | Protected firmware job, fleet flash, and physical soak                     |
-| Current transport/schedulers      | Local verification passes 111 files/773 unit and 88 files/654 critical tests | Full protected branch validation                                           |
+| Current ESP32 firmware 5.0.6      | Pinned compiler build passes at 89% flash and 16% global RAM                 | Protected firmware job, fleet flash, and physical soak                     |
+| Current transport/schedulers      | Local verification passes 111 files/775 unit and 88 files/656 critical tests | Full protected branch validation                                           |
 | Historical host verification      | Unit 97 files/638 tests; critical 82 files/571 tests                         | Historical pre-4.1 result; not current-branch evidence                     |
 | Current real Mosquitto            | Local current-branch integration passes 5/5                                  | Current protected integration job; production broker and LAN not contacted |
 | Current production Chromium       | Local current-branch run passes 21/21 with zero retries                      | Current protected browser job; real Pi/browser clients                     |
@@ -76,12 +76,12 @@ without reducing importer behavior coverage.
 
 ### Current branch verification
 
-The current firmware 5.0.5/per-device-lane source passed local formatting, lint,
-all workspace and E2E typechecks, and production builds. Its current test
+The current firmware 5.0.6/per-device-lane source passed local lint, all
+workspace and E2E typechecks, and production builds. Its current test
 counts are:
 
-- unit: 111 files, 773 tests;
-- critical: 88 files, 654 tests;
+- unit: 111 files, 775 tests;
+- critical: 88 files, 656 tests;
 - real-Mosquitto integration: 5/5; and
 - production Playwright: 21/21 with retries disabled.
 
@@ -95,14 +95,14 @@ Before the fixture isolation change, the host `npm run verify` completed with:
 
 - unit: 95 files, 619 tests;
 - critical: 81 files, 558 tests; and
-- formatting, lint, workspace typechecks, and production builds green.
+- lint, workspace typechecks, and production builds green.
 
 After migration tests became hermetic, a clean Linux Docker verification
 installed from the lockfile and completed with:
 
 - unit: 95 files, 618 tests;
 - critical: 81 files, 557 tests; and
-- formatting, lint, workspace typechecks, and production builds green.
+- lint, workspace typechecks, and production builds green.
 
 That clean Docker result established the hermetic baseline before the final
 unknown-outcome reconciliation work.
@@ -115,7 +115,7 @@ current branch.
 
 ### Real broker integration
 
-The current firmware 5.0.5/per-device-lane real-wire suite passes 5/5 against
+The current firmware 5.0.6/per-device-lane real-wire suite passes 5/5 against
 digest-pinned Mosquitto
 `eclipse-mosquitto:2.0.22-openssl@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c`.
 It covers multi-device discovery, controller/broker/fake restarts, command and
@@ -145,10 +145,10 @@ includes:
 
 The harness rejects unexpected external requests and browser console errors.
 
-### ESP32 firmware 5.0.5 and historical 4.0 compile evidence
+### ESP32 firmware 5.0.6 and historical 4.0 compile evidence
 
 The supported sketch is `firmware/esp32/ESP32Code/ESP32Code.ino`, now version
-5.0.5. Its pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and
+5.0.6. Its pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and
 PubSubClient 2.8 build passes. The compiler image verifies the official Arduino
 CLI archive SHA-256 before extraction.
 
@@ -161,13 +161,16 @@ build. They are historical and are not claimed for 4.1:
 | Global RAM                        |    63,180 bytes |
 | Local-variable capacity remaining |   264,500 bytes |
 
-Firmware 5.0.5 retains rollover-safe override expiry, schedule restoration,
+Firmware 5.0.6 retains rollover-safe override expiry, schedule restoration,
 cache invalidation, and normalized 0-255 duty scaling. It adds correlated
 request IDs, wear-limited diagnostics, controller-owned overwrite behavior, and
-valid-EEPROM-time fallback when neither Pi nor NTP is reachable. Per-pin
-schedule activation is best effort and reports failures without stopping
-healthy pins. The controller supports firmware 5.0.0 and newer; older versions
-are marked `firmware_unsupported` and excluded from actuator work.
+valid-EEPROM-time fallback when neither Pi nor NTP is reachable. It continues
+local scheduling without network configuration, checks MQTT subscription and
+OTA probation results, and forwards recoverable Wi-Fi, MQTT, NTP, EEPROM,
+schedule-restore, and response-publication failures. Per-pin schedule activation
+is best effort and reports failures without stopping healthy pins. The
+controller supports firmware 5.0.0 and newer; older versions are marked
+`firmware_unsupported` and excluded from actuator work.
 
 Compilation and fake-firmware tests cannot prove physical pin assignments,
 power-loss behavior, Wi-Fi quality, NTP reachability, or deployed output.
@@ -288,7 +291,7 @@ exact digest before the Pi handoff starts.
 ### ESP32 fleet
 
 - Build the ignored local firmware configuration without committing secrets.
-- Flash every deployed board with 5.0.5 and confirm its reported version.
+- Flash every deployed board with 5.0.6 and confirm its reported version.
 - Bench-test override expiry, schedule restoration, resolution changes, time
   acquisition, Wi-Fi/broker loss, reboot, and power cycling before enabling
   aquarium actuators.

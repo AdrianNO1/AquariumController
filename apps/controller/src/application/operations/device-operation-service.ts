@@ -7,7 +7,7 @@ import {
   type MutationResult,
   type PatchDeviceConfigurationRequest,
 } from "@aquarium/contracts";
-import { utf8ByteLength } from "@aquarium/esp-protocol";
+import { parseEspErrorResponse, utf8ByteLength } from "@aquarium/esp-protocol";
 
 import {
   ConfigurationNotFoundError,
@@ -614,7 +614,10 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
           .recordResponseContact(outcome.targetId, wireResult.completedAtMs)
           .then(() => undefined),
       });
-    } else if (outcome.status === "failed") {
+    } else if (
+      outcome.status === "failed" &&
+      parseEspErrorResponse(outcome.response) === null
+    ) {
       postCompletionTasks.push({
         description: "device protocol fault persistence",
         promise: this.#deviceRegistry
@@ -793,13 +796,23 @@ function operationResultFromOutcome(
         wireOperationId,
         analogValue: outcome.analogValue,
       };
-    case "failed":
+    case "failed": {
+      const reportedError = parseEspErrorResponse(outcome.response);
+      if (reportedError !== null) {
+        return {
+          status: "failed",
+          wireOperationId,
+          code: "device_reported_error",
+          message: `Device reported: ${reportedError}`,
+        };
+      }
       return {
         status: "failed",
         wireOperationId,
         code: "unexpected_response",
         message: "Device response did not match the expected response",
       };
+    }
     case "outcome_unknown":
       return {
         status: "outcome_unknown",
