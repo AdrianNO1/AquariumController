@@ -94,9 +94,44 @@ packet buffer for MQTT framing and topic overhead. The earlier custom
 `chunk:index:total:isLast:data` protocol and its 50-slot reassembly buffer are
 no longer used.
 
-## Reproducible build
+## Preparing a firmware release
 
-Build the pinned generic image from the repository root:
+The CI firmware job is a compile and resource-usage validation. The controller
+serves the separately reviewed binary committed under
+`firmware/esp32/artifacts`, so prepare that binary with the repository release
+command rather than copying an Arduino IDE build by hand.
+
+Before releasing a new version:
+
+1. Make and review the sketch changes.
+2. Choose a new numeric SemVer version and set the same value in:
+   - `VERSION` in `ESP32Code.ino`;
+   - `CURRENT_ESP_FIRMWARE_VERSION` in `packages/esp-protocol/src/index.ts`;
+   - `FAKE_ESP_FIRMWARE_VERSION` in `packages/fake-esp/src/fake-esp.ts`.
+3. Update exact-version test fixtures that intentionally represent the current
+   firmware. Do not rewrite historical version references merely because a new
+   release exists.
+4. Prepare the generic OTA artifact from the repository root:
+
+   ```sh
+   npm run firmware:release -- 5.0.7
+   ```
+
+The command builds with `firmware-config.example.h`, extracts the application
+binary from the pinned Docker build, rejects test MQTT topics or missing safe
+configuration sentinels, writes `ESP32Code-<version>.bin`, and updates its exact
+size and SHA-256 in `@aquarium/esp-protocol`. It refuses to replace an existing
+version. `--replace` is reserved for correcting an artifact that has not been
+released or installed anywhere. Use `--check` to compile and validate without
+writing the artifact or metadata.
+
+Review the resulting source, binary, and metadata diff. Update documentation
+that describes the current release, then run the unit, critical, and firmware
+CI lanes before merging. Compiler output is not byte-reproducible across clean
+builds, so the trusted release evidence is the reviewed source commit plus the
+exact committed binary hash; CI independently proves that the source compiles.
+
+The current release can be rebuilt for investigation with:
 
 ```sh
 docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
@@ -104,7 +139,7 @@ docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compi
 
 The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
 ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
-target using only the safe example configuration. The resulting application
-binary is `firmware/esp32/artifacts/ESP32Code-5.0.6.bin`; its exact size and
-SHA-256 are pinned in `@aquarium/esp-protocol` and revalidated by the controller
-at startup.
+target using only the safe example configuration. This validation build does
+not replace the approved OTA artifact. The current application binary is
+`firmware/esp32/artifacts/ESP32Code-5.0.6.bin`; its exact size and SHA-256 are
+pinned in `@aquarium/esp-protocol` and revalidated by the controller at startup.

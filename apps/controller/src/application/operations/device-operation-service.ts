@@ -597,7 +597,11 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
         ),
       },
     ];
-    if (outcome.status === "succeeded") {
+    const deviceReportedError =
+      outcome.status === "failed"
+        ? parseEspErrorResponse(outcome.response)
+        : null;
+    if (outcome.status === "succeeded" || deviceReportedError !== null) {
       this.#responseCooldownUntilByDevice.delete(operation.deviceId);
       postCompletionTasks.push({
         description: "live device contact publication",
@@ -614,10 +618,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
           .recordResponseContact(outcome.targetId, wireResult.completedAtMs)
           .then(() => undefined),
       });
-    } else if (
-      outcome.status === "failed" &&
-      parseEspErrorResponse(outcome.response) === null
-    ) {
+    } else if (outcome.status === "failed") {
       postCompletionTasks.push({
         description: "device protocol fault persistence",
         promise: this.#deviceRegistry
