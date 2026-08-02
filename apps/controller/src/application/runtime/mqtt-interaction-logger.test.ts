@@ -79,7 +79,6 @@ describe("MQTT interaction volume policy", () => {
       requestId: "session-request-1",
       targetId: "A1",
       batchIndex: 0,
-      frameCount: 1,
       payloadBytes: 4,
       atMs: 600,
     });

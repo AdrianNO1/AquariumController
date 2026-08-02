@@ -34,7 +34,7 @@ import { DevicesPanel } from "./DevicesPanel.js";
 
 const timestamp = "2026-07-13T10:00:00.000Z";
 const firmware: FirmwareDeployment = {
-  currentVersion: "5.0.2",
+  currentVersion: "5.0.4",
   sha256: "0000000000000000000000000000000000000000000000000000000000000000",
   sizeBytes: 1,
   fleetPolicy: null,
@@ -54,7 +54,7 @@ const devices: readonly Device[] = [
     name: "Online rack",
     hardwareId: "A1B2C3D4",
     status: "online",
-    firmwareVersion: "5.0.2",
+    firmwareVersion: "5.0.4",
     lastError: null,
   }),
   device({
@@ -112,7 +112,7 @@ describe("DevicesPanel", () => {
     expect(screen.getByText("ID: A1B2C3D4")).toBeTruthy();
     expect(screen.getByText("ID: B2C3D4E5")).toBeTruthy();
     expect(screen.getByText("ID: C3D4E5F6")).toBeTruthy();
-    expect(screen.getByText(/5\.0\.2 .* current/u)).toBeTruthy();
+    expect(screen.getByText(/5\.0\.4 .* current/u)).toBeTruthy();
     expect(
       screen.getByText(/5\.0\.0-beta\.1 .* update available/u),
     ).toBeTruthy();
@@ -374,7 +374,7 @@ describe("DevicesPanel", () => {
     const user = userEvent.setup();
     renderPanel(refresh);
 
-    await user.click(screen.getByRole("button", { name: "Update to 5.0.2" }));
+    await user.click(screen.getByRole("button", { name: "Update to 5.0.4" }));
     expect(
       screen.getByRole("dialog", { name: "Update Stale rack?" }),
     ).toBeTruthy();

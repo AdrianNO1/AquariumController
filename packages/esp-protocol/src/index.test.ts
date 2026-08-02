@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +10,7 @@ import {
   encodeCorrelatedLegacyRequest,
   encodeLegacyMessage,
   ESP_FIRMWARE_ARTIFACT,
+  ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES,
   ESP32_PWM_OVERWRITE_DURATION_MS,
   espAnnouncementSchema,
   espCommandResponseSchema,
@@ -16,21 +19,33 @@ import {
   isCurrentEspFirmwareVersion,
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   supportsPullOta,
-  LEGACY_CHUNK_DATA_BYTES,
-  utf8ByteLength,
 } from "./index.js";
 
 describe("legacy ESP protocol", () => {
+  it("keeps the tracked release firmware out of test mode", () => {
+    const source = readFileSync(
+      new URL(
+        "../../../firmware/esp32/ESP32Code/ESP32Code.ino",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    expect(source).toMatch(/const bool TEST = false;/u);
+    expect(source).not.toMatch(/const bool TEST = true;/u);
+  });
+
   it("requires the pull-OTA firmware exactly", () => {
-    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("5.0.2");
+    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("5.0.4");
     expect(ESP_FIRMWARE_ARTIFACT).toMatchObject({
-      version: "5.0.2",
-      sizeBytes: 1_174_576,
+      version: "5.0.4",
+      sizeBytes: 1_172_144,
       sha256:
-        "49f8549bafec5ff58fb3b485909c316986cc52fc0efbef47fc2f8b2ca9b159e3",
+        "4f1f1684d6f2fe93c7668cce2b11a56c7cb86881db08b447244f6026be30eeb7",
     });
     expect(ESP32_PWM_OVERWRITE_DURATION_MS).toBe(120_000);
-    expect(isCurrentEspFirmwareVersion("5.0.2")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("5.0.4")).toBe(true);
+    expect(isCurrentEspFirmwareVersion("5.0.3")).toBe(false);
     expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);
     expect(MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION).toBe("5.0.0");
     expect(isSupportedEspFirmwareVersion("5.0.0")).toBe(true);
@@ -50,7 +65,7 @@ describe("legacy ESP protocol", () => {
       freq: 5_000,
       res: 8,
       status: "online",
-      version: "5.0.2",
+      version: "5.0.4",
       scheduleHash: "0",
     };
 
@@ -65,7 +80,7 @@ describe("legacy ESP protocol", () => {
         ],
         ota: {
           status: "downloading",
-          targetVersion: "5.0.2",
+          targetVersion: "5.0.4",
           progress: 48,
         },
       }).success,
@@ -100,10 +115,10 @@ describe("legacy ESP protocol", () => {
     ).toBe(false);
   });
 
-  it("keeps payloads at the 256-byte boundary unchunked", () => {
-    const payload = "x".repeat(256);
+  it("sends the maximum command payload as one MQTT message", () => {
+    const payload = "x".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES);
 
-    expect(encodeLegacyMessage(payload)).toEqual([payload]);
+    expect(encodeLegacyMessage(payload)).toBe(payload);
   });
 
   it("correlates command batches and requires the ESP to echo the request", () => {
@@ -127,25 +142,18 @@ describe("legacy ESP protocol", () => {
     ).toBe(false);
   });
 
-  it("uses the deployed chunk framing above 256 bytes", () => {
-    const frames = encodeLegacyMessage("x".repeat(401));
-
-    expect(frames).toHaveLength(3);
-    expect(frames[0]).toBe(`chunk:0:3:0:${"x".repeat(200)}`);
-    expect(frames[1]).toBe(`chunk:1:3:0:${"x".repeat(200)}`);
-    expect(frames[2]).toBe("chunk:2:3:1:x");
-  });
-
-  it("never splits a UTF-8 code point or exceeds the ESP data buffer", () => {
-    const frames = encodeLegacyMessage("🐠".repeat(70));
-
-    for (const frame of frames) {
-      const data = frame.split(":", 5)[4];
-      expect(data).toBeDefined();
-      expect(utf8ByteLength(data ?? "")).toBeLessThanOrEqual(
-        LEGACY_CHUNK_DATA_BYTES,
-      );
-    }
+  it("rejects payloads above the firmware MQTT command limit by UTF-8 byte length", () => {
+    expect(() =>
+      encodeLegacyMessage("x".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES + 1)),
+    ).toThrow(/5121 bytes/u);
+    expect(() =>
+      encodeLegacyMessage("🐠".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES / 4)),
+    ).not.toThrow();
+    expect(() =>
+      encodeLegacyMessage(
+        `🐠${"x".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES - 3)}`,
+      ),
+    ).toThrow(/5121 bytes/u);
   });
 
   it("splits after the third command for the same target", () => {

@@ -592,7 +592,7 @@ describe("operations route", () => {
 
     expect(
       screen.getByText(
-        "Active rollout for firmware 5.0.2: update when outputs are off. Currently outdated: 2.",
+        "Active rollout for firmware 5.0.4: update when outputs are off. Currently outdated: 2.",
       ),
     ).toBeTruthy();
 

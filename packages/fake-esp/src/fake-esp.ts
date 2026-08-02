@@ -15,10 +15,8 @@ import {
 } from "./transport.js";
 
 export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
-export const FAKE_ESP_FIRMWARE_VERSION = "4.1.0";
-export const FAKE_ESP_CHUNK_DATA_BYTES = 200;
-export const FAKE_ESP_MAX_CHUNKS = 50;
-export const FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS = 10_000;
+export const FAKE_ESP_FIRMWARE_VERSION = "5.0.4";
+export const FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES = 5_120;
 export const FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS = 120_000;
 
 const DEFAULT_DEVICE_NAME = "ESP32_Device";
@@ -105,13 +103,6 @@ interface PinState {
   overwriteStartedAtMilliseconds: number;
 }
 
-interface ChunkAssembly {
-  readonly chunks: Array<string | undefined>;
-  totalChunks: number;
-  lastChunkTimeMilliseconds: number;
-  complete: boolean;
-}
-
 interface PendingPublication {
   readonly dueAtMilliseconds: number;
   readonly payload: string;
@@ -143,13 +134,6 @@ export class FakeEspActor {
   private readonly analogValues = new Map<number, number>();
   private readonly pinAttachmentFailures = new Set<number>();
   private readonly pendingResponses: PendingPublication[] = [];
-  private readonly chunkAssembly: ChunkAssembly = {
-    chunks: Array.from<string | undefined>({ length: FAKE_ESP_MAX_CHUNKS }),
-    totalChunks: 0,
-    lastChunkTimeMilliseconds: 0,
-    complete: false,
-  };
-
   private unsubscribe: (() => void) | undefined;
   private connected = false;
   private deviceName = DEFAULT_DEVICE_NAME;
@@ -346,7 +330,6 @@ export class FakeEspActor {
   public runLoop(): void {
     const clockNow = this.clock.nowMilliseconds();
     const now = this.firmwareMillis(clockNow);
-    this.checkChunkTimeout(now);
 
     this.serviceTimeCheckpoint(now, clockNow);
     this.serviceDiagnosticPersistence(now);
@@ -533,12 +516,14 @@ export class FakeEspActor {
     if (!this.connected || topic !== this.topics.command) {
       return;
     }
-
-    this.flushPendingResponses(this.clock.nowMilliseconds());
-    if (message.startsWith("chunk:")) {
-      this.handleChunk(message.slice(6));
+    if (
+      new TextEncoder().encode(message).length >
+      FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES
+    ) {
       return;
     }
+
+    this.flushPendingResponses(this.clock.nowMilliseconds());
     if (message === "discover") {
       this.announcePresence();
       return;
@@ -1016,92 +1001,6 @@ export class FakeEspActor {
       this.lastPinValues.set(pin, 0);
     }
     return true;
-  }
-
-  private handleChunk(chunkData: string): void {
-    const firstColon = chunkData.indexOf(":");
-    const secondColon = chunkData.indexOf(":", firstColon + 1);
-    const thirdColon = chunkData.indexOf(":", secondColon + 1);
-    if (firstColon === -1 || secondColon === -1 || thirdColon === -1) {
-      return;
-    }
-
-    const chunkIndex = arduinoToInteger(chunkData.slice(0, firstColon));
-    const totalChunks = arduinoToInteger(
-      chunkData.slice(firstColon + 1, secondColon),
-    );
-    const chunkIndexValue = chunkData.slice(0, firstColon);
-    const totalChunksValue = chunkData.slice(firstColon + 1, secondColon);
-    const isLastValue = chunkData.slice(secondColon + 1, thirdColon);
-    const data = chunkData.slice(thirdColon + 1);
-    if (
-      !/^\d+$/.test(chunkIndexValue) ||
-      !/^\d+$/.test(totalChunksValue) ||
-      chunkIndex < 0 ||
-      chunkIndex >= FAKE_ESP_MAX_CHUNKS ||
-      totalChunks < 1 ||
-      totalChunks > FAKE_ESP_MAX_CHUNKS ||
-      chunkIndex >= totalChunks ||
-      (isLastValue !== "0" && isLastValue !== "1") ||
-      (isLastValue === "1") !== (chunkIndex === totalChunks - 1) ||
-      new TextEncoder().encode(data).length > FAKE_ESP_CHUNK_DATA_BYTES
-    ) {
-      return;
-    }
-
-    const now = this.firmwareMillis();
-    if (
-      chunkIndex === 0 ||
-      this.chunkAssembly.lastChunkTimeMilliseconds === 0 ||
-      uint32Elapsed(now, this.chunkAssembly.lastChunkTimeMilliseconds) >
-        FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS
-    ) {
-      this.resetChunkAssembly(false);
-      this.chunkAssembly.totalChunks = totalChunks;
-      this.chunkAssembly.lastChunkTimeMilliseconds = now;
-    }
-    if (
-      this.chunkAssembly.totalChunks !== 0 &&
-      this.chunkAssembly.totalChunks !== totalChunks
-    ) {
-      this.resetChunkAssembly(false);
-      return;
-    }
-
-    this.chunkAssembly.chunks[chunkIndex] = data;
-    this.chunkAssembly.lastChunkTimeMilliseconds = now;
-    const allReceived = Array.from(
-      { length: totalChunks },
-      (_, index) => this.chunkAssembly.chunks[index] !== undefined,
-    ).every(Boolean);
-    if (!allReceived) {
-      return;
-    }
-
-    const completeMessage = this.chunkAssembly.chunks
-      .slice(0, totalChunks)
-      .map((chunk) => chunk ?? "")
-      .join("");
-    this.processCompleteMessage(completeMessage);
-    this.resetChunkAssembly(true);
-  }
-
-  private checkChunkTimeout(now: number): void {
-    if (
-      !this.chunkAssembly.complete &&
-      this.chunkAssembly.lastChunkTimeMilliseconds > 0 &&
-      uint32Elapsed(now, this.chunkAssembly.lastChunkTimeMilliseconds) >
-        FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS
-    ) {
-      this.resetChunkAssembly(false);
-    }
-  }
-
-  private resetChunkAssembly(complete: boolean): void {
-    this.chunkAssembly.chunks.fill(undefined);
-    this.chunkAssembly.totalChunks = 0;
-    this.chunkAssembly.complete = complete;
-    this.chunkAssembly.lastChunkTimeMilliseconds = 0;
   }
 
   private publishResponse(

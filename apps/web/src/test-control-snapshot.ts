@@ -197,7 +197,7 @@ function device(
     desired: { name: id, pwmFrequencyHz: 1_000, pwmResolutionBits: 8 },
     reported: {
       ...reportedConfiguration,
-      firmwareVersion: "5.0.2",
+      firmwareVersion: "5.0.4",
       scheduleHash: "1234",
       outputsOff: true,
       outputs: [],

@@ -10,19 +10,19 @@ this checklist does not replace it.
 
 ## Current handoff state
 
-The repository contains the firmware 4.1, correlated-request, per-device-lane,
+The repository contains firmware 5.0.4, correlated-request, per-device-lane,
 latest-only scheduler, and device-local failure implementation. Before this
 checklist becomes a deployment handoff, the branch must pass protected CI,
 merge, publish a new image, and record that image's exact digest.
 
-Current firmware 4.1/per-device-lane local evidence:
+Current firmware 5.0.4/per-device-lane local evidence:
 
 - formatting, lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 98 files/684 tests;
-- critical: 83 files/616 tests;
+- unit: 110 files/764 tests;
+- critical: 87 files/650 tests;
 - real Mosquitto integration: 5/5;
 - production Playwright: 18/18 with zero retries; and
-- pinned firmware compile: 80% flash and 19% global RAM.
+- pinned firmware compile: 88% flash and 16% global RAM.
 
 These results have not yet been confirmed by the protected pull-request or
 default-branch workflows.
@@ -93,7 +93,7 @@ There is deliberately no CI job that deploys to the Pi.
 ## 3. Network, MQTT, and notifications
 
 - [ ] Provision a production MQTT account for the controller and a credential
-      for firmware 4.1.0.
+      for firmware 5.0.4.
 - [ ] Restrict the plaintext MQTT listener to the trusted aquarium LAN.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
       interlock.
@@ -124,7 +124,7 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 4.1.0 with an ignored local configuration containing the
+- [ ] Build firmware 5.0.4 with an ignored local configuration containing the
       intended Wi-Fi, MQTT username/password, and NTP host.
 - [ ] Flash every deployed ESP32.
 - [ ] Confirm every device reports firmware 5.0.0 or newer; older firmware is

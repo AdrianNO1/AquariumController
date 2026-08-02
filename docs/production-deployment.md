@@ -8,7 +8,7 @@ run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
 [Pi production handoff checklist](pi-production-handoff.md). The current
-firmware 4.1 and per-device-lane branch must pass protected CI, merge, publish,
+firmware 5.0.4 and per-device-lane branch must pass protected CI, merge, publish,
 and receive a newly selected immutable digest before any command in this
 runbook is used. Historical pre-4.1 validation is recorded in the
 [readiness report](readiness-report.md); it is not the current deployment
@@ -71,7 +71,7 @@ remain release gates.
 Only after the current protected default-branch run and publisher succeed,
 record the reviewed values:
 
-- source: `<reviewed-4.1-source-commit>`;
+- source: `<reviewed-5.0.4-source-commit>`;
 - repository: `ghcr.io/adrianno1/aquarium-controller`; and
 - digest: `sha256:<published-64-character-manifest-digest>`.
 

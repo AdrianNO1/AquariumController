@@ -69,17 +69,24 @@ Controller command batches use
 `request:<requestId>|<semicolon-separated commands>`. Responses echo the
 request ID so a delayed response cannot settle a newer operation.
 
+Firmware 5.0.4 carries each command batch in one MQTT publication. The command
+payload limit is 5,120 UTF-8 bytes, which covers the 4,095-byte schedule limit
+plus target and request-correlation metadata. PubSubClient uses a 6,144-byte
+packet buffer for MQTT framing and topic overhead. The earlier custom
+`chunk:index:total:isLast:data` protocol and its 50-slot reassembly buffer are
+no longer used.
+
 ## Reproducible build
 
 Build the pinned generic image from the repository root:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.2 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.4 .
 ```
 
 The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
 ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
 target using only the safe example configuration. The resulting application
-binary is `firmware/esp32/artifacts/ESP32Code-5.0.2.bin`; its exact size and
+binary is `firmware/esp32/artifacts/ESP32Code-5.0.4.bin`; its exact size and
 SHA-256 are pinned in `@aquarium/esp-protocol` and revalidated by the controller
 at startup.

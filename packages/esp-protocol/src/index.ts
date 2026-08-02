@@ -1,10 +1,8 @@
 import { z } from "zod";
 
 import {
-  LEGACY_CHUNK_DATA_BYTES,
-  LEGACY_CHUNK_THRESHOLD_BYTES,
+  ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES,
   LEGACY_COMMANDS_PER_DEVICE_PER_BATCH,
-  LEGACY_MAX_CHUNKS,
   isSupportedEsp32PwmConfiguration,
   utf8ByteLength,
 } from "./limits.js";
@@ -12,15 +10,15 @@ import {
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.2";
+export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.4";
 export const MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION = "5.0.0";
 export const MINIMUM_PULL_OTA_FIRMWARE_VERSION =
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION;
 export const ESP_FIRMWARE_ARTIFACT = {
   version: CURRENT_ESP_FIRMWARE_VERSION,
-  fileName: "ESP32Code-5.0.2.bin",
-  sizeBytes: 1_174_576,
-  sha256: "49f8549bafec5ff58fb3b485909c316986cc52fc0efbef47fc2f8b2ca9b159e3",
+  fileName: "ESP32Code-5.0.4.bin",
+  sizeBytes: 1_172_144,
+  sha256: "4f1f1684d6f2fe93c7668cce2b11a56c7cb86881db08b447244f6026be30eeb7",
 } as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
@@ -166,28 +164,21 @@ export function createEspTopicSet(testMode: boolean): EspTopicSet {
   };
 }
 
-export function encodeLegacyMessage(payload: string): readonly string[] {
+export function encodeLegacyMessage(payload: string): string {
   if (payload.length === 0) {
     throw new TypeError("Cannot publish an empty legacy ESP payload");
   }
   if (payload.includes("\0")) {
     throw new TypeError("Legacy ESP payloads cannot contain null bytes");
   }
-  if (utf8ByteLength(payload) <= LEGACY_CHUNK_THRESHOLD_BYTES) {
-    return [payload];
-  }
-
-  const dataChunks = splitUtf8(payload, LEGACY_CHUNK_DATA_BYTES);
-  if (dataChunks.length > LEGACY_MAX_CHUNKS) {
+  const payloadBytes = utf8ByteLength(payload);
+  if (payloadBytes > ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES) {
     throw new RangeError(
-      `Payload needs ${dataChunks.length} chunks; deployed firmware supports at most ${LEGACY_MAX_CHUNKS}`,
+      `MQTT command payload is ${payloadBytes} bytes; firmware supports at most ${ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES}`,
     );
   }
 
-  return dataChunks.map((data, index) => {
-    const isLast = index === dataChunks.length - 1 ? 1 : 0;
-    return `chunk:${index}:${dataChunks.length}:${isLast}:${data}`;
-  });
+  return payload;
 }
 
 export function batchLegacyCommands(
@@ -237,28 +228,4 @@ export function batchLegacyCommands(
 
   flush();
   return batches;
-}
-
-function splitUtf8(value: string, maximumBytes: number): string[] {
-  const chunks: string[] = [];
-  let chunk = "";
-  let chunkBytes = 0;
-
-  for (const character of value) {
-    const characterBytes = utf8ByteLength(character);
-    if (chunkBytes + characterBytes > maximumBytes) {
-      chunks.push(chunk);
-      chunk = character;
-      chunkBytes = characterBytes;
-    } else {
-      chunk += character;
-      chunkBytes += characterBytes;
-    }
-  }
-
-  if (chunk.length > 0) {
-    chunks.push(chunk);
-  }
-
-  return chunks;
 }

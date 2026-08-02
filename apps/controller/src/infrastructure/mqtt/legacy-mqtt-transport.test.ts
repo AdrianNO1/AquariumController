@@ -650,28 +650,22 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     await transport.stop();
   });
 
-  it("publishes protocol-package chunk frames in order", async () => {
+  it("publishes a long command as one MQTT message", async () => {
     const client = new InMemoryMqttClient();
     const transport = await readyTransport(client);
     const rawCommand = `A1 sc ${"x".repeat(500)}`;
     const operation = transport.executeCommands([
       command(rawCommand, "A1", "schedule_ok"),
     ]);
-    const expectedFrames = encodeLegacyMessage(
+    const expectedPayload = encodeLegacyMessage(
       encodeCorrelatedLegacyRequest("session-request-1", rawCommand),
     );
 
-    await vi.waitFor(() =>
-      expect(commandPublishes(client)).toHaveLength(expectedFrames.length),
-    );
-    expect(commandPublishes(client).map(({ payload }) => payload)).toEqual(
-      expectedFrames,
-    );
-    expect(
-      commandPublishes(client).every(
-        ({ options }) => options.qos === 0 && options.retain === false,
-      ),
-    ).toBe(true);
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
+    expect(commandPublishes(client)[0]).toMatchObject({
+      payload: expectedPayload,
+      options: { qos: 0, retain: false },
+    });
 
     client.emitJson(
       topics.response,
@@ -681,36 +675,34 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     await transport.stop();
   });
 
-  it("never interleaves another device publication into chunk frames", async () => {
+  it("serializes the brief MQTT publications for concurrent device lanes", async () => {
     const client = new InMemoryMqttClient();
     const transport = await readyTransport(client);
     const rawCommand = `A1 sc ${"x".repeat(500)}`;
-    const expectedFrames = encodeLegacyMessage(
+    const expectedPayload = encodeLegacyMessage(
       encodeCorrelatedLegacyRequest("session-request-1", rawCommand),
     );
-    let releaseFirstFrame: () => void = () => undefined;
-    const firstFrameCanComplete = new Promise<void>((resolve) => {
-      releaseFirstFrame = resolve;
+    let releaseFirstPublish: () => void = () => undefined;
+    const firstPublishCanComplete = new Promise<void>((resolve) => {
+      releaseFirstPublish = resolve;
     });
     client.onPublish = async ({ payload }) => {
-      if (payload === expectedFrames[0]) {
-        await firstFrameCanComplete;
+      if (payload === expectedPayload) {
+        await firstPublishCanComplete;
       }
     };
 
-    const chunked = transport.executeCommands([
+    const schedule = transport.executeCommands([
       command(rawCommand, "A1", "schedule_ok"),
     ]);
     const pingB = transport.executeCommands([ping("A2")]);
     await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(1));
-    expect(commandPublishes(client)[0]?.payload).toBe(expectedFrames[0]);
+    expect(commandPublishes(client)[0]?.payload).toBe(expectedPayload);
 
-    releaseFirstFrame();
-    await vi.waitFor(() =>
-      expect(commandPublishes(client)).toHaveLength(expectedFrames.length + 1),
-    );
+    releaseFirstPublish();
+    await vi.waitFor(() => expect(commandPublishes(client)).toHaveLength(2));
     expect(commandPublishes(client).map(({ payload }) => payload)).toEqual([
-      ...expectedFrames,
+      expectedPayload,
       encodeCorrelatedLegacyRequest("session-request-2", "A2 p"),
     ]);
     client.emitJson(
@@ -725,24 +717,24 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       topics.response,
       response("A2", [{ index: 0, response: "o" }], "session-request-2"),
     );
-    await expect(Promise.all([chunked, pingB])).resolves.toHaveLength(2);
+    await expect(Promise.all([schedule, pingB])).resolves.toHaveLength(2);
     await transport.stop();
   });
 
-  it("starts the response timeout only after every chunk frame publishes", async () => {
+  it("starts the response timeout only after MQTT publication completes", async () => {
     const client = new InMemoryMqttClient();
     const transport = await readyTransport(client, {}, 100);
     const rawCommand = `A1 sc ${"x".repeat(500)}`;
-    const frames = encodeLegacyMessage(
+    const payload = encodeLegacyMessage(
       encodeCorrelatedLegacyRequest("session-request-1", rawCommand),
     );
-    let releaseFinalFrame: () => void = () => undefined;
-    const finalFrameCanComplete = new Promise<void>((resolve) => {
-      releaseFinalFrame = resolve;
+    let releasePublish: () => void = () => undefined;
+    const publishCanComplete = new Promise<void>((resolve) => {
+      releasePublish = resolve;
     });
-    client.onPublish = async ({ payload }) => {
-      if (payload === frames.at(-1)) {
-        await finalFrameCanComplete;
+    client.onPublish = async ({ payload: publishedPayload }) => {
+      if (publishedPayload === payload) {
+        await publishCanComplete;
       }
     };
     vi.useFakeTimers();
@@ -754,11 +746,11 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
       settled = true;
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(commandPublishes(client)).toHaveLength(frames.length);
+    expect(commandPublishes(client)).toHaveLength(1);
 
     await vi.advanceTimersByTimeAsync(500);
     expect(settled).toBe(false);
-    releaseFinalFrame();
+    releasePublish();
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(99);
     expect(settled).toBe(false);
@@ -769,18 +761,18 @@ describe("legacy MQTT transport in-memory state-machine unit", () => {
     await transport.stop();
   });
 
-  it("accepts an early correlated response emitted by final-frame publication", async () => {
+  it("accepts an early correlated response emitted during publication", async () => {
     const client = new InMemoryMqttClient();
     const interactions: LegacyMqttInteraction[] = [];
     const transport = await readyTransport(client, {
       onInteraction: (interaction) => interactions.push(interaction),
     });
     const rawCommand = `A1 sc ${"x".repeat(500)}`;
-    const frames = encodeLegacyMessage(
+    const expectedPayload = encodeLegacyMessage(
       encodeCorrelatedLegacyRequest("session-request-1", rawCommand),
     );
     client.onPublish = ({ payload }) => {
-      if (payload === frames.at(-1)) {
+      if (payload === expectedPayload) {
         client.emitJson(
           topics.response,
           response(

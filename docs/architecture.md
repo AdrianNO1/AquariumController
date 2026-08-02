@@ -3,7 +3,7 @@
 Status: implemented architecture, updated 2026-07-26. The protected evidence
 for source `886ed05be89a1abed8e076d91ce2802f5d5668dd` and its published digest is a
 historical pre-4.1 baseline recorded in the
-[readiness report](readiness-report.md). The current firmware 4.1 and
+[readiness report](readiness-report.md). The current firmware 5.0.4 and
 per-device-lane branch requires its own protected CI run, merge, and immutable
 image selection. Physical ESP flashing, Raspberry Pi deployment,
 production-data migration, and production configuration remain operator-run
@@ -21,7 +21,7 @@ The dashboard is local-network software with no SEO or server-rendering need,
 while the MQTT queue, five-second refresh, daily jobs, state revision, and
 shutdown sequence need one predictable owner. The controller must not be
 horizontally scaled: per-device command queues, schedules, and state revisions
-need one predictable owner. Firmware 4.1 request identifiers allow bounded
+need one predictable owner. Firmware 5.0.4 request identifiers allow bounded
 concurrency inside that owner without making multiple controller processes
 safe.
 
@@ -183,13 +183,14 @@ the application:
   `test/aquarium/*`.
 - Semicolon-separated batches use response indexes scoped to the batch and at
   most three commands per physical device.
-- Payloads over 256 UTF-8 bytes use
-  `chunk:index:total:isLast:data`, with at most 200 data bytes and 50 chunks.
+- Each command batch is one MQTT publication of at most 5,120 UTF-8 bytes. The
+  firmware's 6,144-byte PubSubClient buffer leaves room for MQTT framing and
+  topic overhead without an application-level chunk protocol.
 - The active firmware's 4096-byte C-string schedule buffer makes 4095 UTF-8
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `5.0.2` is the current release, while firmware `5.0.0` and newer is
+- Firmware `5.0.4` is the current release, while firmware `5.0.0` and newer is
   controller-compatible. A supported older release remains online with an
   update available. Firmware below `5.0.0` remains visible but is marked
   `firmware_unsupported`, excluded from actuator work, and shown with a
@@ -214,11 +215,10 @@ later is enrolled. A new image is confirmed only after MQTT presence succeeds;
 five minutes without confirmation or three probation boots select the previous
 partition. ESP-reported OTA failures remain terminal until an operator retries.
 
-Chunk frames still have no separate message identifier, and every subscribed
-ESP has one chunk-reassembly buffer. A short global publication mutex keeps all
-frames of one request contiguous; it is released after the final frame is
-published, not after the ESP response. Response waits for other devices can
-therefore overlap safely. The five-second output scheduler also keeps at most
+The transport uses a short publication mutex only around each complete MQTT
+publication; it is released before waiting for the ESP response. Response
+waits for other devices can therefore overlap safely. The five-second output
+scheduler also keeps at most
 one pending refresh batch per device: a newer tick replaces queued routine PWM
 work that has not started, while commands already attempted are never silently
 rewritten.
@@ -259,16 +259,16 @@ Diagnostic transitions are persisted in SPIFFS immediately for the first
 transition and then at most hourly, with failed MQTT announcements retried no
 more than once per minute.
 
-Independent fake tests pin these actuator semantics, and the real 4.1 sketch
-passes the pinned Arduino CLI 1.5.0, ESP32 core 3.3.8, ArduinoJson 7.4.3, and
-PubSubClient 2.8 compiler build. Flashing every deployed ESP remains an external
-release action. The exact 1,036,431-byte flash, 63,180-byte global-RAM, and
-264,500-byte remaining-capacity figures recorded for the focused 2026-07-19
-firmware 4.0 build are historical and are not claimed for 4.1.
+Independent fake tests pin these actuator semantics. Firmware 5.0.4 passes the
+pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and PubSubClient
+2.8 build at 1,165,577 bytes of flash and 53,088 bytes of global RAM. Its
+single-message transport was physically verified at the 5,120-byte limit over
+the configured Mosquitto broker. Flashing every deployed ESP remains an
+external release action.
 
 ## Unknown actuator outcomes and reconciliation
 
-Firmware 4.1 response IDs prevent stale-response misattribution, but a failure
+Firmware 5.0.4 response IDs prevent stale-response misattribution, but a failure
 after QoS 0 publication still cannot prove whether the addressed ESP applied
 the command. The controller therefore never retries that ambiguous operation
 as though it were safely unsent. It persists the operation as terminal

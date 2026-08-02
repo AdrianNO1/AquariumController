@@ -153,7 +153,6 @@ export type LegacyMqttInteraction =
       readonly requestId: string;
       readonly targetId: string;
       readonly batchIndex: number;
-      readonly frameCount: number;
       readonly payloadBytes: number;
       readonly atMs: number;
     }
@@ -1088,7 +1087,7 @@ export class LegacyMqttTransport {
       );
     }
     const requestId = this.nextRequestId();
-    const frames = encodeLegacyMessage(
+    const payload = encodeLegacyMessage(
       encodeCorrelatedLegacyRequest(requestId, batch.payload),
     );
     let activeBatch: ActiveBatch | undefined;
@@ -1109,67 +1108,49 @@ export class LegacyMqttTransport {
           commands,
         );
         this.activeBatches.set(requestId, activeBatch);
-        let publishedFrames = 0;
-
-        for (const [frameIndex, frame] of frames.entries()) {
-          if (frameIndex === frames.length - 1) {
-            activeBatch.enableResponses();
-          }
-          const publishResult = client
-            .publish(this.topics.command, frame, NON_RETAINED_QOS_ZERO)
-            .then(
-              () => ({ kind: "published" as const }),
-              (error: Error) => ({
-                kind: "publish_failed" as const,
-                error,
-              }),
-            );
-          const raceResult = await Promise.race([
-            publishResult,
-            activeBatch.promise.then((outcomes) => ({
-              kind: "settled" as const,
-              outcomes,
-            })),
-          ]);
-          if (raceResult.kind === "settled") {
-            if (
-              frameIndex === frames.length - 1 &&
-              raceResult.outcomes.every(
-                ({ status }) => status === "succeeded" || status === "failed",
-              )
-            ) {
-              publishedFrames = frames.length;
-            }
-            break;
-          }
-          if (raceResult.kind === "publish_failed") {
-            this.emitInteraction({
-              kind: "transport_error",
-              phase: "publish",
-              detail: raceResult.error.message,
-              atMs: this.now(),
-            });
-            activeBatch.settleUnknown("publish_failed");
-            break;
-          }
-          publishedFrames += 1;
-        }
-
-        if (publishedFrames === frames.length) {
+        activeBatch.enableResponses();
+        const publishResult = client
+          .publish(this.topics.command, payload, NON_RETAINED_QOS_ZERO)
+          .then(
+            () => ({ kind: "published" as const }),
+            (error: Error) => ({
+              kind: "publish_failed" as const,
+              error,
+            }),
+          );
+        const raceResult = await Promise.race([
+          publishResult,
+          activeBatch.promise.then((outcomes) => ({
+            kind: "settled" as const,
+            outcomes,
+          })),
+        ]);
+        if (raceResult.kind === "publish_failed") {
+          this.emitInteraction({
+            kind: "transport_error",
+            phase: "publish",
+            detail: raceResult.error.message,
+            atMs: this.now(),
+          });
+          activeBatch.settleUnknown("publish_failed");
+        } else if (
+          raceResult.kind === "published" ||
+          raceResult.outcomes.every(
+            ({ status }) => status === "succeeded" || status === "failed",
+          )
+        ) {
           this.emitInteraction({
             kind: "batch_published",
             operationId,
             requestId,
             targetId,
             batchIndex,
-            frameCount: frames.length,
-            payloadBytes: frames.reduce(
-              (total, frame) => total + utf8ByteLength(frame),
-              0,
-            ),
+            payloadBytes: utf8ByteLength(payload),
             atMs: this.now(),
           });
-          activeBatch.armTimeout();
+          if (raceResult.kind === "published") {
+            activeBatch.armTimeout();
+          }
         }
       });
     } catch (error) {
@@ -1295,11 +1276,7 @@ export class LegacyMqttTransport {
     return `${this.requestSessionId}-request-${this.requestSequence}`;
   }
 
-  /**
-   * ESPs may await independent correlated responses concurrently, but each
-   * firmware instance has one chunk assembler. Keep every frame set atomic
-   * without holding the lock during the response timeout.
-   */
+  /** Serialize publication without holding the lock during ESP response waits. */
   private async withPublicationLock<Result>(
     generation: number,
     task: () => Promise<Result>,

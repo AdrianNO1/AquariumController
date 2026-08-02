@@ -3,7 +3,7 @@
 Updated: 2026-07-26
 
 Purpose: execution record and handoff plan. R0-R14 repository implementation is
-complete, including firmware 4.1, correlated requests, bounded per-device lanes,
+complete, including firmware 5.0.4, correlated requests, bounded per-device lanes,
 latest-only routine PWM coalescing, and device-local failure handling. The
 current branch still needs protected CI, merge, default-branch validation, image
 publication, and immutable digest selection. Production migration, ESP32
@@ -34,7 +34,7 @@ Repository work is complete only when the only remaining actions are:
 2. Confirm the exposed credential was revoked, have GitHub Support purge the
    unreachable historical object/cached view, resolve its open alert as
    `revoked`, and keep secret scanning and push protection enabled.
-3. Flash and identify firmware 4.1.0 on every production ESP32, then complete a
+3. Flash and identify firmware 5.0.4 on every production ESP32, then complete a
    controlled hardware/failover soak.
 4. Configure the Pi's production MQTT/database/archive/backup paths and
    credentials outside the repository.
@@ -74,7 +74,7 @@ Every delegated task must follow these rules:
 - Treat legacy Python/templates and historical files under `.old/**` as
   read-only. The user explicitly promoted
   `.old/slaveCode/ESP32Code/ESP32Code.ino` into the refactor and authorized the
-  firmware 4.1.0 reliability changes. Do not flash hardware from repository
+  firmware 5.0.4 reliability changes. Do not flash hardware from repository
   implementation tasks.
 - Never read or modify `.env` files. Document variables by name and ask the
   operator to set values.
@@ -186,7 +186,7 @@ documentation. Public visibility is not a credential-remediation mechanism.
 ### Implemented and locally evidenced
 
 - R0-R2 foundation, additive migrations/contracts, and an independent fake ESP
-  with command, chunk, persistence, clock, schedule, and fleet behavior.
+  with command, large-message, persistence, clock, schedule, and fleet behavior.
 - R3 alert rule evaluation, delay state, open/ack/recover lifecycle,
   notification intents/outcomes, history API, loopback/HTTPS-guarded webhook
   adapter, optional one-attempt notification runtime composition, and built-in
@@ -222,7 +222,7 @@ documentation. Public visibility is not a credential-remediation mechanism.
   recoverable latest-backup-failure alerting, and an explicit-path storage CLI
   for backup/verify/restore/retention/archive/integrity.
 - R8 uses digest-pinned Mosquitto 2.0.22 in isolated Testcontainers networks.
-  Its transport/runtime suite covers the complete command/chunk/fault/restart
+  Its transport/runtime suite covers the complete command/payload/fault/restart
   matrix and asserts that captured broker traffic never leaves
   `test/aquarium/*`.
 - R12 runs 18 retry-free Chromium scenarios against production-built assets,
@@ -474,13 +474,13 @@ Acceptance:
 ### R2 — Complete the independent fake ESP package
 
 Current status: **implemented at unit level**. The independent actor/fleet,
-clock, persistence, chunking, command, schedule, and defect fixtures are present.
+clock, persistence, command, schedule, and defect fixtures are present.
 
 Effort: medium/large. Dependencies: R0. Suggested mode: ordinary; use higher
 reasoning only for firmware-semantic review.
 
 The fake must remain independent: it may not import controller parsers,
-reassembly, schedule compiler/evaluator/hash, or expected-response logic from
+wire parsing, schedule compiler/evaluator/hash, or expected-response logic from
 `@aquarium/esp-protocol` or `@aquarium/domain`. Shared neutral types are allowed
 only if they cannot share behavior.
 
@@ -501,8 +501,8 @@ Tasks:
   - The known cached-value and 32-bit timer failover defects (gate D2):
     flat-segment override expiry, PWM reattachment, zero-target schedule
     replacement, and near-rollover override timing.
-  - Chunk parsing/reassembly: partial, duplicate, out-of-order, invalid indexes,
-    total mismatch, 50/51, data truncation, and ten-second inactivity reset.
+  - Complete-message 5,120/5,121-byte boundaries and malformed payloads without
+    importing controller protocol behavior.
   - Delay, drop, malformed, duplicate response faults and reconnect behavior.
 - Add a narrow MQTT.js transport for fake actors. It must enforce explicit test
   topics and loopback/test-Docker brokers; no production escape hatch is needed
@@ -708,7 +708,7 @@ Tasks:
 - Make schedule/config delivery and refresh operations use bounded,
   priority-aware per-device lanes and persistent operation states. Keep one
   response-waiting operation per ESP, select interactive work before queued
-  background work, and publish each chunk sequence atomically.
+  background work, and publish each complete command atomically.
 
 Acceptance:
 
@@ -759,8 +759,9 @@ Acceptance (completed):
 
 Current status: **implemented**. The isolated, digest-pinned Mosquitto harness
 covers the required matrix and captures both allowed and forbidden namespaces.
-The current local suite passes 5/5, including cross-device progress and atomic
-chunk publication. Protected CI confirmation remains pending.
+The current local suite includes cross-device progress and single-message
+publication through the 5,120-byte command limit. Protected CI confirmation
+remains pending.
 
 Effort: large. Dependencies: D1, R2, R5-R7. Suggested mode: higher reasoning.
 
@@ -782,10 +783,10 @@ Required cases:
   reconnect, fake restart, controller restart, and broker restart.
 - Every command/response behavior including bare/targeted `clear` fixtures and
   analog read.
-- 256/257 UTF-8 bytes, 200-byte chunks, 50/51 chunks, 4095/4096 schedule
-  boundary, partial/duplicate/out-of-order/timeout frames.
+- 5,120/5,121 UTF-8 command boundaries plus the 4095/4096 schedule
+  boundary.
 - Per-device FIFO ordering, one response wait per ESP, bounded cross-device
-  concurrency, atomic chunk publication, and canonical name/ID batching.
+  concurrency, complete-message publication, and canonical name/ID batching.
 - Batch-local indexes across multiple devices.
 - Dropped/delayed/duplicate/malformed responses, device-local timeout/cooldown,
   attributable protocol-fault quarantine, reconciliation, and proof of no
@@ -1019,7 +1020,7 @@ Six CI validation jobs:
    namespace-safety assertion.
 4. `browser`: install pinned Chromium, build/start full stack, Playwright + axe,
    upload failure artifacts.
-5. `firmware`: compile firmware 4.1.0 with the pinned Arduino toolchain.
+5. `firmware`: compile firmware 5.0.4 with the pinned Arduino toolchain.
 6. `container`: BuildKit build, local amd64 smoke, ARM64 build/emulation smoke,
    Compose health, non-root/read-only/volume checks.
 
@@ -1121,7 +1122,7 @@ Create `docs/readiness-report.md` containing:
 Execution status:
 
 1. R0-R14 repository implementation is complete on the current branch.
-2. Firmware 4.1 and focused transport/scheduler/compiler evidence pass locally.
+2. Firmware 5.0.4 and focused transport/scheduler/compiler evidence pass locally.
 3. The pre-4.1 baseline historically passed real-Mosquitto 5/5, Playwright
    18/18 in three retry-free runs, 97 files/638 unit tests, 82 files/571
    critical tests, and protected PR/default-branch validation.

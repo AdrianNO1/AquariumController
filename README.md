@@ -3,7 +3,7 @@
 This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
 controller. The previous Python and Flask application remains under `.old/` as
 migration evidence. The supported ESP32 source is
-`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.2 is compiled and bundled
+`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.4 is compiled and bundled
 with the controller release.
 
 Historical pre-4.1 release evidence dated 2026-07-25 includes 97 files/638 unit
@@ -48,7 +48,8 @@ MQTT adapter. Mosquitto remains a separate process. The controller is
 deliberately not horizontally scalable because device queues, schedules, and
 state revisions need one owner. Within that process, firmware 4.1 request IDs
 support bounded per-device MQTT command lanes rather than one global
-response-waiting lane.
+response-waiting lane. Firmware 5.0.4 retains those request IDs and adds
+controller-managed pull OTA plus single-publication command delivery.
 
 The global state revision is the contiguous snapshot/SSE cursor. User mutations
 also serialize through a separate operator revision floor, so background device
@@ -175,7 +176,7 @@ npm run test:integration
 npm run test:e2e
 npm run build
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.2 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.4 .
 ```
 
 CI defines six validation jobs: static/unit, critical, real-Mosquitto

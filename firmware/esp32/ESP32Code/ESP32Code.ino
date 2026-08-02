@@ -34,7 +34,7 @@ const int MAX_PIN = 63;
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "5.0.2";
+const char* VERSION = "5.0.4";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
@@ -64,25 +64,6 @@ unsigned long lastNtpSyncCompletedAt = 0;
 
 JsonDocument globalDoc;
 
-// Chunking configuration
-#define MAX_CHUNK_SIZE 200
-#define MAX_CHUNKS 50
-#define CHUNK_TIMEOUT 10000  // 10 seconds timeout for receiving all chunks
-
-struct ChunkInfo {
-    char data[MAX_CHUNK_SIZE + 1]; // fixed-size buffer per chunk
-    bool received;
-};
-
-struct ChunkedMessage {
-    ChunkInfo chunks[MAX_CHUNKS];
-    int totalChunks;
-    unsigned long lastChunkTime;
-    bool complete;
-};
-
-ChunkedMessage currentMessage;
-
 // EEPROM configuration
 #define EEPROM_SIZE 512
 #define NAME_ADDR 0
@@ -93,7 +74,8 @@ ChunkedMessage currentMessage;
 #define ID_MAX_LENGTH 8
 #define SCHEDULE_UPDATE_INTERVAL 1000  // Check schedule every 1000ms
 #define SCHEDULE_ATTACH_RETRY_INTERVAL 60000
-#define MQTT_PACKET_BUFFER_SIZE 2048
+#define MQTT_MAX_COMMAND_PAYLOAD_SIZE 5120
+#define MQTT_PACKET_BUFFER_SIZE 6144
 #define MAX_REQUEST_ID_LENGTH 64
 #define MAX_LAST_ERROR_CODE_LENGTH 48
 #define MAX_LAST_ERROR_MESSAGE_LENGTH 160
@@ -2205,20 +2187,21 @@ void clearEEPROM() {
 
 void callback(char* topic, byte* payload, unsigned int length) {
 	Serial.println("Message received on topic: " + String(topic));
-	
-	String message;
-	for (int i = 0; i < length; i++) {
-		message += (char)payload[i];
+
+	if (length > MQTT_MAX_COMMAND_PAYLOAD_SIZE) {
+		Serial.println("MQTT command exceeded the 5120-byte payload limit; ignoring message");
+		return;
 	}
+
+	String message;
+	if (!message.reserve(length)) {
+		Serial.println("Could not allocate memory for MQTT command; ignoring message");
+		return;
+	}
+	message.concat(reinterpret_cast<const char*>(payload), length);
 	Serial.println("Message content: " + message);
 
 	if ((!TEST && String(topic) == "aquarium/command") || (TEST && String(topic) == "test/aquarium/command")) {
-		// Check if this is a chunked message
-		if (message.startsWith("chunk:")) {
-			handleChunkedMessage(message.substring(6));
-			return;
-		}
-		
 		if (message == "discover") {
 			Serial.println("Discover message received, announcing presence");
 			announcePresence();
@@ -2524,7 +2507,7 @@ void setup() {
         recordLastError(
             "mqtt_buffer_allocation_failed",
             "error",
-            "Could not allocate the 2048-byte MQTT packet buffer"
+            "Could not allocate the 6144-byte MQTT packet buffer"
         );
     } else {
         resolveLastError("mqtt_buffer_allocation_failed");
@@ -2616,9 +2599,6 @@ void loop() {
 		}
 	}
 
-	// Check for chunked message timeout
-	checkChunkTimeout();
-	
 	serviceTimeCheckpoint();
 	serviceLastErrorPersistence();
 
@@ -2802,114 +2782,6 @@ void checkOverwriteExpiries() {
     }
 }
 
-void handleChunkedMessage(String chunkData) {
-    // Parse chunk data: format is "index:total:isLast:data"
-    int firstColon = chunkData.indexOf(':');
-    int secondColon = chunkData.indexOf(':', firstColon + 1);
-    int thirdColon = chunkData.indexOf(':', secondColon + 1);
-    
-    if (firstColon == -1 || secondColon == -1 || thirdColon == -1) {
-        Serial.println("Invalid chunk format: " + chunkData);
-        return;
-    }
-    
-    int chunkIndex;
-    int totalChunks;
-    if (!parseBoundedDecimal(chunkData.substring(0, firstColon), MAX_CHUNKS - 1, chunkIndex) ||
-        !parseBoundedDecimal(chunkData.substring(firstColon + 1, secondColon), MAX_CHUNKS, totalChunks)) {
-        Serial.println("Invalid chunk number; ignoring message");
-        return;
-    }
-    String isLastValue = chunkData.substring(secondColon + 1, thirdColon);
-    bool isLast = isLastValue == "1";
-    String data = chunkData.substring(thirdColon + 1);
-
-    if (chunkIndex < 0 || chunkIndex >= MAX_CHUNKS ||
-        totalChunks < 1 || totalChunks > MAX_CHUNKS ||
-        chunkIndex >= totalChunks ||
-        (isLastValue != "0" && isLastValue != "1") ||
-        isLast != (chunkIndex == totalChunks - 1) ||
-        data.length() > MAX_CHUNK_SIZE) {
-        Serial.println("Invalid chunk metadata; ignoring message");
-        return;
-    }
-    
-    Serial.println("Received chunk " + String(chunkIndex + 1) + " of " + String(totalChunks) + 
-                  ", isLast: " + String(isLast) + ", size: " + String(data.length()) + " bytes");
-    
-    // Initialize or update chunked message
-    bool startsNewAssembly = chunkIndex == 0 || currentMessage.lastChunkTime == 0 ||
-        millis() - currentMessage.lastChunkTime > CHUNK_TIMEOUT;
-    if (!startsNewAssembly && totalChunks != currentMessage.totalChunks) {
-        Serial.println("Chunk total changed during assembly; resetting message");
-        for (int i = 0; i < MAX_CHUNKS; i++) {
-            currentMessage.chunks[i].data[0] = '\0';
-            currentMessage.chunks[i].received = false;
-        }
-        currentMessage.totalChunks = 0;
-        currentMessage.complete = false;
-        currentMessage.lastChunkTime = 0;
-        return;
-    }
-    if (startsNewAssembly) {
-        // Reset current message if this is the first chunk or if timeout occurred
-        Serial.println("Initializing new chunked message with " + String(totalChunks) + " chunks");
-        for (int i = 0; i < MAX_CHUNKS; i++) {
-            currentMessage.chunks[i].data[0] = '\0';
-            currentMessage.chunks[i].received = false;
-        }
-        currentMessage.totalChunks = totalChunks;
-        currentMessage.complete = false;
-        currentMessage.lastChunkTime = millis();
-    }
-    
-    // Store this chunk
-    if (chunkIndex < MAX_CHUNKS) {
-        strlcpy(currentMessage.chunks[chunkIndex].data, data.c_str(), sizeof(currentMessage.chunks[chunkIndex].data));
-        currentMessage.chunks[chunkIndex].received = true;
-        currentMessage.lastChunkTime = millis();
-        
-        // Check if we have all chunks
-        bool allReceived = true;
-        int receivedCount = 0;
-        for (int i = 0; i < totalChunks; i++) {
-            if (currentMessage.chunks[i].received) {
-                receivedCount++;
-            } else {
-                allReceived = false;
-            }
-        }
-        
-        Serial.println("Received " + String(receivedCount) + " of " + String(totalChunks) + " chunks");
-        
-        // If all chunks received, process the complete message
-        if (allReceived) {
-            Serial.println("All chunks received, assembling complete message");
-            String completeMessage = "";
-            for (int i = 0; i < totalChunks; i++) {
-                completeMessage += currentMessage.chunks[i].data;
-            }
-            
-            Serial.println("Complete message size: " + String(completeMessage.length()) + " bytes");
-            Serial.println("Processing complete message: " + completeMessage);
-            
-            // Process the complete message
-            processCompleteMessage(completeMessage);
-            
-            // Reset for next chunked message
-            for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data[0] = '\0';
-                currentMessage.chunks[i].received = false;
-            }
-            currentMessage.complete = true;
-            currentMessage.lastChunkTime = 0;
-            Serial.println("Chunked message processing complete");
-        }
-    } else {
-        Serial.println("Error: Chunk index " + String(chunkIndex) + " exceeds maximum chunks " + String(MAX_CHUNKS));
-    }
-}
-
 void processCompleteMessage(String message) {
     String requestId;
     if (!unwrapRequestEnvelope(message, requestId)) {
@@ -2962,23 +2834,6 @@ void processCompleteMessage(String message) {
             Serial.println("Publishing response to aquarium/response: " + responseStr);
             publishWithRetry("aquarium/response", responseStr.c_str());
             Serial.println("Published to aquarium/response");
-        }
-    }
-}
-
-void checkChunkTimeout() {
-    // Check if we have an incomplete chunked message that has timed out
-    if (!currentMessage.complete && currentMessage.lastChunkTime > 0) {
-        unsigned long currentTime = millis();
-        if (currentTime - currentMessage.lastChunkTime > CHUNK_TIMEOUT) {
-            Serial.println("Chunked message timed out, resetting");
-            // Reset the chunked message
-            for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data[0] = '\0';
-                currentMessage.chunks[i].received = false;
-            }
-            currentMessage.complete = false;
-            currentMessage.lastChunkTime = 0;
         }
     }
 }
