@@ -92,9 +92,17 @@ describe("schedule artifact affected-device projection", () => {
       }),
     ).resolves.toEqual(["device-a"]);
 
+    await database
+      .updateTable("mapping_profiles")
+      .set({ output_gain: 0.5 })
+      .where("id", "=", "profile-main")
+      .executeTakeFirstOrThrow();
     const projection = await repository.loadProjection("device-a");
     if (projection === null) throw new Error("Missing device projection");
+    expect(projection.outputGain).toBe(0.5);
+    expect(projection.hardwareProfileId).toBe("nodemcu-esp32s-v1.1");
     const compiled = compileDeviceScheduleArtifact(projection);
+    expect(compiled.payloadJson).toContain('"d":{"t":360,"p":25}');
     await repository.saveCompiledArtifact({
       deviceId: "device-a",
       sourceStateRevision: projection.sourceStateRevision,
@@ -645,7 +653,7 @@ async function seedNormalizedState(
         "mapping-secondary-light",
         "profile-secondary",
         "channel-light",
-        8,
+        13,
         0,
       ),
     ])

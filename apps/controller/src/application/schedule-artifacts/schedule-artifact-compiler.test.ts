@@ -11,6 +11,8 @@ describe("device schedule artifact compilation", () => {
       deviceId: "device-main",
       firmwareVersion: "4.0.0",
       reportedScheduleHash: "0",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
+      outputGain: 1,
       channels: [
         {
           mappingId: "mapping-pump",
@@ -85,6 +87,16 @@ describe("device schedule artifact compilation", () => {
         code: "invalid_mapping",
       }),
     );
+    expect(() =>
+      compileDeviceScheduleArtifact({
+        ...projection,
+        channels: [{ ...firstChannel, pin: 5 }],
+      }),
+    ).toThrowError(
+      expect.objectContaining<Partial<ScheduleArtifactCompilationError>>({
+        code: "invalid_mapping",
+      }),
+    );
   });
 });
 
@@ -109,11 +121,13 @@ function largeProjectionWithExpandedZeroes(
     deviceId: "device-large",
     firmwareVersion: "4.0.0",
     reportedScheduleHash: "0",
+    hardwareProfileId: "nodemcu-esp32s-v1.1",
+    outputGain: 1,
     channels: [
       {
         mappingId: "mapping-large",
         displayOrder: 0,
-        pin: 1,
+        pin: 4,
         channelId: "channel-large",
         channelKind: "light",
         throttlePercentage: 100,

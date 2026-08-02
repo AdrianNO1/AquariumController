@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hardwareProfileIdSchema } from "@aquarium/contracts";
 
 import {
   ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES,
@@ -10,15 +11,15 @@ import {
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.4";
+export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.5";
 export const MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION = "5.0.0";
 export const MINIMUM_PULL_OTA_FIRMWARE_VERSION =
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION;
 export const ESP_FIRMWARE_ARTIFACT = {
   version: CURRENT_ESP_FIRMWARE_VERSION,
-  fileName: "ESP32Code-5.0.4.bin",
-  sizeBytes: 1_172_144,
-  sha256: "4f1f1684d6f2fe93c7668cce2b11a56c7cb86881db08b447244f6026be30eeb7",
+  fileName: "ESP32Code-5.0.5.bin",
+  sizeBytes: 1_174_448,
+  sha256: "7f7f59d8bd4acb12d38c8836d390f49f1f3f3f7a0e644c6aee33b46d040476ea",
 } as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
@@ -90,6 +91,8 @@ export const espAnnouncementSchema = z
     res: z.number().int().min(1).max(16),
     status: z.string().min(1),
     version: z.string().min(1),
+    hardwareProfile: hardwareProfileIdSchema.optional(),
+    hardwareModel: z.string().min(1).max(256).optional(),
     scheduleHash: z.string().regex(/^\d+$/),
     outputsOff: z.boolean().optional(),
     outputs: espOutputStateSchema.optional(),

@@ -238,8 +238,8 @@ describe("controller snapshot repository", () => {
       status: "online",
     });
     expect(snapshot.firmware).toMatchObject({
-      currentVersion: "5.0.4",
-      sizeBytes: 1_172_144,
+      currentVersion: ESP_FIRMWARE_ARTIFACT.version,
+      sizeBytes: ESP_FIRMWARE_ARTIFACT.sizeBytes,
       fleetPolicy: null,
     });
     expect(snapshot.operations.items.map((operation) => operation.id)).toEqual([

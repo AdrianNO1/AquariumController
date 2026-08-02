@@ -1,9 +1,9 @@
 # Target architecture
 
-Status: implemented architecture, updated 2026-07-26. The protected evidence
+Status: implemented architecture, updated 2026-08-02. The protected evidence
 for source `886ed05be89a1abed8e076d91ce2802f5d5668dd` and its published digest is a
 historical pre-4.1 baseline recorded in the
-[readiness report](readiness-report.md). The current firmware 5.0.4 and
+[readiness report](readiness-report.md). The current firmware 5.0.5 and
 per-device-lane branch requires its own protected CI run, merge, and immutable
 image selection. Physical ESP flashing, Raspberry Pi deployment,
 production-data migration, and production configuration remain operator-run
@@ -21,7 +21,7 @@ The dashboard is local-network software with no SEO or server-rendering need,
 while the MQTT queue, five-second refresh, daily jobs, state revision, and
 shutdown sequence need one predictable owner. The controller must not be
 horizontally scaled: per-device command queues, schedules, and state revisions
-need one predictable owner. Firmware 5.0.4 request identifiers allow bounded
+need one predictable owner. Firmware 5.0.5 request identifiers allow bounded
 concurrency inside that owner without making multiple controller processes
 safe.
 
@@ -190,7 +190,7 @@ the application:
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `5.0.4` is the current release, while firmware `5.0.0` and newer is
+- Firmware `5.0.5` is the current release, while firmware `5.0.0` and newer is
   controller-compatible. A supported older release remains online with an
   update available. Firmware below `5.0.0` remains visible but is marked
   `firmware_unsupported`, excluded from actuator work, and shown with a
@@ -233,7 +233,7 @@ malformed, empty, or otherwise invalid response is attributable to that device
 and quarantines it as a protocol fault.
 
 The five-second host refresh and 120-second firmware overwrite are safety
-behavior. Firmware 4.1.0 uses rollover-safe elapsed-time expiry and invalidates
+behavior. Firmware 5.0.5 uses rollover-safe elapsed-time expiry and invalidates
 its scheduled-output cache after override expiry, PWM reattachment, and
 schedule replacement. The command wire continues to carry normalized 0-255 duty
 values. Firmware scales each value into the configured 1-16-bit LEDC range, and
@@ -252,23 +252,44 @@ commit per hour, and failed commits retry no more than hourly.
 Routine host refresh and manual PWM writes set `overwrite=true`. Each successful
 write renews a 120-second controller lease during which the ESP does not apply
 its own schedule to that pin; after Pi silence, local scheduling resumes using
-the ESP's current or persisted time estimate. Schedule activation is
+the ESP's current or persisted time estimate. The schedule artifact already
+contains the area multiplier and the selected mapping profile's output
+multiplier, so failover does not change intensity. Schedule activation is
 best-effort per pin. Attach/write/detach failures leave the affected pin safe,
 do not stop healthy pins, and queue a wear-limited diagnostic announcement.
 Diagnostic transitions are persisted in SPIFFS immediately for the first
 transition and then at most hourly, with failed MQTT announcements retried no
 more than once per minute.
 
-Independent fake tests pin these actuator semantics. Firmware 5.0.4 passes the
+Firmware identifies the deployed hardware as `nodemcu-esp32s-v1.1` / Ai-Thinker
+NodeMCU-32S V1.1. Mapping profiles declare a hardware profile and devices select
+one explicitly; names have no mapping semantics. Both controller and firmware
+allow PWM only on GPIO 4, 12-14, 16-19, 21-23, 25-27, 32, and 33. GPIO12 is
+retained for the proven production wiring, with an operator warning because it
+controls flash voltage while the ESP32 resets. Analog reads are limited to
+ADC1 pins 32-36 and 39 so Wi-Fi does not contend with ADC2.
+
+During upgrade, persisted mappings outside that PWM allowlist are preserved
+but disabled before snapshots are exposed. They cannot reach schedule or
+manual-output command generation, and the profile editor requires the operator
+to remove or remap them before the profile can be saved again.
+
+SPIFFS first mounts without formatting. A failed mount permits at most two
+persisted repair attempts: firmware explicitly formats and remounts, reports
+that the saved schedule was lost, and lets the controller restore it. If the
+repair-attempt counter cannot be persisted, firmware refuses to format. The
+legacy unauthenticated bare MQTT `clear` command no longer erases fleet EEPROM.
+
+Independent fake tests pin these actuator semantics. Firmware 5.0.5 passes the
 pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and PubSubClient
-2.8 build at 1,165,577 bytes of flash and 53,088 bytes of global RAM. Its
+2.8 build at 1,167,865 bytes of flash and 53,112 bytes of global RAM. Its
 single-message transport was physically verified at the 5,120-byte limit over
 the configured Mosquitto broker. Flashing every deployed ESP remains an
 external release action.
 
 ## Unknown actuator outcomes and reconciliation
 
-Firmware 5.0.4 response IDs prevent stale-response misattribution, but a failure
+Firmware 5.0.5 response IDs prevent stale-response misattribution, but a failure
 after QoS 0 publication still cannot prove whether the addressed ESP applied
 the command. The controller therefore never retries that ambiguous operation
 as though it were safely unsent. It persists the operation as terminal
@@ -372,8 +393,9 @@ hard pruning watermark.
 
 The storage model is relational first, not a JSON-document database.
 
-`state.db` contains normalized tables for control areas, mapping profiles,
-devices, outputs, throttles, channels, pin mappings, schedules, schedule points, control
+`state.db` contains normalized tables for control areas, hardware-specific
+mapping profiles, devices and their reported hardware identity, outputs,
+throttles, channels, pin mappings, schedules, schedule points, control
 operations, overrides, timers, sensors, switches, calibrations, alert rules and
 lifecycle state, revisions/outbox, import audit, compiled device artifacts,
 scheduler guards, alert delay state, and notification delivery intent.

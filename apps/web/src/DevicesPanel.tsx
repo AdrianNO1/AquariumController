@@ -298,6 +298,7 @@ export function DevicesPanel({
       {editing === null ? null : (
         <DeviceConfigurationDialog
           device={editing.device}
+          mappingProfiles={mappingProfiles}
           expectedRevision={editing.expectedRevision}
           refresh={refresh}
           onClose={() => setEditing(null)}
@@ -325,11 +326,13 @@ export function DevicesPanel({
 
 function DeviceConfigurationDialog({
   device,
+  mappingProfiles,
   expectedRevision,
   refresh,
   onClose,
 }: {
   readonly device: Device;
+  readonly mappingProfiles: readonly MappingProfile[];
   readonly expectedRevision: number;
   readonly refresh: () => void;
   readonly onClose: () => void;
@@ -341,13 +344,17 @@ function DeviceConfigurationDialog({
   const [resolution, setResolution] = useState(
     String(device.desired.pwmResolutionBits),
   );
+  const [mappingProfileId, setMappingProfileId] = useState(
+    device.mappingProfileId ?? "",
+  );
   const [closeRequested, setCloseRequested] = useState(false);
   const parsedFrequency = Number(frequency);
   const parsedResolution = Number(resolution);
   const fieldsChanged =
     name !== device.desired.name ||
     parsedFrequency !== device.desired.pwmFrequencyHz ||
-    parsedResolution !== device.desired.pwmResolutionBits;
+    parsedResolution !== device.desired.pwmResolutionBits ||
+    mappingProfileId !== (device.mappingProfileId ?? "");
   const reapply = !fieldsChanged && !configurationMatches(device);
   const request = useMemo<PatchDeviceConfigurationRequest>(
     () =>
@@ -357,6 +364,7 @@ function DeviceConfigurationDialog({
             name: device.desired.name,
             pwmFrequencyHz: device.desired.pwmFrequencyHz,
             pwmResolutionBits: device.desired.pwmResolutionBits,
+            mappingProfileId: device.mappingProfileId,
           }
         : {
             expectedRevision,
@@ -367,6 +375,9 @@ function DeviceConfigurationDialog({
             ...(parsedResolution === device.desired.pwmResolutionBits
               ? {}
               : { pwmResolutionBits: parsedResolution }),
+            ...(mappingProfileId === (device.mappingProfileId ?? "")
+              ? {}
+              : { mappingProfileId: mappingProfileId || null }),
           },
     [
       device,
@@ -374,6 +385,7 @@ function DeviceConfigurationDialog({
       name,
       parsedFrequency,
       parsedResolution,
+      mappingProfileId,
       reapply,
     ],
   );
@@ -459,6 +471,28 @@ function DeviceConfigurationDialog({
                   </option>
                 ),
               )}
+            </select>
+          </label>
+          <label className="field">
+            Pin mapping profile
+            <select
+              value={mappingProfileId}
+              onChange={(event) =>
+                setMappingProfileId(event.currentTarget.value)
+              }
+            >
+              <option value="">None</option>
+              {mappingProfiles
+                .filter(
+                  (profile) =>
+                    profile.hardwareProfileId ===
+                    device.reported.hardwareProfileId,
+                )
+                .map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.name}
+                  </option>
+                ))}
             </select>
           </label>
           {mutation.error === null ? null : (

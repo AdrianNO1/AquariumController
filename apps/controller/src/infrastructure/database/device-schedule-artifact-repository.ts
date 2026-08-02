@@ -1,6 +1,7 @@
 import {
   boundedTextSchema,
   canonicalUint32HashSchema,
+  hardwareProfileIdSchema,
   identifierSchema,
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
@@ -187,6 +188,11 @@ export class DeviceScheduleArtifactRepository implements DeviceScheduleArtifactS
         .orderBy("revision", "desc")
         .limit(1)
         .executeTakeFirst();
+      const mappingProfile = await transaction
+        .selectFrom("mapping_profiles")
+        .select(["hardware_profile_id", "output_gain"])
+        .where("id", "=", device.mapping_profile_id)
+        .executeTakeFirstOrThrow();
       const mappings = await transaction
         .selectFrom("pin_mappings")
         .selectAll()
@@ -247,6 +253,10 @@ export class DeviceScheduleArtifactRepository implements DeviceScheduleArtifactS
         deviceId: device.id,
         firmwareVersion: device.firmware_version,
         reportedScheduleHash: device.reported_schedule_hash,
+        hardwareProfileId: hardwareProfileIdSchema.parse(
+          mappingProfile.hardware_profile_id,
+        ),
+        outputGain: mappingProfile.output_gain,
         channels,
       };
     });

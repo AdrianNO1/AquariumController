@@ -145,7 +145,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
   it("runs independent device lanes with complete messages, local response indexes, and command fixtures", async () => {
     const alpha = await startActor("alpha", "Alpha", ALPHA_ID);
     const beta = await startActor("beta", "Beta", BETA_ID);
-    alpha.session.actor.setAnalogValue(7, 321);
+    alpha.session.actor.setAnalogValue(34, 321);
     const controller = await startTransport(1_000);
     await waitForDiscovery(controller, ALPHA_ID, BETA_ID);
     broker.clearPublications();
@@ -195,7 +195,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
       ping(BETA_ID),
       exact(`${ALPHA_ID} s 4 128 1`, ALPHA_ID, "s 4 128 1"),
       exact(`${BETA_ID} sync ${EPOCH_SECONDS}`, BETA_ID, `${EPOCH_SECONDS}`),
-      analogRead(ALPHA_ID, 7),
+      analogRead(ALPHA_ID, 34),
       exact(`${ALPHA_ID} e Renamed 6000 10`, ALPHA_ID, "Renamed 6000 10"),
       ping(ALPHA_ID),
     ]);
@@ -212,7 +212,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     expect(result.outcomes[4]).toMatchObject({ analogValue: 321 });
     const commandRequests = await capturedCorrelatedRequests(3);
     expect(commandRequests.map(({ payload }) => payload)).toEqual([
-      `${ALPHA_ID} p;${ALPHA_ID} s 4 128 1;${ALPHA_ID} r 7`,
+      `${ALPHA_ID} p;${ALPHA_ID} s 4 128 1;${ALPHA_ID} r 34`,
       `${BETA_ID} p;${BETA_ID} sync ${EPOCH_SECONDS}`,
       `${ALPHA_ID} e Renamed 6000 10;${ALPHA_ID} p`,
     ]);
@@ -231,7 +231,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
           responses: expect.arrayContaining([
             { index: 0, response: "o" },
             { index: 1, response: "s 4 128 1" },
-            { index: 2, response: "r 7 321" },
+            { index: 2, response: "r 34 321" },
           ]),
         }),
         expect.objectContaining({
@@ -286,14 +286,9 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     );
     broker.clearPublications();
     await broker.publish(topics.command, "clear");
-    await waitUntil(
-      () =>
-        capturedResponsePayloads().filter(
-          (payload) => payload === "EEPROM cleared",
-        ).length === 2,
-      "bare clear response from both actors",
-    );
-    expect(restartedAlpha.session.actor.identity().deviceName).toBe("Alpha");
+    await delay(100);
+    expect(capturedResponsePayloads()).toEqual([]);
+    expect(restartedAlpha.session.actor.identity().deviceName).toBe("Renamed");
     expect(beta.session.actor.identity().deviceName).toBe("Beta");
   }, 20_000);
 

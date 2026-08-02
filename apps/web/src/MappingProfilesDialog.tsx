@@ -1,9 +1,17 @@
 import type {
   Channel,
   ControlArea,
+  Device,
+  HardwareProfileId,
   MappingProfile,
   Output,
   PinMapping,
+} from "@aquarium/contracts";
+import {
+  HARDWARE_PROFILES,
+  hardwareProfileById,
+  isAllowedPwmPin,
+  NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
 } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +32,7 @@ export interface MappingProfilesDialogProps {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly profiles: readonly MappingProfile[];
+  readonly devices: readonly Device[];
   readonly channels: readonly Channel[];
   readonly outputs: readonly Output[];
   readonly controlAreas: readonly ControlArea[];
@@ -39,7 +48,7 @@ interface EditableMapping extends Omit<PinMapping, "target"> {
 
 interface MappingDraft {
   readonly name: string;
-  readonly deviceNamePrefix: string;
+  readonly hardwareProfileId: HardwareProfileId;
   readonly outputGain: number;
   readonly mappings: readonly EditableMapping[];
 }
@@ -62,6 +71,7 @@ export function MappingProfilesDialog({
   open,
   onClose,
   profiles,
+  devices,
   channels,
   outputs,
   controlAreas,
@@ -237,6 +247,7 @@ export function MappingProfilesDialog({
             key={selectedProfile?.id ?? `new-${newProfileId}`}
             profile={selectedProfile}
             profileId={selectedProfile?.id ?? newProfileId ?? ""}
+            devices={devices}
             channels={channels}
             outputs={outputs}
             controlAreas={controlAreas}
@@ -261,6 +272,7 @@ export function MappingProfilesDialog({
 interface MappingProfileEditorProps {
   readonly profile: MappingProfile | null;
   readonly profileId: string;
+  readonly devices: readonly Device[];
   readonly channels: readonly Channel[];
   readonly outputs: readonly Output[];
   readonly controlAreas: readonly ControlArea[];
@@ -280,6 +292,7 @@ interface MappingProfileEditorProps {
 function MappingProfileEditor({
   profile,
   profileId,
+  devices,
   channels,
   outputs,
   controlAreas,
@@ -298,7 +311,8 @@ function MappingProfileEditor({
   const original = useMemo<MappingDraft>(
     () => ({
       name: profile?.name ?? "",
-      deviceNamePrefix: profile?.deviceNamePrefix ?? "",
+      hardwareProfileId:
+        profile?.hardwareProfileId ?? NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
       outputGain: profile?.outputGain ?? 1,
       mappings: (profile?.mappings ?? []).map(toEditableMapping),
     }),
@@ -329,6 +343,16 @@ function MappingProfileEditor({
       ? expectedRevision
       : Math.max(deleteConflictRevision, expectedRevision);
   const validationErrors = validateDraft(draft);
+  const assignedDevices = devices.filter(
+    (device) => device.mappingProfileId === profileId,
+  );
+  const hardwareWarnings = hardwareProfileById(
+    draft.hardwareProfileId,
+  ).pinWarnings.filter((warning) =>
+    draft.mappings.some(
+      (mapping) => mapping.enabled && mapping.pin === warning.pin,
+    ),
+  );
   const targetOptions = useMemo(
     () => buildTargetOptions(channels, outputs, controlAreas, currentTypeKey),
     [channels, controlAreas, currentTypeKey, outputs],
@@ -341,14 +365,17 @@ function MappingProfileEditor({
           mapping.target.id === option.id,
       ),
   );
-  const availablePin = firstAvailablePin(draft.mappings);
+  const availablePin = firstAvailablePin(
+    draft.mappings,
+    draft.hardwareProfileId,
+  );
   const saveMutation = useMutation({
     retry: false,
     mutationFn: () =>
       replaceMappingProfile(profileId, {
         expectedRevision: saveExpectedRevision,
         name: draft.name,
-        deviceNamePrefix: draft.deviceNamePrefix,
+        hardwareProfileId: draft.hardwareProfileId,
         outputGain: draft.outputGain,
         mappings: draft.mappings.map(toPinMapping),
       }),
@@ -462,23 +489,23 @@ function MappingProfileEditor({
           />
         </label>
         <label>
-          Device-name prefix
-          <input
-            value={draft.deviceNamePrefix}
-            maxLength={256}
-            required
-            aria-describedby="mapping-prefix-help"
+          Hardware
+          <select
+            value={draft.hardwareProfileId}
             onChange={(event) =>
               applyDraft({
                 ...draft,
-                deviceNamePrefix: event.currentTarget.value,
+                hardwareProfileId: event.currentTarget
+                  .value as HardwareProfileId,
               })
             }
-          />
-          <small id="mapping-prefix-help">
-            Case-sensitive. Devices whose configured names start with this text
-            use the profile.
-          </small>
+          >
+            {HARDWARE_PROFILES.map((hardwareProfile) => (
+              <option key={hardwareProfile.id} value={hardwareProfile.id}>
+                {hardwareProfile.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Output multiplier
@@ -552,6 +579,19 @@ function MappingProfileEditor({
         <ul className="validation-list" aria-label="Profile validation errors">
           {validationErrors.map((message) => (
             <li key={message}>{message}</li>
+          ))}
+        </ul>
+      )}
+      {assignedDevices.length === 0 || hardwareWarnings.length === 0 ? null : (
+        <ul
+          className="validation-list hardware-warning-list"
+          aria-label="Profile hardware warnings"
+        >
+          {hardwareWarnings.map((warning) => (
+            <li key={warning.pin}>
+              {warning.message} Assigned ESP32 devices:{" "}
+              {assignedDevices.map((device) => device.desired.name).join(", ")}.
+            </li>
           ))}
         </ul>
       )}
@@ -945,15 +985,9 @@ function mappingDraftSignature(draft: MappingDraft): string {
 function validateDraft(draft: MappingDraft): readonly string[] {
   const errors: string[] = [];
   const name = draft.name;
-  const prefix = draft.deviceNamePrefix;
   if (name.length === 0 || name.length > 256 || name.trim() !== name) {
     errors.push(
       "Profile name is required and cannot have leading or trailing spaces.",
-    );
-  }
-  if (prefix.length === 0 || prefix.length > 256 || prefix.trim() !== prefix) {
-    errors.push(
-      "Device-name prefix is required and cannot have leading or trailing spaces.",
     );
   }
   if (
@@ -970,6 +1004,10 @@ function validateDraft(draft: MappingDraft): readonly string[] {
     if (!Number.isInteger(mapping.pin) || mapping.pin < 0 || mapping.pin > 63) {
       errors.push(
         `Mapping ${index + 1} needs a whole-number pin from 0 to 63.`,
+      );
+    } else if (!isAllowedPwmPin(draft.hardwareProfileId, mapping.pin)) {
+      errors.push(
+        `GPIO${mapping.pin} is not an allowed PWM output on ${hardwareProfileById(draft.hardwareProfileId).label}.`,
       );
     } else if (pins.has(mapping.pin)) {
       errors.push(`Pin ${mapping.pin} is used more than once.`);
@@ -993,9 +1031,10 @@ function validateDraft(draft: MappingDraft): readonly string[] {
 
 function firstAvailablePin(
   mappings: readonly EditableMapping[],
+  hardwareProfileId: HardwareProfileId,
 ): number | null {
   const usedPins = new Set(mappings.map((mapping) => mapping.pin));
-  for (let pin = 0; pin <= 63; pin += 1) {
+  for (const pin of hardwareProfileById(hardwareProfileId).pwmPins) {
     if (!usedPins.has(pin)) return pin;
   }
   return null;

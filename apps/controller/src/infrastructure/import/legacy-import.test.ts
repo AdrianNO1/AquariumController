@@ -258,12 +258,20 @@ describe("legacy JSON import", () => {
           display_order: 1,
         },
       ]);
-      expect(
-        await database
-          .selectFrom("mapping_profiles")
-          .select(["device_name_prefix", "output_gain"])
-          .executeTakeFirstOrThrow(),
-      ).toEqual({ device_name_prefix: "mainLys", output_gain: 0.7 });
+      const importedProfile = await database
+        .selectFrom("mapping_profiles")
+        .select([
+          "id",
+          "device_name_prefix",
+          "hardware_profile_id",
+          "output_gain",
+        ])
+        .executeTakeFirstOrThrow();
+      expect(importedProfile).toMatchObject({
+        hardware_profile_id: "nodemcu-esp32s-v1.1",
+        output_gain: 0.7,
+      });
+      expect(importedProfile.device_name_prefix).toBe(importedProfile.id);
       expect(
         await database
           .selectFrom("throttles")

@@ -137,17 +137,17 @@ describe("independent fake ESP schedule behavior", () => {
 
   it("extends overrides and turns unscheduled pins off at exact expiry", () => {
     const harness = createConnectedHarness();
-    harness.publishCommand(`${DEVICE_ID} s 5 200 1`);
+    harness.publishCommand(`${DEVICE_ID} s 12 200 1`);
     harness.clock.advanceBy(119_999);
-    harness.publishCommand(`${DEVICE_ID} s 5 201 1`);
+    harness.publishCommand(`${DEVICE_ID} s 12 201 1`);
     harness.clock.advanceBy(119_999);
-    expect(harness.actor("alpha").pinSnapshot(5)).toMatchObject({
+    expect(harness.actor("alpha").pinSnapshot(12)).toMatchObject({
       outputValue: 201,
       overwritten: true,
     });
     harness.clock.advanceBy(1);
     harness.runLoops();
-    expect(harness.actor("alpha").pinSnapshot(5)).toMatchObject({
+    expect(harness.actor("alpha").pinSnapshot(12)).toMatchObject({
       outputValue: 0,
       overwritten: false,
     });
@@ -172,19 +172,19 @@ describe("independent fake ESP schedule behavior", () => {
     harness.clock.advanceBy(uint32Maximum - 60_001);
     harness.runLoops();
 
-    harness.publishCommand(`${DEVICE_ID} s 5 200 1`);
-    expect(harness.actor("alpha").pinSnapshot(5)).toMatchObject({
+    harness.publishCommand(`${DEVICE_ID} s 12 200 1`);
+    expect(harness.actor("alpha").pinSnapshot(12)).toMatchObject({
       outputValue: 200,
       overwritten: true,
       overwriteExpiryMilliseconds: 59_999,
     });
 
     harness.advanceBy(119_800);
-    expect(harness.actor("alpha").pinSnapshot(5).overwritten).toBe(true);
+    expect(harness.actor("alpha").pinSnapshot(12).overwritten).toBe(true);
     harness.advanceBy(199);
-    expect(harness.actor("alpha").pinSnapshot(5).overwritten).toBe(true);
+    expect(harness.actor("alpha").pinSnapshot(12).overwritten).toBe(true);
     harness.advanceBy(1);
-    expect(harness.actor("alpha").pinSnapshot(5)).toMatchObject({
+    expect(harness.actor("alpha").pinSnapshot(12)).toMatchObject({
       outputValue: 0,
       overwritten: false,
     });
@@ -219,7 +219,7 @@ describe("independent fake ESP schedule behavior", () => {
     ]);
     harness.connectAll();
     const schedule =
-      '{"c":[{"o":4,"t":108,"l":[{"s":{"t":0,"p":50},"d":{"t":1439,"p":50}}]},{"o":5,"t":108,"l":[{"s":{"t":0,"p":50},"d":{"t":1439,"p":50}}]}],"syncTime":1735689600}';
+      '{"c":[{"o":4,"t":108,"l":[{"s":{"t":0,"p":50},"d":{"t":1439,"p":50}}]},{"o":12,"t":108,"l":[{"s":{"t":0,"p":50},"d":{"t":1439,"p":50}}]}],"syncTime":1735689600}';
 
     harness.publishCommand(`${DEVICE_ID} sc ${schedule}`);
     harness.publishCommand(`${DEVICE_ID} sync 1735689600`);
@@ -230,7 +230,7 @@ describe("independent fake ESP schedule behavior", () => {
       attached: false,
       outputValue: 0,
     });
-    expect(harness.actor("alpha").pinSnapshot(5)).toMatchObject({
+    expect(harness.actor("alpha").pinSnapshot(12)).toMatchObject({
       attached: true,
       outputValue: 127,
     });
@@ -291,11 +291,11 @@ describe("independent fake ESP schedule behavior", () => {
         key: "alpha",
         deviceName: "Alpha",
         deviceId: DEVICE_ID,
-        pinAttachmentFailures: [9],
+        pinAttachmentFailures: [12],
       },
     ]);
     harness.connectAll();
-    harness.publishCommand(`${DEVICE_ID} s 9 128 1`);
+    harness.publishCommand(`${DEVICE_ID} s 12 128 1`);
     harness.publishCommand(`${DEVICE_ID} sc ${ZERO_SCHEDULE}`);
     harness.publishCommand(`${DEVICE_ID} sync 1735689600`);
 
@@ -305,7 +305,7 @@ describe("independent fake ESP schedule behavior", () => {
     expect(latestAnnouncement(harness)).toMatchObject({
       lastError: {
         code: "pin_attach_failed",
-        message: "LEDC attach failed on pin 9",
+        message: "LEDC attach failed on pin 12",
         sequence: 1,
         active: true,
       },

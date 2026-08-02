@@ -231,7 +231,7 @@ describe("controller contracts", () => {
     const profile = {
       id: "profile_main",
       name: "Main",
-      deviceNamePrefix: "Main",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       outputGain: 0.7,
       createdAt: now,
       updatedAt: now,
@@ -267,6 +267,18 @@ describe("controller contracts", () => {
             pin: 13,
           },
         ],
+      }).success,
+    ).toBe(false);
+    expect(
+      mappingProfileSchema.safeParse({
+        ...profile,
+        mappings: [{ ...profile.mappings[0], pin: 6, enabled: false }],
+      }).success,
+    ).toBe(true);
+    expect(
+      mappingProfileSchema.safeParse({
+        ...profile,
+        mappings: [{ ...profile.mappings[0], pin: 6, enabled: true }],
       }).success,
     ).toBe(false);
   });
@@ -339,6 +351,8 @@ describe("controller contracts", () => {
         outputsOff: false,
         outputs: [{ pin: 16, valuePercentage: 40 }],
         ota: null,
+        hardwareProfileId: "nodemcu-esp32s-v1.1",
+        hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
       },
       firmwareUpdate: null,
       status: "online",
@@ -638,6 +652,8 @@ describe("controller contracts", () => {
         outputsOff: null,
         outputs: [],
         ota: null,
+        hardwareProfileId: null,
+        hardwareModel: null,
       },
       firmwareUpdate: null,
       status: "unknown",
@@ -813,6 +829,8 @@ describe("controller contracts", () => {
         outputsOff: true,
         outputs: [],
         ota: null,
+        hardwareProfileId: "nodemcu-esp32s-v1.1",
+        hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
       },
       firmwareUpdate: null,
       status: "online",
@@ -864,19 +882,19 @@ describe("controller contracts", () => {
     const mappingRequest = {
       expectedRevision: 0,
       name: "Primary",
-      deviceNamePrefix: "Tank",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       outputGain: 1,
       mappings: [
         {
           id: "mapping_1",
-          pin: 1,
+          pin: 4,
           displayOrder: 0,
           enabled: true,
           target: { kind: "channel", id: "channel_1" },
         },
         {
           id: "mapping_2",
-          pin: 1,
+          pin: 4,
           displayOrder: 1,
           enabled: true,
           target: { kind: "channel", id: "channel_1" },

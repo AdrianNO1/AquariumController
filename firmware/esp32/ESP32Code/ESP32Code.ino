@@ -31,10 +31,21 @@ const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;    // Don't change without altering manager.py
 const int MIN_PIN = 0;
 const int MAX_PIN = 63;
+const char* HARDWARE_PROFILE = "nodemcu-esp32s-v1.1";
+const char* HARDWARE_MODEL = "Ai-Thinker NodeMCU-32S V1.1";
+// Conservative production outputs: GPIO0/2/5/15 are reset strapping pins,
+// GPIO1/3 are the serial console, GPIO6-11 drive flash, and GPIO34-39 are
+// input-only. GPIO12 is the sole strapping-pin exception because it is already
+// deployed and its attached driver circuit is known not to pull it high at
+// reset; see isAllowedPwmPin() for the replacement-wiring warning.
+const int ALLOWED_PWM_PINS[] = {
+    4, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33
+};
+const int ALLOWED_ANALOG_INPUT_PINS[] = {32, 33, 34, 35, 36, 39};
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "5.0.4";
+const char* VERSION = "5.0.5";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
@@ -182,6 +193,7 @@ struct ScheduleAttachResult {
 
 FirmwareLastError lastError = {"", "", "", 0, false, 0};
 bool spiffsAvailable = false;
+bool spiffsReformattedThisBoot = false;
 bool lastErrorPersistenceDirty = false;
 bool lastErrorPersistedThisBoot = false;
 bool lastErrorPersistenceFailed = false;
@@ -555,6 +567,10 @@ void resolveLastErrorForPin(const String& code, int pin) {
 }
 
 bool storeSchedule(const String& schedule) {
+    if (!spiffsAvailable) {
+        Serial.println("Cannot save schedule because SPIFFS is unavailable");
+        return false;
+    }
     const char* currentPath = "/schedule.json";
     const char* nextPath = "/schedule.next";
     const char* previousPath = "/schedule.previous";
@@ -609,6 +625,10 @@ bool storeSchedule(const String& schedule) {
 }
 
 String loadSchedule() {
+    if (!spiffsAvailable) {
+        Serial.println("Cannot load schedule because SPIFFS is unavailable");
+        return "";
+    }
     const char* schedulePath = "/schedule.json";
     if (!SPIFFS.exists(schedulePath)) {
         if (!SPIFFS.exists("/schedule.previous") || !SPIFFS.exists("/schedule.next")) {
@@ -663,8 +683,33 @@ int getScheduledValue(JsonArray& links, int currentMinute) {
     return 0;
 }
 
-bool isValidPin(int pin) {
-    return pin >= MIN_PIN && pin <= MAX_PIN;
+bool pinAppearsIn(const int* pins, size_t count, int pin) {
+    for (size_t index = 0; index < count; index++) {
+        if (pins[index] == pin) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isAllowedPwmPin(int pin) {
+    // GPIO12 is an ESP32 flash-voltage strapping pin. It is intentionally
+    // allowed because the deployed aquarium driver wiring is proven not to
+    // pull it high during reset. Replacement circuits must preserve that.
+    return pinAppearsIn(
+        ALLOWED_PWM_PINS,
+        sizeof(ALLOWED_PWM_PINS) / sizeof(ALLOWED_PWM_PINS[0]),
+        pin
+    );
+}
+
+bool isAllowedAnalogInputPin(int pin) {
+    return pinAppearsIn(
+        ALLOWED_ANALOG_INPUT_PINS,
+        sizeof(ALLOWED_ANALOG_INPUT_PINS) /
+            sizeof(ALLOWED_ANALOG_INPUT_PINS[0]),
+        pin
+    );
 }
 
 bool isValidDeviceName(const String& name) {
@@ -1003,7 +1048,7 @@ bool schedulePinsAreValid(JsonDocument& doc) {
             return false;
         }
         JsonVariant pinValue = channel["o"];
-        if (!pinValue.is<int>() || !isValidPin(pinValue.as<int>())) {
+        if (!pinValue.is<int>() || !isAllowedPwmPin(pinValue.as<int>())) {
             return false;
         }
         JsonVariant typeValue = channel["t"];
@@ -1816,6 +1861,8 @@ String buildPresenceMessage() {
 	doc["id"] = deviceId;
 	doc["status"] = "online";
   	doc["version"] = VERSION;
+	doc["hardwareProfile"] = HARDWARE_PROFILE;
+	doc["hardwareModel"] = HARDWARE_MODEL;
 	doc["outputsOff"] = allOutputsAreOff();
 	JsonArray outputs = doc["outputs"].to<JsonArray>();
 	for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
@@ -1870,16 +1917,28 @@ String buildPresenceMessage() {
 	return message;
 }
 
+void finishPublishedAnnouncement() {
+	diagnosticAnnouncementPending = false;
+	diagnosticAnnouncementAttempted = false;
+	telemetryAnnouncementPending = false;
+	if (
+		spiffsReformattedThisBoot &&
+		lastError.code == "spiffs_reformatted" &&
+		lastError.active
+	) {
+		spiffsReformattedThisBoot = false;
+		resolveLastError("spiffs_reformatted");
+	}
+}
+
 bool announcePresence() {
 	String message = buildPresenceMessage();
 	bool published = TEST
 		? publishWithRetry("test/aquarium/announce", message.c_str())
 		: publishWithRetry("aquarium/announce", message.c_str());
 	if (published) {
-		diagnosticAnnouncementPending = false;
-		diagnosticAnnouncementAttempted = false;
-		telemetryAnnouncementPending = false;
 		Serial.println("Announced presence: " + message);
+		finishPublishedAnnouncement();
 	}
 	return published;
 }
@@ -1910,10 +1969,8 @@ void serviceDiagnosticAnnouncement() {
 		? "test/aquarium/announce"
 		: "aquarium/announce";
 	if (client.publish(topic, message.c_str())) {
-		diagnosticAnnouncementPending = false;
-		diagnosticAnnouncementAttempted = false;
-		telemetryAnnouncementPending = false;
 		Serial.println("Published queued diagnostic announcement: " + message);
+		finishPublishedAnnouncement();
 	} else {
 		Serial.println("Queued diagnostic announcement publish failed; retry remains pending");
 	}
@@ -1984,7 +2041,7 @@ String handleCommand(String command, String args) {
 			Serial.println("Pin: " + String(pin));
 			Serial.println("Value: " + String(value));
 			Serial.println("Overwrite: " + String(overwrite));
-			if (!isValidPin(pin)) {
+			if (!isAllowedPwmPin(pin)) {
 				response = "E: Invalid pin";
 			} else if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
 				const int pwmValue = scaleNormalizedPwmValue(value, resolution);
@@ -2164,7 +2221,7 @@ String handleCommand(String command, String args) {
             response = "E: Invalid arguments";
         } else if (*cursor != '\0') {
             response = "E: Metadata not supported";
-        } else if (!isValidPin(pin)) {
+        } else if (!isAllowedAnalogInputPin(pin)) {
             response = "E: Invalid pin";
         } else if (attachedPins[pin]) {
             response = "E: Pin is configured as output";
@@ -2176,13 +2233,6 @@ String handleCommand(String command, String args) {
 	}
 
 	return response;
-}
-
-void clearEEPROM() {
-    for (int i = 0; i < EEPROM_SIZE; i++) {
-        EEPROM.write(i, 0);
-    }
-    EEPROM.commit();
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -2205,18 +2255,6 @@ void callback(char* topic, byte* payload, unsigned int length) {
 		if (message == "discover") {
 			Serial.println("Discover message received, announcing presence");
 			announcePresence();
-			return;
-		}
-
-		if (message == "clear") {
-			Serial.println("Clearing EEPROM");
-			clearEEPROM();
-			initializeEEPROM();
-			if (TEST) {
-				publishWithRetry("test/aquarium/response", "EEPROM cleared");
-			} else {
-				publishWithRetry("aquarium/response", "EEPROM cleared");
-			}
 			return;
 		}
 
@@ -2481,6 +2519,52 @@ int getCurrentMinuteOfDay() {
     return timeinfo.tm_hour * 60 + timeinfo.tm_min;
 }
 
+bool mountSpiffsWithRecovery() {
+    const char* repairFailureKey = "fsRepairFails";
+    const unsigned char maximumRepairFailures = 2;
+    Preferences preferences;
+    const bool preferencesAvailable = preferences.begin("aquarium", false);
+
+    if (SPIFFS.begin(false)) {
+        if (preferencesAvailable && preferences.isKey(repairFailureKey)) {
+            preferences.remove(repairFailureKey);
+        }
+        if (preferencesAvailable) {
+            preferences.end();
+        }
+        return true;
+    }
+
+    if (!preferencesAvailable) {
+        Serial.println("SPIFFS repair counter is unavailable; refusing an unbounded format attempt");
+        return false;
+    }
+
+    unsigned char repairFailures = preferences.getUChar(repairFailureKey, 0);
+    if (repairFailures >= maximumRepairFailures) {
+        Serial.println("SPIFFS automatic repair limit reached");
+        if (preferencesAvailable) {
+            preferences.end();
+        }
+        return false;
+    }
+    preferences.putUChar(repairFailureKey, repairFailures + 1);
+
+    Serial.println("SPIFFS mount failed; formatting the filesystem once");
+    SPIFFS.end();
+    const bool recovered = SPIFFS.format() && SPIFFS.begin(false);
+    if (recovered) {
+        spiffsReformattedThisBoot = true;
+        if (preferencesAvailable) {
+            preferences.remove(repairFailureKey);
+        }
+    }
+    if (preferencesAvailable) {
+        preferences.end();
+    }
+    return recovered;
+}
+
 void setup() {
 	Serial.begin(115200);
 	Serial.println("\nStarting up...");
@@ -2494,12 +2578,24 @@ void setup() {
 	initializeEEPROM();
 	loadTimeInfo(); // Load time info from EEPROM
 
-    spiffsAvailable = SPIFFS.begin(true);
+    spiffsAvailable = mountSpiffsWithRecovery();
     if (!spiffsAvailable) {
         Serial.println("SPIFFS initialization failed!");
+        recordLastError(
+            "spiffs_mount_failed",
+            "error",
+            "SPIFFS could not be mounted or repaired"
+        );
     } else {
         Serial.println("SPIFFS initialized successfully");
         loadLastError();
+        if (spiffsReformattedThisBoot) {
+            recordLastError(
+                "spiffs_reformatted",
+                "warning",
+                "SPIFFS was reformatted after a mount failure; the controller must restore the schedule"
+            );
+        }
     }
 
     if (!client.setBufferSize(MQTT_PACKET_BUFFER_SIZE)) {

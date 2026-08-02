@@ -20,6 +20,11 @@ import {
   positiveSafeIntegerSchema,
   retentionClassSchema,
 } from "./primitives.js";
+import {
+  hardwareProfileById,
+  hardwareProfileIdSchema,
+  isAllowedPwmPin,
+} from "./hardware-profiles.js";
 
 export const controlAreaSchema = z.strictObject({
   slug: controlAreaSlugSchema,
@@ -139,7 +144,7 @@ export const mappingProfileSchema = z
   .strictObject({
     id: identifierSchema,
     name: boundedTextSchema,
-    deviceNamePrefix: boundedTextSchema,
+    hardwareProfileId: hardwareProfileIdSchema,
     outputGain: gainSchema,
     createdAt: isoTimestampSchema,
     updatedAt: isoTimestampSchema,
@@ -166,6 +171,16 @@ export const mappingProfileSchema = z
       }
       pins.add(mapping.pin);
       targets.add(targetKey);
+      if (
+        mapping.enabled &&
+        !isAllowedPwmPin(profile.hardwareProfileId, mapping.pin)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["mappings", index, "pin"],
+          message: `GPIO${mapping.pin} is not an allowed PWM output on ${hardwareProfileById(profile.hardwareProfileId).label}`,
+        });
+      }
     }
   });
 
@@ -257,6 +272,8 @@ const reportedDeviceConfigurationSchema = z.strictObject({
   outputsOff: z.boolean().nullable(),
   outputs: z.array(reportedOutputStateSchema).max(64),
   ota: reportedOtaStateSchema.nullable(),
+  hardwareProfileId: hardwareProfileIdSchema.nullable(),
+  hardwareModel: boundedTextSchema.nullable(),
 });
 
 export const deviceSchema = z.strictObject({
@@ -1130,26 +1147,6 @@ export const controllerSnapshotSchema = z
         });
       }
     }
-    for (const [index, profile] of snapshot.mappingProfiles.entries()) {
-      for (
-        let otherIndex = index + 1;
-        otherIndex < snapshot.mappingProfiles.length;
-        otherIndex += 1
-      ) {
-        const other = snapshot.mappingProfiles[otherIndex];
-        if (
-          other !== undefined &&
-          (profile.deviceNamePrefix.startsWith(other.deviceNamePrefix) ||
-            other.deviceNamePrefix.startsWith(profile.deviceNamePrefix))
-        ) {
-          context.addIssue({
-            code: "custom",
-            path: ["mappingProfiles", otherIndex, "deviceNamePrefix"],
-            message: "Mapping profile prefixes must not overlap",
-          });
-        }
-      }
-    }
     if ((snapshot.revision === 0) !== (snapshot.committedAt === null)) {
       context.addIssue({
         code: "custom",
@@ -1352,7 +1349,7 @@ export const replaceMappingProfileRequestSchema = z
   .strictObject({
     expectedRevision: nonnegativeSafeIntegerSchema,
     name: boundedTextSchema,
-    deviceNamePrefix: boundedTextSchema,
+    hardwareProfileId: hardwareProfileIdSchema,
     outputGain: gainSchema,
     mappings: z.array(pinMappingSchema).max(64),
   })
@@ -1377,6 +1374,13 @@ export const replaceMappingProfileRequestSchema = z
       }
       pins.add(mapping.pin);
       targets.add(targetKey);
+      if (!isAllowedPwmPin(request.hardwareProfileId, mapping.pin)) {
+        context.addIssue({
+          code: "custom",
+          path: ["mappings", index, "pin"],
+          message: `GPIO${mapping.pin} is not an allowed PWM output on ${hardwareProfileById(request.hardwareProfileId).label}`,
+        });
+      }
     }
   });
 
@@ -1394,12 +1398,14 @@ export const patchDeviceConfigurationRequestSchema = z
       .optional(),
     pwmFrequencyHz: pwmFrequencyHzSchema.optional(),
     pwmResolutionBits: pwmResolutionBitsSchema.optional(),
+    mappingProfileId: identifierSchema.nullable().optional(),
   })
   .superRefine((request, context) => {
     if (
       request.name === undefined &&
       request.pwmFrequencyHz === undefined &&
-      request.pwmResolutionBits === undefined
+      request.pwmResolutionBits === undefined &&
+      request.mappingProfileId === undefined
     ) {
       context.addIssue({
         code: "custom",

@@ -277,7 +277,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         transaction
           .selectFrom("mapping_profiles")
           .selectAll()
-          .orderBy("device_name_prefix", "asc")
+          .orderBy("name", "asc")
           .orderBy("id", "asc")
           .execute(),
         transaction
@@ -419,7 +419,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
       const mappingProfiles = profileRows.map((profile) => ({
         id: profile.id,
         name: profile.name,
-        deviceNamePrefix: profile.device_name_prefix,
+        hardwareProfileId: profile.hardware_profile_id,
         outputGain: profile.output_gain,
         createdAt: toIsoTimestamp(
           profile.created_at_ms,
@@ -512,6 +512,8 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
                     progress: otaState.progress,
                     error: otaState.error ?? null,
                   },
+            hardwareProfileId: device.reported_hardware_profile_id,
+            hardwareModel: device.reported_hardware_model,
           },
           firmwareUpdate:
             firmwareUpdate === undefined

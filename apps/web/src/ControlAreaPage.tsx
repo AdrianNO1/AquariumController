@@ -473,6 +473,7 @@ function LoadedControlArea({
         open={mappingsOpen}
         onClose={() => setMappingsOpen(false)}
         profiles={model.mappingProfiles}
+        devices={model.devices}
         channels={allChannels}
         outputs={allOutputs}
         controlAreas={allAreas}

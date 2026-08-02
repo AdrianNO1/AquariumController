@@ -64,6 +64,8 @@ export interface DevicesTable {
   reported_pwm_frequency_hz: OptionalNullable<number>;
   reported_pwm_resolution_bits: OptionalNullable<number>;
   firmware_version: OptionalNullable<string>;
+  reported_hardware_profile_id: OptionalNullable<string>;
+  reported_hardware_model: OptionalNullable<string>;
   reported_schedule_hash: OptionalNullable<string>;
   output_state_json: OptionalNullable<JsonText>;
   ota_status_json: OptionalNullable<JsonText>;
@@ -102,7 +104,9 @@ export interface FirmwareRolloutPolicyTable {
 export interface MappingProfilesTable {
   id: string;
   name: string;
+  /** Retained only so existing databases can migrate without rebuilding FK parents. */
   device_name_prefix: string;
+  hardware_profile_id: InsertOptional<string>;
   output_gain: InsertOptional<number>;
   created_at_ms: number;
   updated_at_ms: number;

@@ -1,9 +1,9 @@
 # AquariumController remaining-work plan
 
-Updated: 2026-07-26
+Updated: 2026-08-02
 
 Purpose: execution record and handoff plan. R0-R14 repository implementation is
-complete, including firmware 5.0.4, correlated requests, bounded per-device lanes,
+complete, including firmware 5.0.5, correlated requests, bounded per-device lanes,
 latest-only routine PWM coalescing, and device-local failure handling. The
 current branch still needs protected CI, merge, default-branch validation, image
 publication, and immutable digest selection. Production migration, ESP32
@@ -34,7 +34,7 @@ Repository work is complete only when the only remaining actions are:
 2. Confirm the exposed credential was revoked, have GitHub Support purge the
    unreachable historical object/cached view, resolve its open alert as
    `revoked`, and keep secret scanning and push protection enabled.
-3. Flash and identify firmware 5.0.4 on every production ESP32, then complete a
+3. Flash and identify firmware 5.0.5 on every production ESP32, then complete a
    controlled hardware/failover soak.
 4. Configure the Pi's production MQTT/database/archive/backup paths and
    credentials outside the repository.
@@ -74,7 +74,7 @@ Every delegated task must follow these rules:
 - Treat legacy Python/templates and historical files under `.old/**` as
   read-only. The user explicitly promoted
   `.old/slaveCode/ESP32Code/ESP32Code.ino` into the refactor and authorized the
-  firmware 5.0.4 reliability changes. Do not flash hardware from repository
+  firmware 5.0.5 reliability changes. Do not flash hardware from repository
   implementation tasks.
 - Never read or modify `.env` files. Document variables by name and ask the
   operator to set values.
@@ -488,8 +488,8 @@ Tasks:
 
 - Add comprehensive fake-actor unit tests for:
   - Discovery and announcement fields/hash.
-  - `s`, `p`, `e`, `sc`, `sync`, `r`, bare `clear`, targeted `clear`, and
-    unknown/other-target commands.
+  - `s`, `p`, `e`, `sc`, `sync`, `r`, ignored bare `clear`, rejected targeted
+    `clear`, and unknown/other-target commands.
   - Batch-local indexes across multiple actors.
   - Logical pin state, analog values, configuration bounds/errors.
   - EEPROM/time and SPIFFS/schedule persistence across actor reconstruction.
@@ -610,9 +610,11 @@ Suggested endpoints (names may be adjusted once, then frozen):
 - `GET/POST/PATCH /api/alert-rules...`
 - `POST /api/alerts/:alertId/acknowledge`
 
-Mapping validation must reject empty/duplicate/overlapping prefixes, duplicate
-pins/channels, invalid pins, and ambiguous matches. Schedule validation must
-report all graph errors and enforce conservative serialized payload capacity.
+Mapping validation must require a known hardware profile and reject duplicate
+pins/channels or pins outside that profile's PWM allowlist. Device/profile
+association is explicit and independent of the device name. Schedule validation
+must report all graph errors and enforce conservative serialized payload
+capacity.
 
 Acceptance:
 
@@ -636,10 +638,11 @@ higher reasoning.
 Tasks:
 
 - Implement announcement use case: upsert by hardware ID, preserve desired vs
-  reported configuration, update status/last seen/firmware/hash, clear or set
-  typed errors, and emit a state revision only for authoritative visible
-  changes. Repeated identical announcement may update last-seen according to an
-  explicit event-volume policy without flooding SSE.
+  reported configuration, record firmware hardware profile/model, update
+  status/last seen/firmware/hash, clear or set typed errors, and emit a state
+  revision only for authoritative visible changes. Repeated identical
+  announcement may update last-seen according to an explicit event-volume
+  policy without flooding SSE.
 - Track connection status separately from command attempt/outcome. Add stale and
   offline transitions driven by injected time.
 - Wire `LegacyMqttTransport` into a runtime/composition object with deterministic
@@ -654,8 +657,8 @@ Tasks:
   Healthy device lanes remain available; never blindly retry the ambiguous
   operation.
 - Implement typed command builders/expected responses for `s`, `p`, `e`, `sc`,
-  `sync`, and `r`. Bare `clear` remains maintenance-only and is never exposed as
-  ordinary UI control because firmware replies are unidentifiable plaintext.
+  `sync`, and `r`. Firmware must ignore bare `clear`; remote fleet-wide EEPROM
+  erasure is not an acceptable maintenance interface.
 - Ensure callbacks cannot crash the MQTT loop and shutdown waits for safe local
   teardown without inventing command outcomes.
 
@@ -781,8 +784,8 @@ Required cases:
 
 - Discovery, multiple devices, duplicate/malformed/delayed announcements,
   reconnect, fake restart, controller restart, and broker restart.
-- Every command/response behavior including bare/targeted `clear` fixtures and
-  analog read.
+- Every command/response behavior including ignored bare `clear`, rejected
+  targeted `clear`, and analog read.
 - 5,120/5,121 UTF-8 command boundaries plus the 4095/4096 schedule
   boundary.
 - Per-device FIFO ordering, one response wait per ESP, bounded cross-device
@@ -1020,7 +1023,7 @@ Six CI validation jobs:
    namespace-safety assertion.
 4. `browser`: install pinned Chromium, build/start full stack, Playwright + axe,
    upload failure artifacts.
-5. `firmware`: compile firmware 5.0.4 with the pinned Arduino toolchain.
+5. `firmware`: compile firmware 5.0.5 with the pinned Arduino toolchain.
 6. `container`: BuildKit build, local amd64 smoke, ARM64 build/emulation smoke,
    Compose health, non-root/read-only/volume checks.
 
@@ -1105,7 +1108,7 @@ Create `docs/readiness-report.md` containing:
 | 4. Channel/point editing           | R4, R9, R12                          | Transaction/reducer/browser CRUD              |
 | 5. Throttles                       | R4, R6, R9                           | Rounding/isolation/recompile/browser          |
 | 6. Temporary overrides             | R7, R9, R12                          | Boundary/unknown/restart/browser              |
-| 7. Mappings                        | R4, R6, R9                           | Constraint/prefix/multi-device/browser        |
+| 7. Mappings                        | R4, R6, R9                           | Hardware pins/explicit assignment/browser     |
 | 8. Discovery/registry              | R2, R5, R8                           | Real broker + restart/persistence             |
 | 9. ESP configuration               | R2, R4, R5, R8, R9                   | Fake EEPROM + operation states + browser      |
 | 10. Compile/syncTime/hash          | Existing domain/protocol, R2, R6, R8 | Golden/capacity/restart/hash                  |
@@ -1122,7 +1125,7 @@ Create `docs/readiness-report.md` containing:
 Execution status:
 
 1. R0-R14 repository implementation is complete on the current branch.
-2. Firmware 5.0.4 and focused transport/scheduler/compiler evidence pass locally.
+2. Firmware 5.0.5 and focused transport/scheduler/compiler evidence pass locally.
 3. The pre-4.1 baseline historically passed real-Mosquitto 5/5, Playwright
    18/18 in three retry-free runs, 97 files/638 unit tests, 82 files/571
    critical tests, and protected PR/default-branch validation.

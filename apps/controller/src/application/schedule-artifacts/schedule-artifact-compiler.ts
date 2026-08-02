@@ -1,7 +1,9 @@
 import {
   boundedTextSchema,
   canonicalUint32HashSchema,
+  hardwareProfileIdSchema,
   identifierSchema,
+  isAllowedPwmPin,
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
 import {
@@ -59,6 +61,9 @@ export function compileDeviceScheduleArtifact(
   if (projection.reportedScheduleHash !== null) {
     canonicalUint32HashSchema.parse(projection.reportedScheduleHash);
   }
+  const hardwareProfileId = hardwareProfileIdSchema.parse(
+    projection.hardwareProfileId,
+  );
 
   const orderedChannels = [...projection.channels].sort(
     (left, right) =>
@@ -84,6 +89,12 @@ export function compileDeviceScheduleArtifact(
         `Channel ${channel.channelId} is mapped more than once`,
       );
     }
+    if (!isAllowedPwmPin(hardwareProfileId, channel.pin)) {
+      throw new ScheduleArtifactCompilationError(
+        "invalid_mapping",
+        `GPIO${channel.pin} is not allowed by hardware profile ${hardwareProfileId}`,
+      );
+    }
     mappingIds.add(channel.mappingId);
     channelIds.add(channel.channelId);
   }
@@ -95,6 +106,7 @@ export function compileDeviceScheduleArtifact(
         kind: firmwareKindForChannel(channel.channelKind),
         graph: validatedGraph(channel),
         throttlePercent: channel.throttlePercentage,
+        outputGain: projection.outputGain,
       })),
     );
     const core: LegacyScheduleCore = {

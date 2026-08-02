@@ -15,7 +15,7 @@ import {
 } from "./transport.js";
 
 export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
-export const FAKE_ESP_FIRMWARE_VERSION = "5.0.4";
+export const FAKE_ESP_FIRMWARE_VERSION = "5.0.5";
 export const FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES = 5_120;
 export const FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS = 120_000;
 
@@ -36,6 +36,14 @@ const CURRENT_SCHEDULE_BUFFER_BYTES = 4_095;
 const MINIMUM_PIN = 0;
 const MAXIMUM_PIN = 63;
 const UINT32_MODULUS = 0x1_0000_0000;
+const HARDWARE_PROFILE = "nodemcu-esp32s-v1.1";
+const HARDWARE_MODEL = "Ai-Thinker NodeMCU-32S V1.1";
+const ALLOWED_PWM_PINS: readonly number[] = Object.freeze([
+  4, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33,
+]);
+const ALLOWED_ANALOG_INPUT_PINS: readonly number[] = Object.freeze([
+  32, 33, 34, 35, 36, 39,
+]);
 
 export interface FakeEspResponseFaults {
   readonly delayMilliseconds?: number;
@@ -528,22 +536,7 @@ export class FakeEspActor {
       this.announcePresence();
       return;
     }
-    if (message === "clear") {
-      this.clearEeprom();
-      this.publishResponse("EEPROM cleared");
-      return;
-    }
     this.processCompleteMessage(message);
-  }
-
-  private clearEeprom(): void {
-    this.persistence.clearEeprom();
-    this.persistedTime = undefined;
-    this.deviceName = this.defaultDeviceName;
-    this.deviceId = this.idGenerator();
-    this.frequency = DEFAULT_FREQUENCY;
-    this.resolution = DEFAULT_RESOLUTION;
-    this.persistEeprom();
   }
 
   private announcePresence(): void {
@@ -559,6 +552,8 @@ export class FakeEspActor {
         id: this.deviceId,
         status: "online",
         version: this.firmwareVersion,
+        hardwareProfile: HARDWARE_PROFILE,
+        hardwareModel: HARDWARE_MODEL,
         ...(this.lastError === undefined
           ? {}
           : { lastError: { ...this.lastError } }),
@@ -697,7 +692,7 @@ export class FakeEspActor {
     ) {
       return "E: Invalid arguments";
     }
-    if (!validPin(pin)) {
+    if (!validPwmPin(pin)) {
       return "E: Invalid pin";
     }
     if (value < 0 || value > 255 || (overwrite !== 0 && overwrite !== 1)) {
@@ -787,7 +782,7 @@ export class FakeEspActor {
     if (!validFirmwareInteger(pin)) {
       return "E: Invalid arguments";
     }
-    if (!validPin(pin)) {
+    if (!validAnalogInputPin(pin)) {
       return "E: Invalid pin";
     }
     if (this.attachedPins.has(pin)) {
@@ -1185,6 +1180,14 @@ function validPin(value: number): boolean {
   );
 }
 
+function validPwmPin(value: number): boolean {
+  return validPin(value) && ALLOWED_PWM_PINS.includes(value);
+}
+
+function validAnalogInputPin(value: number): boolean {
+  return validPin(value) && ALLOWED_ANALOG_INPUT_PINS.includes(value);
+}
+
 function validFirmwareInteger(value: number): boolean {
   return (
     Number.isInteger(value) &&
@@ -1270,7 +1273,7 @@ function validScheduleDocument(schedule: unknown): boolean {
     if (
       !isJsonRecord(rawChannel) ||
       typeof rawChannel.o !== "number" ||
-      !validPin(rawChannel.o) ||
+      !validPwmPin(rawChannel.o) ||
       (rawChannel.t !== 108 && rawChannel.t !== 112) ||
       !Array.isArray(rawChannel.l) ||
       seenPins.has(rawChannel.o)

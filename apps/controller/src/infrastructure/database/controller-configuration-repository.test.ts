@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
 
+import { NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID } from "@aquarium/contracts";
 import type { Kysely } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -711,7 +712,7 @@ describe("ControllerConfigurationRepository", () => {
     expect(await readCurrentStateRevision(database)).toBe(0);
   });
 
-  it("enforces global prefix overlap case-sensitively and survives reopening", async () => {
+  it("persists explicitly named hardware mapping profiles across reopening", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aquarium-configuration-"));
     temporaryDirectories.add(directory);
     const filename = join(directory, "state.sqlite");
@@ -723,26 +724,17 @@ describe("ControllerConfigurationRepository", () => {
     await repository.replaceMappingProfile("profile-primary", {
       expectedRevision: 0,
       name: "Primary",
-      deviceNamePrefix: "Tank",
+      hardwareProfileId: NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
       outputGain: 1,
       mappings: [],
     });
     await repository.replaceMappingProfile("profile-lowercase", {
       expectedRevision: 1,
       name: "primary",
-      deviceNamePrefix: "tank",
+      hardwareProfileId: NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
       outputGain: 1,
       mappings: [],
     });
-    await expect(
-      repository.replaceMappingProfile("profile-overlap", {
-        expectedRevision: 2,
-        name: "Overlap",
-        deviceNamePrefix: "Tank-A",
-        outputGain: 1,
-        mappings: [],
-      }),
-    ).rejects.toBeInstanceOf(ConfigurationRelationalConflictError);
     expect(await readCurrentStateRevision(database)).toBe(2);
 
     await closeDatabase(database);
@@ -751,19 +743,19 @@ describe("ControllerConfigurationRepository", () => {
     await expect(
       database
         .selectFrom("mapping_profiles")
-        .select(["id", "name", "device_name_prefix"])
+        .select(["id", "name", "hardware_profile_id"])
         .orderBy("id")
         .execute(),
     ).resolves.toEqual([
       {
         id: "profile-lowercase",
         name: "primary",
-        device_name_prefix: "tank",
+        hardware_profile_id: NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
       },
       {
         id: "profile-primary",
         name: "Primary",
-        device_name_prefix: "Tank",
+        hardware_profile_id: NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
       },
     ]);
     await expect(repository.listAlertRules()).resolves.toEqual({ items: [] });

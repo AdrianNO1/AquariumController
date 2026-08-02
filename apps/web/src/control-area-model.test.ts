@@ -84,7 +84,7 @@ function controlSnapshot() {
       {
         id: "profile-main",
         name: "Main rack",
-        deviceNamePrefix: "main",
+        hardwareProfileId: "nodemcu-esp32s-v1.1",
         outputGain: 1,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -98,7 +98,7 @@ function controlSnapshot() {
           },
           {
             id: "mapping-pump",
-            pin: 5,
+            pin: 12,
             displayOrder: 1,
             enabled: true,
             target: { kind: "channel", id: "pump-a" },
@@ -108,14 +108,14 @@ function controlSnapshot() {
       {
         id: "profile-pump",
         name: "Pump only",
-        deviceNamePrefix: "pump",
+        hardwareProfileId: "nodemcu-esp32s-v1.1",
         outputGain: 0.7,
         createdAt: timestamp,
         updatedAt: timestamp,
         mappings: [
           {
             id: "mapping-pump-only",
-            pin: 6,
+            pin: 13,
             displayOrder: 0,
             enabled: true,
             target: { kind: "channel", id: "pump-a" },
@@ -228,6 +228,8 @@ function device(id: string, mappingProfileId: string | null) {
       outputsOff: true,
       outputs: [],
       ota: null,
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
+      hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
     },
     firmwareUpdate: null,
     status: "online",

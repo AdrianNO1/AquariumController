@@ -1,5 +1,11 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
+import {
+  hardwareProfileById,
+  NODEMCU_ESP32S_V1_1_HARDWARE_MODEL,
+  NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
+} from "@aquarium/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -33,19 +39,46 @@ describe("legacy ESP protocol", () => {
 
     expect(source).toMatch(/const bool TEST = false;/u);
     expect(source).not.toMatch(/const bool TEST = true;/u);
+    expect(source).toContain(
+      `const char* VERSION = "${CURRENT_ESP_FIRMWARE_VERSION}";`,
+    );
+    expect(source).toContain(
+      `const char* HARDWARE_PROFILE = "${NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID}";`,
+    );
+    expect(source).toContain(
+      `const char* HARDWARE_MODEL = "${NODEMCU_ESP32S_V1_1_HARDWARE_MODEL}";`,
+    );
+    const pwmPins = /const int ALLOWED_PWM_PINS\[\] = \{([^}]+)\}/u.exec(
+      source,
+    )?.[1];
+    expect(pwmPins).toBeDefined();
+    expect(pwmPins?.match(/\d+/gu)?.map(Number)).toEqual(
+      hardwareProfileById(NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID).pwmPins,
+    );
+    expect(source).toContain("SPIFFS.begin(false)");
+    expect(source).not.toContain("SPIFFS.begin(true)");
+    expect(source).toContain("const unsigned char maximumRepairFailures = 2;");
+    expect(source).not.toContain('message == "clear"');
+    expect(source).not.toContain("clearEEPROM");
   });
 
-  it("requires the pull-OTA firmware exactly", () => {
-    expect(CURRENT_ESP_FIRMWARE_VERSION).toBe("5.0.4");
-    expect(ESP_FIRMWARE_ARTIFACT).toMatchObject({
-      version: "5.0.4",
-      sizeBytes: 1_172_144,
-      sha256:
-        "4f1f1684d6f2fe93c7668cce2b11a56c7cb86881db08b447244f6026be30eeb7",
-    });
+  it("keeps pull-OTA metadata synchronized with the bundled binary", () => {
+    const artifact = readFileSync(
+      new URL(
+        `../../../firmware/esp32/artifacts/${ESP_FIRMWARE_ARTIFACT.fileName}`,
+        import.meta.url,
+      ),
+    );
+    expect(ESP_FIRMWARE_ARTIFACT.version).toBe(CURRENT_ESP_FIRMWARE_VERSION);
+    expect(ESP_FIRMWARE_ARTIFACT.sizeBytes).toBe(artifact.byteLength);
+    expect(ESP_FIRMWARE_ARTIFACT.sha256).toBe(
+      createHash("sha256").update(artifact).digest("hex"),
+    );
     expect(ESP32_PWM_OVERWRITE_DURATION_MS).toBe(120_000);
-    expect(isCurrentEspFirmwareVersion("5.0.4")).toBe(true);
-    expect(isCurrentEspFirmwareVersion("5.0.3")).toBe(false);
+    expect(isCurrentEspFirmwareVersion(CURRENT_ESP_FIRMWARE_VERSION)).toBe(
+      true,
+    );
+    expect(isCurrentEspFirmwareVersion("not-current")).toBe(false);
     expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);
     expect(MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION).toBe("5.0.0");
     expect(isSupportedEspFirmwareVersion("5.0.0")).toBe(true);
@@ -65,7 +98,7 @@ describe("legacy ESP protocol", () => {
       freq: 5_000,
       res: 8,
       status: "online",
-      version: "5.0.4",
+      version: CURRENT_ESP_FIRMWARE_VERSION,
       scheduleHash: "0",
     };
 
@@ -80,7 +113,7 @@ describe("legacy ESP protocol", () => {
         ],
         ota: {
           status: "downloading",
-          targetVersion: "5.0.4",
+          targetVersion: CURRENT_ESP_FIRMWARE_VERSION,
           progress: 48,
         },
       }).success,

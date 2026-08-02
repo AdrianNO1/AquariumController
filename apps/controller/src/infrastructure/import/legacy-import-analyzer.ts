@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { CHANNEL_COLOR_PALETTE } from "@aquarium/contracts";
+import {
+  CHANNEL_COLOR_PALETTE,
+  isAllowedPwmPin,
+  NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
+} from "@aquarium/contracts";
 import { z } from "zod";
 
 import {
@@ -109,7 +113,7 @@ export interface LegacyMappingPlan {
 
 export interface LegacyMappingProfilePlan {
   readonly name: string;
-  readonly deviceNamePrefix: string;
+  readonly sourceKey: string;
   readonly outputGain: number;
   readonly displayOrder: number;
   readonly mappings: readonly LegacyMappingPlan[];
@@ -849,10 +853,10 @@ function parseMappingProfiles(
   }
   const profiles: LegacyMappingProfilePlan[] = [];
 
-  for (const [displayOrder, [prefix, rows]] of Object.entries(
+  for (const [displayOrder, [sourceKey, rows]] of Object.entries(
     value,
   ).entries()) {
-    const profilePath = appendJsonPath("$", prefix);
+    const profilePath = appendJsonPath("$", sourceKey);
     if (!Array.isArray(rows)) {
       addShapeIssue(
         issues,
@@ -862,19 +866,17 @@ function parseMappingProfiles(
       );
       continue;
     }
-    if (prefix.length === 0) {
+    if (sourceKey.length === 0) {
       issues.push({
         severity: rows.length === 0 ? "warning" : "error",
         code:
-          rows.length === 0
-            ? "empty-mapping-prefix-skipped"
-            : "empty-mapping-prefix",
+          rows.length === 0 ? "empty-mapping-key-skipped" : "empty-mapping-key",
         sourceFile: "channels.json",
         sourcePath: profilePath,
         message:
           rows.length === 0
-            ? "The empty zero-row mapping prefix is skipped."
-            : "An empty mapping prefix with rows would match every device and cannot be imported.",
+            ? "The empty zero-row mapping key is skipped."
+            : "An empty mapping key cannot identify an imported profile.",
       });
       continue;
     }
@@ -918,11 +920,22 @@ function parseMappingProfiles(
           sourcePath: `${mappingPath}.pin`,
           message: "Mapping pins must be integers from 0 through 63.",
         });
+      } else if (
+        !isAllowedPwmPin(NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID, pin)
+      ) {
+        issues.push({
+          severity: "error",
+          code: "unsupported-mapping-pin",
+          sourceFile: "channels.json",
+          sourcePath: `${mappingPath}.pin`,
+          message: `GPIO${pin} is not a usable PWM output on the deployed NodeMCU ESP-32S hardware.`,
+        });
       }
       if (
         typeof channelName !== "string" ||
         channelName.length === 0 ||
-        !isIntegerInRange(pin, 0, 63)
+        !isIntegerInRange(pin, 0, 63) ||
+        !isAllowedPwmPin(NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID, pin)
       ) {
         continue;
       }
@@ -932,7 +945,7 @@ function parseMappingProfiles(
           code: "duplicate-profile-pin",
           sourceFile: "channels.json",
           sourcePath: `${mappingPath}.pin`,
-          message: `${prefix} maps pin ${pin} more than once.`,
+          message: `${sourceKey} maps pin ${pin} more than once.`,
         });
       }
       if (channelNames.has(channelName)) {
@@ -941,7 +954,7 @@ function parseMappingProfiles(
           code: "duplicate-profile-channel",
           sourceFile: "channels.json",
           sourcePath: `${mappingPath}.channel`,
-          message: `${prefix} maps channel ${JSON.stringify(channelName)} more than once.`,
+          message: `${sourceKey} maps channel ${JSON.stringify(channelName)} more than once.`,
         });
       }
       pins.add(pin);
@@ -949,7 +962,7 @@ function parseMappingProfiles(
       mappings.push({ channelName, pin, displayOrder: mappingIndex });
     }
 
-    const outputGain = prefix === "mainLys" ? 0.7 : 1;
+    const outputGain = sourceKey === "mainLys" ? 0.7 : 1;
     if (outputGain !== 1) {
       issues.push({
         severity: "warning",
@@ -962,32 +975,12 @@ function parseMappingProfiles(
       });
     }
     profiles.push({
-      name: prefix,
-      deviceNamePrefix: prefix,
+      name: sourceKey,
+      sourceKey,
       outputGain,
       displayOrder,
       mappings,
     });
-  }
-
-  for (const [leftIndex, left] of profiles.entries()) {
-    for (const right of profiles.slice(leftIndex + 1)) {
-      if (
-        left.deviceNamePrefix.startsWith(right.deviceNamePrefix) ||
-        right.deviceNamePrefix.startsWith(left.deviceNamePrefix)
-      ) {
-        issues.push({
-          severity: "error",
-          code: "overlapping-mapping-prefixes",
-          sourceFile: "channels.json",
-          sourcePath: "$",
-          message: `Mapping prefixes ${JSON.stringify(left.deviceNamePrefix)} and ${JSON.stringify(right.deviceNamePrefix)} overlap.`,
-          details: {
-            prefixes: [left.deviceNamePrefix, right.deviceNamePrefix],
-          },
-        });
-      }
-    }
   }
   return profiles;
 }
@@ -1057,7 +1050,7 @@ function appendCrossFileIssues(
   const mappedNames = new Set<string>();
   for (const profile of profiles) {
     for (const mapping of profile.mappings) {
-      const path = `${appendJsonPath("$", profile.deviceNamePrefix)}[${mapping.displayOrder}].channel`;
+      const path = `${appendJsonPath("$", profile.sourceKey)}[${mapping.displayOrder}].channel`;
       mappedNames.add(mapping.channelName);
       if (!channelNames.has(mapping.channelName)) {
         issues.push({

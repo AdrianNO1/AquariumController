@@ -1105,6 +1105,12 @@ h2 {
   background: rgba(126, 37, 37, 0.16);
 }
 
+.hardware-warning-list {
+  border-color: rgba(232, 164, 65, 0.42);
+  background: rgba(232, 164, 65, 0.08);
+  color: #f4c77e;
+}
+
 .editor-actions {
   justify-content: flex-start;
 }

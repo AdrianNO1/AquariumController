@@ -162,7 +162,6 @@ test("mapping profiles use global target search and support create and delete", 
 
   await dialog.getByRole("button", { name: "New profile" }).click();
   await dialog.getByLabel("Profile name").fill("Browser temporary profile");
-  await dialog.getByLabel("Device-name prefix").fill("unused-e2e-");
   await dialog.getByLabel("Output multiplier").fill("0.75");
   await dialog.getByRole("button", { name: "Add mapping" }).click();
   await dialog.getByLabel("Target for mapping 1").click();
@@ -189,13 +188,13 @@ test("mapping profiles use global target search and support create and delete", 
         ? null
         : {
             gain: profile.outputGain,
-            prefix: profile.deviceNamePrefix,
+            hardwareProfileId: profile.hardwareProfileId,
             target: profile.mappings[0]?.target,
           };
     })
     .toEqual({
       gain: 0.75,
-      prefix: "unused-e2e-",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       target: { kind: "channel", id: "pump-main" },
     });
 

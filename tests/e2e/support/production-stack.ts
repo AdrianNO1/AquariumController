@@ -651,7 +651,7 @@ async function seedState(paths: E2ePaths): Promise<void> {
     await repository.replaceMappingProfile("profile-main", {
       expectedRevision: revision,
       name: "Main rack",
-      deviceNamePrefix: "main",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       outputGain: 1,
       mappings: [
         {
@@ -663,14 +663,14 @@ async function seedState(paths: E2ePaths): Promise<void> {
         },
         {
           id: "mapping-pump",
-          pin: 5,
+          pin: 12,
           displayOrder: 1,
           enabled: true,
           target: { kind: "channel", id: "pump-main" },
         },
         {
           id: "mapping-moonlight",
-          pin: 6,
+          pin: 13,
           displayOrder: 2,
           enabled: true,
           target: { kind: "output", id: "output-moonlight" },

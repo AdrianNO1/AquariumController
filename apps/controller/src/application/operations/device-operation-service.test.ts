@@ -683,6 +683,7 @@ describe("persistent device operation service", () => {
       id: "user-operation",
       deviceId: "A1",
       expectedRevision: 1,
+      mappingProfileId: null,
       requestedAtMs: 2_002,
       deadlineAtMs: 7_002,
       request: {
@@ -718,6 +719,7 @@ describe("persistent device operation service", () => {
         id: "stale-operation",
         deviceId: "A1",
         expectedRevision: 1,
+        mappingProfileId: null,
         requestedAtMs: 2_003,
         deadlineAtMs: 7_003,
         request: {
@@ -736,6 +738,7 @@ describe("persistent device operation service", () => {
       id: "same-value-operation",
       deviceId: "A1",
       expectedRevision: 4,
+      mappingProfileId: null,
       requestedAtMs: 2_004,
       deadlineAtMs: 7_004,
       request: {

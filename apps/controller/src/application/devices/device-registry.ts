@@ -1,6 +1,7 @@
 import {
   boundedTextSchema,
   canonicalUint32HashSchema,
+  hardwareProfileIdSchema,
   identifierSchema,
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
@@ -13,7 +14,7 @@ import {
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   type EspAnnouncement,
 } from "@aquarium/esp-protocol";
-import { sql, type Kysely, type Selectable, type Transaction } from "kysely";
+import { sql, type Kysely, type Selectable } from "kysely";
 import { z } from "zod";
 
 import {
@@ -36,6 +37,8 @@ const registryAnnouncementSchema = z
     res: z.number().int().min(1).max(16),
     status: boundedTextSchema,
     version: boundedTextSchema,
+    hardwareProfile: hardwareProfileIdSchema.optional(),
+    hardwareModel: boundedTextSchema.optional(),
     scheduleHash: canonicalUint32HashSchema,
     outputsOff: z.boolean().optional(),
     outputs: espOutputStateSchema.optional(),
@@ -239,9 +242,28 @@ export class DeviceRegistry {
           .selectAll()
           .where("hardware_id", "=", announcement.id)
           .executeTakeFirst();
-        const mappingProfileId =
-          existing?.mapping_profile_id ??
-          (await matchingMappingProfileId(transaction, announcement.name));
+        const reportedHardwareProfileId =
+          announcement.hardwareProfile ??
+          existing?.reported_hardware_profile_id ??
+          null;
+        const reportedHardwareModel =
+          announcement.hardwareModel ??
+          existing?.reported_hardware_model ??
+          null;
+        let mappingProfileId = existing?.mapping_profile_id ?? null;
+        if (mappingProfileId !== null && reportedHardwareProfileId !== null) {
+          const assignedProfile = await transaction
+            .selectFrom("mapping_profiles")
+            .select("hardware_profile_id")
+            .where("id", "=", mappingProfileId)
+            .executeTakeFirst();
+          if (
+            assignedProfile === undefined ||
+            assignedProfile.hardware_profile_id !== reportedHardwareProfileId
+          ) {
+            mappingProfileId = null;
+          }
+        }
         const outputStateJson =
           announcement.outputs === undefined ||
           announcement.outputsOff === undefined
@@ -286,6 +308,8 @@ export class DeviceRegistry {
               reported_pwm_frequency_hz: announcement.freq,
               reported_pwm_resolution_bits: announcement.res,
               firmware_version: announcement.version,
+              reported_hardware_profile_id: reportedHardwareProfileId,
+              reported_hardware_model: reportedHardwareModel,
               reported_schedule_hash: announcement.scheduleHash,
               output_state_json: outputStateJson,
               ota_status_json: otaStatusJson,
@@ -350,6 +374,8 @@ export class DeviceRegistry {
           existing.reported_pwm_frequency_hz !== announcement.freq ||
           existing.reported_pwm_resolution_bits !== announcement.res ||
           existing.firmware_version !== announcement.version ||
+          existing.reported_hardware_profile_id !== reportedHardwareProfileId ||
+          existing.reported_hardware_model !== reportedHardwareModel ||
           existing.reported_schedule_hash !== announcement.scheduleHash ||
           existing.output_state_json !== outputStateJson ||
           existing.ota_status_json !== otaStatusJson ||
@@ -381,6 +407,8 @@ export class DeviceRegistry {
             reported_pwm_frequency_hz: announcement.freq,
             reported_pwm_resolution_bits: announcement.res,
             firmware_version: announcement.version,
+            reported_hardware_profile_id: reportedHardwareProfileId,
+            reported_hardware_model: reportedHardwareModel,
             reported_schedule_hash: announcement.scheduleHash,
             output_state_json: outputStateJson,
             ota_status_json: otaStatusJson,
@@ -731,26 +759,6 @@ export class DeviceRegistry {
     );
     return result;
   }
-}
-
-async function matchingMappingProfileId(
-  transaction: Transaction<StateDatabaseSchema>,
-  deviceName: string,
-): Promise<string | null> {
-  const profiles = await transaction
-    .selectFrom("mapping_profiles")
-    .select(["id", "device_name_prefix"])
-    .orderBy("id", "asc")
-    .execute();
-  const matches = profiles.filter((profile) =>
-    deviceName.startsWith(profile.device_name_prefix),
-  );
-  if (matches.length > 1) {
-    throw new Error(
-      `Device ${deviceName} matches multiple mapping profile prefixes`,
-    );
-  }
-  return matches[0]?.id ?? null;
 }
 
 function announcementError(

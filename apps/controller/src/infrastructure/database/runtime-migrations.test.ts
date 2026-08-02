@@ -19,6 +19,8 @@ import {
   STATE_CONTROL_AREA_MIGRATION_NAME,
   STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
   STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
+  STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+  STATE_HARDWARE_PROFILE_MIGRATION_NAME,
   STATE_INITIAL_MIGRATION_NAME,
   STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
   STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
@@ -93,6 +95,8 @@ describe("runtime migrations", () => {
       STATE_CONTROL_AREA_MIGRATION_NAME,
       STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
       STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+      STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+      STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
     ]);
     expect(eventsResults.map((result) => result.migrationName)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -109,6 +113,8 @@ describe("runtime migrations", () => {
       STATE_CONTROL_AREA_MIGRATION_NAME,
       STATE_FIRMWARE_UPDATE_MIGRATION_NAME,
       STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+      STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+      STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
     ]);
     expect(await readMigrationNames(events)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -198,6 +204,16 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
 
     const areas = await state
@@ -233,6 +249,91 @@ describe("runtime migrations", () => {
         });
       }
     }
+  });
+
+  it("disables unsupported active pins without deleting legacy mappings", async () => {
+    const state = await createStateDatabase();
+    await migrateStateDatabaseTo(state, STATE_HARDWARE_PROFILE_MIGRATION_NAME);
+    await state
+      .insertInto("mapping_profiles")
+      .values({
+        id: "profile-pin-safety",
+        name: "Legacy pin profile",
+        device_name_prefix: "profile-pin-safety",
+        created_at_ms: 10,
+        updated_at_ms: 10,
+      })
+      .executeTakeFirstOrThrow();
+    await state
+      .insertInto("outputs")
+      .values(
+        ["safe", "unsafe", "disabled"].map((name, displayOrder) => ({
+          id: `output-${name}`,
+          name: `Output ${name}`,
+          kind: "test",
+          display_order: displayOrder,
+          created_at_ms: 10,
+          updated_at_ms: 10,
+        })),
+      )
+      .execute();
+    await state
+      .insertInto("pin_mappings")
+      .values([
+        {
+          id: "mapping-safe",
+          mapping_profile_id: "profile-pin-safety",
+          output_id: "output-safe",
+          channel_id: null,
+          pin: 4,
+          display_order: 0,
+          enabled: 1,
+          created_at_ms: 10,
+          updated_at_ms: 10,
+        },
+        {
+          id: "mapping-unsafe",
+          mapping_profile_id: "profile-pin-safety",
+          output_id: "output-unsafe",
+          channel_id: null,
+          pin: 6,
+          display_order: 1,
+          enabled: 1,
+          created_at_ms: 10,
+          updated_at_ms: 10,
+        },
+        {
+          id: "mapping-already-disabled",
+          mapping_profile_id: "profile-pin-safety",
+          output_id: "output-disabled",
+          channel_id: null,
+          pin: 7,
+          display_order: 2,
+          enabled: 0,
+          created_at_ms: 10,
+          updated_at_ms: 10,
+        },
+      ])
+      .execute();
+
+    await expect(migrateStateDatabase(state)).resolves.toMatchObject([
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+    ]);
+    await expect(
+      state
+        .selectFrom("pin_mappings")
+        .select(["id", "pin", "enabled"])
+        .orderBy("display_order")
+        .execute(),
+    ).resolves.toEqual([
+      { id: "mapping-safe", pin: 4, enabled: 1 },
+      { id: "mapping-unsafe", pin: 6, enabled: 0 },
+      { id: "mapping-already-disabled", pin: 7, enabled: 0 },
+    ]);
   });
 
   it("seeds the operator concurrency floor from the latest existing state revision", async () => {
@@ -282,6 +383,16 @@ describe("runtime migrations", () => {
       },
       {
         migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -364,6 +475,16 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -388,6 +509,16 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
         direction: "Down",
@@ -516,6 +647,16 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -537,6 +678,16 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_RUNTIME_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
         direction: "Down",
@@ -670,7 +821,7 @@ describe("runtime migrations", () => {
     await migrateEventsDatabase(events);
     expect(
       await state.selectFrom("mapping_profiles").selectAll().executeTakeFirst(),
-    ).toEqual(stateFixture);
+    ).toMatchObject(stateFixture);
     expect(
       await events.selectFrom("interactions").selectAll().executeTakeFirst(),
     ).toEqual(eventsFixture);
@@ -714,6 +865,16 @@ describe("runtime migrations", () => {
       EVENTS_INITIAL_MIGRATION_NAME,
     );
     expect(stateDown).toMatchObject([
+      {
+        migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_HARDWARE_PROFILE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
         direction: "Down",

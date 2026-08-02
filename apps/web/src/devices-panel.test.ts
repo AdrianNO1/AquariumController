@@ -42,7 +42,7 @@ const firmware: FirmwareDeployment = {
 const profile: MappingProfile = {
   id: "profile-main",
   name: "Main rack",
-  deviceNamePrefix: "main",
+  hardwareProfileId: "nodemcu-esp32s-v1.1",
   outputGain: 1,
   createdAt: timestamp,
   updatedAt: timestamp,
@@ -274,6 +274,7 @@ describe("DevicesPanel", () => {
         name: "online-rack",
         pwmFrequencyHz: 1_000,
         pwmResolutionBits: 8,
+        mappingProfileId: "profile-main",
       }),
     );
   });
@@ -318,6 +319,42 @@ describe("DevicesPanel", () => {
         "Reported configuration differs from desired configuration",
       ),
     ).toBeNull();
+  });
+
+  it("changes the explicit pin profile without renaming the ESP", async () => {
+    let requestBody: object | null = null;
+    server.use(
+      http.patch(
+        "http://localhost/api/devices/device-online/configuration",
+        async ({ request }) => {
+          requestBody = (await request.json()) as object;
+          return HttpResponse.json({
+            changed: false,
+            revision: 9,
+            event: null,
+          });
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    const editButton = screen.getAllByRole("button", { name: "Edit" }).at(0);
+    if (editButton === undefined)
+      throw new Error("Expected an ESP edit button");
+    await user.click(editButton);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Pin mapping profile" }),
+      "",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(requestBody).toEqual({
+        expectedRevision: 8,
+        mappingProfileId: null,
+      }),
+    );
   });
 
   it("hides a successful firmware update after ten minutes", () => {
@@ -490,6 +527,8 @@ function device({
       outputsOff: true,
       outputs: [],
       ota: null,
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
+      hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
     },
     firmwareUpdate: null,
     status,

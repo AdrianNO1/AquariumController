@@ -11,6 +11,7 @@ export interface FirmwareScheduleChannelInput {
   readonly kind: FirmwareChannelKind;
   readonly graph: ValidatedScheduleGraph;
   readonly throttlePercent: number;
+  readonly outputGain: number;
 }
 
 export interface CompiledFirmwarePoint {
@@ -37,8 +38,8 @@ export interface CompiledFirmwareSchedule {
  * Compiles validated semantic graphs into the firmware schedule model while
  * preserving caller order. Throttle uses Python-compatible half-even rounding,
  * matching the active legacy schedulemaker. Mapping-profile output gain is
- * intentionally not applied here because the deployed host did not include it
- * in the ESP's stored fallback schedule.
+ * compiled into the stored fallback schedule so local ESP behavior matches
+ * controller-driven output when the controller becomes unavailable.
  */
 export function compileFirmwareSchedule(
   channels: readonly FirmwareScheduleChannelInput[],
@@ -63,13 +64,28 @@ export function compileFirmwareSchedule(
     ) {
       throw new RangeError("Schedule throttle must be between 0 and 100");
     }
+    if (
+      !Number.isFinite(channel.outputGain) ||
+      channel.outputGain < 0 ||
+      channel.outputGain > 1
+    ) {
+      throw new RangeError(
+        "Mapping-profile output gain must be between 0 and 1",
+      );
+    }
 
     return Object.freeze({
       pin: channel.pin,
       kind: channel.kind,
       links: Object.freeze(
         channel.graph.segments.map((segment) =>
-          Object.freeze(compileSegment(segment, channel.throttlePercent)),
+          Object.freeze(
+            compileSegment(
+              segment,
+              channel.throttlePercent,
+              channel.outputGain,
+            ),
+          ),
         ),
       ),
     });
@@ -81,15 +97,20 @@ export function compileFirmwareSchedule(
 function compileSegment(
   segment: ScheduleSegment,
   throttlePercent: number,
+  outputGain: number,
 ): CompiledFirmwareLink {
   return {
     source: Object.freeze({
       minute: segment.source.minute,
-      percent: roundHalfEven(segment.source.percent * (throttlePercent / 100)),
+      percent: roundHalfEven(
+        segment.source.percent * (throttlePercent / 100) * outputGain,
+      ),
     }),
     target: Object.freeze({
       minute: segment.target.minute,
-      percent: roundHalfEven(segment.target.percent * (throttlePercent / 100)),
+      percent: roundHalfEven(
+        segment.target.percent * (throttlePercent / 100) * outputGain,
+      ),
     }),
   };
 }
