@@ -10,16 +10,16 @@ this checklist does not replace it.
 
 ## Current handoff state
 
-The repository contains firmware 5.0.5, correlated-request, per-device-lane,
+The repository contains firmware 5.0.6, correlated-request, per-device-lane,
 latest-only scheduler, and device-local failure implementation. Before this
 checklist becomes a deployment handoff, the branch must pass protected CI,
 merge, publish a new image, and record that image's exact digest.
 
-Current firmware 5.0.5/per-device-lane local evidence:
+Current firmware 5.0.6/per-device-lane local evidence:
 
-- formatting, lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 111 files/773 tests;
-- critical: 88 files/654 tests;
+- lint, all workspace/E2E typechecks, and production builds: green;
+- unit: 111 files/775 tests;
+- critical: 88 files/656 tests;
 - real Mosquitto integration: 5/5;
 - production Playwright: 21/21 with zero retries; and
 - pinned firmware compile: 89% flash and 16% global RAM.
@@ -93,7 +93,7 @@ There is deliberately no CI job that deploys to the Pi.
 ## 3. Network, MQTT, and notifications
 
 - [ ] Provision a production MQTT account for the controller and a credential
-      for firmware 5.0.5.
+      for firmware 5.0.6.
 - [ ] Restrict the plaintext MQTT listener to the trusted aquarium LAN.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
       interlock.
@@ -126,10 +126,10 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 5.0.5 with an ignored local configuration containing the
+- [ ] Build firmware 5.0.6 with an ignored local configuration containing the
       intended Wi-Fi, MQTT username/password, and NTP host.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports firmware 5.0.5 and hardware profile
+- [ ] Confirm every device reports firmware 5.0.6 and hardware profile
       `nodemcu-esp32s-v1.1`; firmware older than 5.0.0 is intentionally marked
       `firmware_unsupported` and receives no actuator work.
 - [ ] Review each device's explicit mapping-profile selection after import.

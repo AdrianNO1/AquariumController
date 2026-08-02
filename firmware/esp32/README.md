@@ -65,6 +65,11 @@ firmware uses its last hourly EEPROM timestamp and continues the persisted local
 schedule. Schedule activation remains best-effort per pin, and physical output
 fault diagnostics remain wear-limited in SPIFFS.
 
+Firmware 5.0.6 also keeps the persisted local schedule running when network
+configuration is missing, verifies command-topic subscription and OTA probation
+confirmation before reporting success, and reports recoverable Wi-Fi, MQTT,
+NTP, EEPROM, schedule-restore, and response-publication failures to the Pi.
+
 The firmware reports hardware profile `nodemcu-esp32s-v1.1` and model
 `Ai-Thinker NodeMCU-32S V1.1`. PWM output is limited to GPIO 4, 12-14, 16-19,
 21-23, 25-27, 32, and 33; analog reads use ADC1 GPIO 32-36 and 39. GPIO12 is
@@ -82,7 +87,7 @@ Controller command batches use
 `request:<requestId>|<semicolon-separated commands>`. Responses echo the
 request ID so a delayed response cannot settle a newer operation.
 
-Firmware 5.0.5 carries each command batch in one MQTT publication. The command
+Firmware 5.0.6 carries each command batch in one MQTT publication. The command
 payload limit is 5,120 UTF-8 bytes, which covers the 4,095-byte schedule limit
 plus target and request-correlation metadata. PubSubClient uses a 6,144-byte
 packet buffer for MQTT framing and topic overhead. The earlier custom
@@ -94,12 +99,12 @@ no longer used.
 Build the pinned generic image from the repository root:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.5 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
 ```
 
 The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
 ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
 target using only the safe example configuration. The resulting application
-binary is `firmware/esp32/artifacts/ESP32Code-5.0.5.bin`; its exact size and
+binary is `firmware/esp32/artifacts/ESP32Code-5.0.6.bin`; its exact size and
 SHA-256 are pinned in `@aquarium/esp-protocol` and revalidated by the controller
 at startup.

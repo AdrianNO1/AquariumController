@@ -615,7 +615,7 @@ describe("persistent device operation service", () => {
     });
   });
 
-  it("records an explicitly mismatched response as failed without retrying", async () => {
+  it("records a firmware-reported command error without quarantining the device", async () => {
     const context = await setup();
     context.executor.outcomes.push({
       index: 0,
@@ -629,9 +629,17 @@ describe("persistent device operation service", () => {
       context.service.executeDeviceOperation("A1", { kind: "ping" }),
     ).resolves.toMatchObject({
       status: "failed",
-      result: { code: "unexpected_response" },
+      result: {
+        code: "device_reported_error",
+        message: "Device reported: Invalid command",
+      },
     });
     expect(context.executor.calls).toHaveLength(1);
+    await expect(readDevice(context.databases.state)).resolves.toMatchObject({
+      enabled: 1,
+      status: "online",
+      last_error_code: null,
+    });
   });
 
   it("bounds invalid-response diagnostics before quarantining the device", async () => {

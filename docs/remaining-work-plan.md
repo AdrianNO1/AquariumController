@@ -3,7 +3,7 @@
 Updated: 2026-08-02
 
 Purpose: execution record and handoff plan. R0-R14 repository implementation is
-complete, including firmware 5.0.5, correlated requests, bounded per-device lanes,
+complete, including firmware 5.0.6, correlated requests, bounded per-device lanes,
 latest-only routine PWM coalescing, and device-local failure handling. The
 current branch still needs protected CI, merge, default-branch validation, image
 publication, and immutable digest selection. Production migration, ESP32
@@ -34,7 +34,7 @@ Repository work is complete only when the only remaining actions are:
 2. Confirm the exposed credential was revoked, have GitHub Support purge the
    unreachable historical object/cached view, resolve its open alert as
    `revoked`, and keep secret scanning and push protection enabled.
-3. Flash and identify firmware 5.0.5 on every production ESP32, then complete a
+3. Flash and identify firmware 5.0.6 on every production ESP32, then complete a
    controlled hardware/failover soak.
 4. Configure the Pi's production MQTT/database/archive/backup paths and
    credentials outside the repository.
@@ -74,7 +74,7 @@ Every delegated task must follow these rules:
 - Treat legacy Python/templates and historical files under `.old/**` as
   read-only. The user explicitly promoted
   `.old/slaveCode/ESP32Code/ESP32Code.ino` into the refactor and authorized the
-  firmware 5.0.5 reliability changes. Do not flash hardware from repository
+  firmware 5.0.6 reliability changes. Do not flash hardware from repository
   implementation tasks.
 - Never read or modify `.env` files. Document variables by name and ask the
   operator to set values.
@@ -271,8 +271,8 @@ documentation. Public visibility is not a credential-remediation mechanism.
 ### Verification caveat
 
 The host verification before fixture isolation passed 95 files/619 unit tests
-and 81 files/558 critical tests, plus formatting, lint, workspace typechecks,
-and production builds. The clean Linux Docker verification after fixture
+and 81 files/558 critical tests, plus lint, workspace typechecks, and production
+builds. The clean Linux Docker verification after fixture
 isolation passed 95 files/618 unit tests and 81 files/557 critical tests with
 the same static/build gates. The one-test reduction in each selection is the
 intentional removal of environment-dependent `.old/data` coverage; deterministic
@@ -400,7 +400,6 @@ Tasks:
 - Verify Node 24/npm 11 and Docker gate D1 without contacting any remote/LAN
   service.
 - From a clean checkout run `npm ci`, then `npm run check`.
-- Fix any formatting drift; do not change behavior merely to make checks green.
 - Add `@aquarium/fake-esp` to `build:packages`; ensure the lockfile contains all
   workspace links and `npm ci` does not modify it.
 - Split scripts into stable lanes:
@@ -756,7 +755,7 @@ Acceptance (completed):
 - Old-firmware behavior is pinned by compatibility fixtures; corrected 4.1.0
   behavior is pinned separately and compiled from the real sketch.
 - Old/unexpected firmware is visible but excluded from actuator work until the
-  operator flashes the current 5.0.5 release.
+  operator flashes the current 5.0.6 release.
 
 ### R8 — Real pinned-Mosquitto integration suite
 
@@ -1023,7 +1022,7 @@ Six CI validation jobs:
    namespace-safety assertion.
 4. `browser`: install pinned Chromium, build/start full stack, Playwright + axe,
    upload failure artifacts.
-5. `firmware`: compile firmware 5.0.5 with the pinned Arduino toolchain.
+5. `firmware`: compile firmware 5.0.6 with the pinned Arduino toolchain.
 6. `container`: BuildKit build, local amd64 smoke, ARM64 build/emulation smoke,
    Compose health, non-root/read-only/volume checks.
 
@@ -1125,7 +1124,7 @@ Create `docs/readiness-report.md` containing:
 Execution status:
 
 1. R0-R14 repository implementation is complete on the current branch.
-2. Firmware 5.0.5 and focused transport/scheduler/compiler evidence pass locally.
+2. Firmware 5.0.6 and focused transport/scheduler/compiler evidence pass locally.
 3. The pre-4.1 baseline historically passed real-Mosquitto 5/5, Playwright
    18/18 in three retry-free runs, 97 files/638 unit tests, 82 files/571
    critical tests, and protected PR/default-branch validation.
@@ -1168,7 +1167,7 @@ npm run test:critical
 npm run test:integration
 npm run test:e2e
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.5 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory>
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory> --commit --state-db <explicit-state.db>
 npm run storage -- backup --state-db <existing-state.db> --events-db <existing-events.db> --destination <backup-parent-directory>

@@ -12,7 +12,7 @@ describe("independent fake ESP actor commands", () => {
 
     harness.connectAll();
     expect(actorPayloads(harness, harness.topics.announce)).toEqual([
-      '{"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"5.0.5","hardwareProfile":"nodemcu-esp32s-v1.1","hardwareModel":"Ai-Thinker NodeMCU-32S V1.1","scheduleHash":"0"}',
+      '{"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"5.0.6","hardwareProfile":"nodemcu-esp32s-v1.1","hardwareModel":"Ai-Thinker NodeMCU-32S V1.1","scheduleHash":"0"}',
     ]);
 
     harness.publishCommand("discover");
