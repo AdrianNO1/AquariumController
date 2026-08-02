@@ -49,8 +49,15 @@ export function ControllerStateProvider({
   );
 
   useEffect(() => {
+    const reconnect = (): void => activeCoordinator.retry();
+    window.addEventListener("offline", reconnect);
+    window.addEventListener("online", reconnect);
     activeCoordinator.start();
-    return () => activeCoordinator.stop();
+    return () => {
+      window.removeEventListener("offline", reconnect);
+      window.removeEventListener("online", reconnect);
+      activeCoordinator.stop();
+    };
   }, [activeCoordinator]);
 
   const value = useMemo<ControllerStateContextValue>(

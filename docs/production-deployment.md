@@ -521,7 +521,7 @@ docker compose --file compose.production.yaml exec -T controller \
   --events-db /var/lib/aquarium/events/events.db
 ```
 
-Confirm the snapshot and UI, firmware version 4.1.0 for every ESP32, MQTT
+Confirm the snapshot and UI, firmware version 5.0.5 for every ESP32, MQTT
 discovery, schedules, overrides, alert history, notification destination,
 storage-health readings, and the latest verified backup. Confirm a
 nonresponding ESP becomes offline without stopping healthy device lanes, and

@@ -138,8 +138,9 @@ missing, corrupt, replaced, escaped, or symlinked artifact; a stable filesystem
 identity cache avoids redundant verification without hiding later changes. A
 missing verified artifact makes startup create a fresh backup and keeps health
 from reporting a false-green success. The controller creates a backup at 02:00
-UTC and keeps the newest three fully verified backups without deleting unknown
-or damaged entries. Compose uses Docker's compressed `local` log driver with
+UTC and keeps the newest verified backup from each UTC day for 14 days, then
+the newest verified backup from each UTC week for 183 days, without deleting
+unknown or damaged entries. Compose uses Docker's compressed `local` log driver with
 five 10 MiB files per service.
 
 ## Local development

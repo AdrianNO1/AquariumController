@@ -693,7 +693,7 @@ export const CombinedScheduleEditor = forwardRef<
                 {addPointMode ? "Click graph…" : "New point"}
               </button>
               <button
-                className="text-button danger-text"
+                className="danger-button compact-button"
                 type="button"
                 disabled={
                   selectedPoint === null || selectedDraft.points.length <= 2

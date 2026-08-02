@@ -568,8 +568,9 @@ manifest, checksum, SQLite integrity/foreign-key, and replay-boundary
 verification. Startup runs one promptly when that verified artifact is missing,
 invalid, or older than the configured threshold. Storage health reads the same
 verified timestamp, preventing a deleted or corrupt artifact from appearing
-fresh. The newest three canonically named, fully verified backups are retained;
-unknown, malformed, damaged, or symlinked entries are never deleted
+fresh. Retention keeps the newest canonically named, fully verified backup from
+each UTC day for 14 days, then the newest verified backup from each UTC week for
+183 days. Unknown, malformed, damaged, or symlinked entries are never deleted
 automatically.
 
 Verification is serialized and deduplicated. A cached valid or invalid result is
@@ -616,8 +617,9 @@ copy, run `verify-archive-set` with the matching `events.db`, archive directory,
 and a new explicit manifest output, then compare/preserve the deterministic
 manifest. Archives are not automatically deleted because they may be the only
 remaining payload copy. Their bytes are included in storage projection and
-free-space alerts, but backup-directory copies are not; the three-backup cap and
-an operator-selected archive offload/lifecycle remain production requirements.
+free-space alerts, but backup-directory copies are not. Daily/weekly database
+backup retention and an operator-selected archive offload/lifecycle remain
+production requirements.
 
 ## Test and CI architecture
 
@@ -630,7 +632,7 @@ Executable CI separates failure domains into six validation jobs:
 - `browser`: pinned Chromium, production builds, Playwright/axe, and
   failure-only trace/screenshot/video artifacts;
 - `firmware`: cached pinned Arduino/ESP32 toolchain compilation of firmware
-  4.1.0;
+  5.0.5;
 - `container`: amd64 Compose health/restart/hardening plus an emulated ARM64
   HTTP/SQLite integrity smoke.
 

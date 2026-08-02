@@ -18,10 +18,10 @@ merge, publish a new image, and record that image's exact digest.
 Current firmware 5.0.5/per-device-lane local evidence:
 
 - formatting, lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 111 files/768 tests;
-- critical: 88 files/652 tests;
+- unit: 111 files/773 tests;
+- critical: 88 files/654 tests;
 - real Mosquitto integration: 5/5;
-- production Playwright: 18/18 with zero retries; and
+- production Playwright: 21/21 with zero retries; and
 - pinned firmware compile: 89% flash and 16% global RAM.
 
 These results have not yet been confirmed by the protected pull-request or
@@ -118,6 +118,8 @@ future firmware work and physical validation.
 - [ ] Set a reviewed minimum-free-space threshold for preflight.
 - [ ] Define archive/offsite retention. Database backups do not contain
       `.ndjson.zst` event archives.
+- [ ] Confirm the automated database-backup policy keeps one verified backup
+      per UTC day for 14 days and then one per UTC week for 183 days.
 - [ ] Record the prior image digest and prior storage paths for an upgrade.
 - [ ] For a first migration, record the legacy service, data path, and immutable
       rollback-snapshot destination instead; there is no prior SQLite release.

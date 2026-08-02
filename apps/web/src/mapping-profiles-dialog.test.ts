@@ -181,6 +181,129 @@ describe("MappingProfilesDialog", () => {
     ).toMatch(/GPIO12.*Main rack ESP/u);
   });
 
+  it("does not warn about GPIO12 while its mapping is disabled", () => {
+    const firstMapping = profile.mappings.at(0);
+    if (firstMapping === undefined) throw new Error("Missing mapping fixture");
+    renderDialog({
+      profiles: [
+        {
+          ...profile,
+          mappings: [{ ...firstMapping, pin: 12, enabled: false }],
+        },
+      ],
+      devices: [assignedDevice],
+    });
+
+    expect(
+      screen.queryByRole("list", { name: "Profile hardware warnings" }),
+    ).toBeNull();
+  });
+
+  it("does not reject disabled legacy mappings on unsafe pins", async () => {
+    const firstMapping = profile.mappings.at(0);
+    if (firstMapping === undefined) throw new Error("Missing mapping fixture");
+    const user = userEvent.setup();
+    renderDialog({
+      profiles: [
+        {
+          ...profile,
+          mappings: [
+            {
+              ...firstMapping,
+              pin: 7,
+              enabled: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      screen.queryByRole("list", { name: "Profile validation errors" }),
+    ).toBeNull();
+    await user.clear(screen.getByRole("textbox", { name: "Profile name" }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Profile name" }),
+      "Safe replacement",
+    );
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Save profile",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  });
+
+  it("duplicates a profile with a new profile and mapping identity", async () => {
+    const requests: Array<{
+      readonly profileId: string;
+      readonly body: {
+        readonly expectedRevision: number;
+        readonly name: string;
+        readonly hardwareProfileId: string;
+        readonly outputGain: number;
+        readonly mappings: readonly {
+          readonly id: string;
+          readonly pin: number;
+          readonly target: { readonly kind: string; readonly id: string };
+        }[];
+      };
+    }> = [];
+    server.use(
+      http.put(
+        "http://localhost/api/mapping-profiles/:profileId",
+        async ({ params, request }) => {
+          requests.push({
+            profileId: String(params.profileId),
+            body: (await request.json()) as (typeof requests)[number]["body"],
+          });
+          return HttpResponse.json({
+            changed: true,
+            revision: 9,
+            event: null,
+          });
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "Duplicate profile" }));
+    expect(
+      (
+        screen.getByRole("textbox", {
+          name: "Profile name",
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("Main rack copy");
+    expect(
+      (
+        screen.getByRole("spinbutton", {
+          name: "Pin for mapping 1",
+        }) as HTMLInputElement
+      ).value,
+    ).toBe("4");
+    expect(
+      screen.getByRole("button", { name: "Target for mapping 1" }).textContent,
+    ).toBe("Lights · White");
+
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]?.profileId).not.toBe(profile.id);
+    expect(requests[0]?.body).toMatchObject({
+      expectedRevision: 8,
+      name: "Main rack copy",
+      hardwareProfileId: profile.hardwareProfileId,
+      outputGain: profile.outputGain,
+    });
+    expect(requests[0]?.body.mappings[0]).toMatchObject({
+      pin: 4,
+      target: { kind: "channel", id: "channel-light" },
+    });
+    expect(requests[0]?.body.mappings[0]?.id).not.toBe("mapping-white");
+  });
+
   it("keeps identifiers hidden and searches area-qualified global targets", async () => {
     const user = userEvent.setup();
     renderDialog();

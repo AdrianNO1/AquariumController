@@ -16,7 +16,10 @@ import {
   type ControllerBackupResult,
 } from "./sqlite-backup.js";
 
-export const CONTROLLER_BACKUP_RETENTION_COUNT = 3;
+export const CONTROLLER_BACKUP_DAILY_RETENTION_DAYS = 14;
+export const CONTROLLER_BACKUP_WEEKLY_RETENTION_DAYS = 183;
+
+const DAY_MS = 86_400_000;
 
 const BACKUP_DIRECTORY_NAME =
   /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/u;
@@ -245,6 +248,7 @@ export class ControllerBackupMaintenance implements ControllerBackupMaintenanceP
       await verifyControllerBackup(backup.manifestFile);
       const retention = await pruneVerifiedControllerBackups(
         this.#destinationDirectory,
+        input.runAtMs,
       );
       const byteCount = sumBackupBytes(backup);
       await this.interactions.log({
@@ -306,17 +310,13 @@ export class ControllerBackupMaintenance implements ControllerBackupMaintenanceP
 
 export async function pruneVerifiedControllerBackups(
   destinationDirectory: string,
-  retainCount = CONTROLLER_BACKUP_RETENTION_COUNT,
+  nowMs = Date.now(),
 ): Promise<VerifiedBackupRetentionResult> {
   const root = requiredResolvedPath(
     destinationDirectory,
     "Backup destination directory",
   );
-  if (!Number.isSafeInteger(retainCount) || retainCount <= 0) {
-    throw new RangeError(
-      "Backup retention count must be a positive safe integer",
-    );
-  }
+  assertTimestamp(nowMs, "Backup retention time");
 
   const entries = await readdir(root, { withFileTypes: true });
   const verified: VerifiedBackupDirectory[] = [];
@@ -351,7 +351,10 @@ export async function pruneVerifiedControllerBackups(
       right.createdAtMs - left.createdAtMs ||
       right.name.localeCompare(left.name),
   );
-  const toPrune = verified.slice(retainCount);
+  const retainedNames = selectControllerBackupRetention(verified, nowMs);
+  const toPrune = verified.filter(
+    (candidate) => !retainedNames.has(candidate.name),
+  );
   for (const candidate of toPrune) {
     const information = await lstat(candidate.directory);
     if (!information.isDirectory() || information.isSymbolicLink()) {
@@ -371,9 +374,62 @@ export async function pruneVerifiedControllerBackups(
 
   return {
     recognizedBackupCount: verified.length,
-    retainedBackupCount: Math.min(verified.length, retainCount),
+    retainedBackupCount: retainedNames.size,
     prunedBackupCount: toPrune.length,
   };
+}
+
+export function selectControllerBackupRetention(
+  backups: readonly VerifiedBackupDirectory[],
+  nowMs: number,
+): ReadonlySet<string> {
+  assertTimestamp(nowMs, "Backup retention time");
+  const retainedNames = new Set<string>();
+  const retainedDays = new Set<string>();
+  const retainedWeeks = new Set<string>();
+  const sorted = [...backups].sort(
+    (left, right) =>
+      right.createdAtMs - left.createdAtMs ||
+      right.name.localeCompare(left.name),
+  );
+
+  for (const backup of sorted) {
+    const ageMs = nowMs - backup.createdAtMs;
+    if (ageMs < 0) {
+      retainedNames.add(backup.name);
+      continue;
+    }
+    if (ageMs < CONTROLLER_BACKUP_DAILY_RETENTION_DAYS * DAY_MS) {
+      const day = new Date(backup.createdAtMs).toISOString().slice(0, 10);
+      if (!retainedDays.has(day)) {
+        retainedDays.add(day);
+        retainedNames.add(backup.name);
+      }
+      continue;
+    }
+    if (ageMs < CONTROLLER_BACKUP_WEEKLY_RETENTION_DAYS * DAY_MS) {
+      const week = utcWeekStart(backup.createdAtMs);
+      if (!retainedWeeks.has(week)) {
+        retainedWeeks.add(week);
+        retainedNames.add(backup.name);
+      }
+    }
+  }
+  return retainedNames;
+}
+
+function utcWeekStart(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  const daysSinceMonday = (date.getUTCDay() + 6) % 7;
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate() - daysSinceMonday,
+    ),
+  )
+    .toISOString()
+    .slice(0, 10);
 }
 
 function parseBackupSuccessReference(

@@ -350,7 +350,7 @@ Safe final-audit parallel lanes:
 - Documentation/readiness audit can proceed without Docker but may not invent
   integration, browser, or container results.
 - R8, R12, and R13 are implemented. The current local no-retry R12 browser run
-  passed 18/18; the protected PR and `master` 18/18 results are historical
+  passed 21/21; the protected PR and `master` 18/18 results are historical
   pre-4.1 evidence. Current protected confirmation and real production hardware
   remain separate external evidence.
 
@@ -725,10 +725,10 @@ Acceptance:
 
 ### R7 — Manual overrides and failover decision
 
-Current status: **implemented with current local 4.1 evidence**. Service, repository,
+Current status: **implemented with current local evidence**. Service, repository,
 routes, scheduler overlay, restart, expiry, unknown outcome, typed
 start/extend/cancel/reconcile UI, authoritative countdown/states, conflict
-refresh, no-optimistic-retry, and firmware 4.1.0 failover evidence exist.
+refresh, no-optimistic-retry, and firmware failover evidence exist.
 Current local full integration and browser coverage pass; protected CI
 confirmation remains pending.
 
@@ -756,7 +756,7 @@ Acceptance (completed):
 - Old-firmware behavior is pinned by compatibility fixtures; corrected 4.1.0
   behavior is pinned separately and compiled from the real sketch.
 - Old/unexpected firmware is visible but excluded from actuator work until the
-  operator flashes 4.1.0.
+  operator flashes the current 5.0.5 release.
 
 ### R8 — Real pinned-Mosquitto integration suite
 
@@ -810,7 +810,7 @@ Acceptance:
 Current status: **implemented**. All 11 routes,
 snapshot/SSE state, schedule/channel/throttle/mapping/device editing, conflicts,
 manual-override mutations/countdown/terminal states, and operation states exist.
-The current production-built local Playwright suite passes 18/18; protected CI
+The current production-built local Playwright suite passes 21/21; protected CI
 confirmation remains pending.
 
 Effort: large. Dependencies: stable R4-R7 contracts. Suggested mode: ordinary,
@@ -946,7 +946,7 @@ Acceptance:
 ### R12 — Production-built full-stack Playwright E2E
 
 Current status: **implemented**. The current local branch passes the retry-free
-18/18 Chromium suite against production builds, real Mosquitto, fresh SQLite
+21/21 Chromium suite against production builds, real Mosquitto, fresh SQLite
 files, and two persistent fake actors. The historical pre-4.1 protected PR and
 `master` runs also passed 18/18; current protected confirmation remains pending.
 
@@ -1168,7 +1168,7 @@ npm run test:critical
 npm run test:integration
 npm run test:e2e
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.1.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.5 .
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory>
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory> --commit --state-db <explicit-state.db>
 npm run storage -- backup --state-db <existing-state.db> --events-db <existing-events.db> --destination <backup-parent-directory>

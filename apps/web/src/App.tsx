@@ -428,9 +428,7 @@ export default function App(): React.JSX.Element {
     <div className="app-shell">
       <header className="topbar">
         <Link className="brand" to="/">
-          <span className="brand-mark" aria-hidden="true">
-            AQ
-          </span>
+          <img className="brand-mark" src="/aquarium-controller.png" alt="" />
           <span>
             Aquarium
             <small>Controller</small>

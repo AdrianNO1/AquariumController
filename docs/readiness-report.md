@@ -53,10 +53,10 @@ branch's protected validation and merge succeed.
 | Boundary                          | Evidence                                                                     | Remaining boundary                                                         |
 | --------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | Current ESP32 firmware 5.0.5      | Pinned compiler build passes at 89% flash and 16% global RAM                 | Protected firmware job, fleet flash, and physical soak                     |
-| Current transport/schedulers      | Local verification passes 111 files/768 unit and 88 files/652 critical tests | Full protected branch validation                                           |
+| Current transport/schedulers      | Local verification passes 111 files/773 unit and 88 files/654 critical tests | Full protected branch validation                                           |
 | Historical host verification      | Unit 97 files/638 tests; critical 82 files/571 tests                         | Historical pre-4.1 result; not current-branch evidence                     |
 | Current real Mosquitto            | Local current-branch integration passes 5/5                                  | Current protected integration job; production broker and LAN not contacted |
-| Current production Chromium       | Local current-branch run passes 18/18 with zero retries                      | Current protected browser job; real Pi/browser clients                     |
+| Current production Chromium       | Local current-branch run passes 21/21 with zero retries                      | Current protected browser job; real Pi/browser clients                     |
 | Historical firmware 4.0.0 compile | Warning-free; exact resource figures recorded below                          | Superseded by 4.1                                                          |
 | Historical production Compose     | Pre-4.1 template rendered with fail-closed inputs                            | Current protected container job, Pi values, and storage paths              |
 | Historical Pi preflight           | Pre-4.1 Bash syntax passed                                                   | Must run for real on the intended Pi                                       |
@@ -80,10 +80,10 @@ The current firmware 5.0.5/per-device-lane source passed local formatting, lint,
 all workspace and E2E typechecks, and production builds. Its current test
 counts are:
 
-- unit: 111 files, 768 tests;
-- critical: 88 files, 652 tests;
+- unit: 111 files, 773 tests;
+- critical: 88 files, 654 tests;
 - real-Mosquitto integration: 5/5; and
-- production Playwright: 18/18 with retries disabled.
+- production Playwright: 21/21 with retries disabled.
 
 The browser run used production-built assets, fresh SQLite databases, real
 Mosquitto, and independent fake ESPs. These local results still require
@@ -129,7 +129,7 @@ MQTT message. Hosted confirmation still belongs in the protected run.
 
 ### Production-browser stability
 
-The current local Playwright Chromium run passes 18/18 with retries disabled.
+The current local Playwright Chromium run passes 21/21 with retries disabled.
 The historical protected pull-request and protected `master` runs also passed
 their pre-4.1 18/18 suites. The current run uses production-built assets, fresh
 SQLite databases, real Mosquitto, and two independent fake ESPs. Coverage
@@ -220,7 +220,9 @@ Schema-v2 backups include independent SQLite files, SHA-256 values, integrity
 results, and a cross-database replay boundary. Startup and storage health verify
 the exact artifact named by the latest successful backup interaction; a missing,
 changed, corrupt, escaped, or symlinked artifact is not accepted. Restore writes
-only to new paths during a controlled outage.
+only to new paths during a controlled outage. Automated retention keeps the
+newest fully verified backup per UTC day for 14 days and then per UTC week for
+183 days; unrecognized, damaged, and symlinked entries are left untouched.
 
 ## Production-data boundary
 
@@ -286,7 +288,7 @@ exact digest before the Pi handoff starts.
 ### ESP32 fleet
 
 - Build the ignored local firmware configuration without committing secrets.
-- Flash every deployed board with 4.1.0 and confirm its reported version.
+- Flash every deployed board with 5.0.5 and confirm its reported version.
 - Bench-test override expiry, schedule restoration, resolution changes, time
   acquisition, Wi-Fi/broker loss, reboot, and power cycling before enabling
   aquarium actuators.

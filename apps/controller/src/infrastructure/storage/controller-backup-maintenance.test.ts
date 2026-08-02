@@ -24,9 +24,11 @@ import { InteractionRepository } from "./interaction-repository.js";
 import type { FilesystemFreeSpacePort } from "./node-filesystem-free-space.js";
 import { controllerBackupDirectoryName } from "./sqlite-backup.js";
 import {
-  CONTROLLER_BACKUP_RETENTION_COUNT,
+  CONTROLLER_BACKUP_DAILY_RETENTION_DAYS,
+  CONTROLLER_BACKUP_WEEKLY_RETENTION_DAYS,
   ControllerBackupMaintenance,
   pruneVerifiedControllerBackups,
+  selectControllerBackupRetention,
 } from "./controller-backup-maintenance.js";
 
 const DAY_MS = 86_400_000;
@@ -51,7 +53,7 @@ afterEach(async () => {
 describe("controller backup maintenance", () => {
   // This exercises five real two-database backups plus full verification of
   // every retained candidate; parallel suite I/O can exceed Vitest's 5s default.
-  it("creates, verifies, audits, and retains only the newest three recognized backups", async () => {
+  it("creates, verifies, audits, and retains recognized daily backups", async () => {
     const directory = await createTemporaryDirectory();
     const stateDatabaseFile = join(directory, "state.db");
     const eventsDatabaseFile = join(directory, "events.db");
@@ -93,13 +95,15 @@ describe("controller backup maintenance", () => {
     }
 
     expect(finalRetention).toEqual({
-      recognizedBackupCount: 4,
-      retainedBackupCount: CONTROLLER_BACKUP_RETENTION_COUNT,
-      prunedBackupCount: 1,
+      recognizedBackupCount: 5,
+      retainedBackupCount: 5,
+      prunedBackupCount: 0,
     });
     const entries = (await readdir(destinationDirectory)).sort();
     expect(entries).toEqual([
       damagedName,
+      "backup-2026-07-10T02-00-00.000Z",
+      "backup-2026-07-11T02-00-00.000Z",
       "backup-2026-07-12T02-00-00.000Z",
       "backup-2026-07-13T02-00-00.000Z",
       "backup-2026-07-14T02-00-00.000Z",
@@ -124,12 +128,51 @@ describe("controller backup maintenance", () => {
       true,
     );
     expect(outcomes.every((outcome) => outcome.byte_count > 0)).toBe(true);
-    expect(outcomes.at(-1)?.payload_json).toContain('"retainedBackupCount":3');
-    expect(outcomes.at(-1)?.payload_json).toContain('"prunedBackupCount":1');
+    expect(outcomes.at(-1)?.payload_json).toContain('"retainedBackupCount":5');
+    expect(outcomes.at(-1)?.payload_json).toContain('"prunedBackupCount":0');
     expect(
       outcomes.some((outcome) => outcome.payload_json?.includes(directory)),
     ).toBe(false);
   }, 15_000);
+
+  it("keeps one daily backup for 14 days and one weekly backup for 183 days", () => {
+    expect(CONTROLLER_BACKUP_DAILY_RETENTION_DAYS).toBe(14);
+    expect(CONTROLLER_BACKUP_WEEKLY_RETENTION_DAYS).toBe(183);
+    const nowMs = Date.parse("2026-08-03T12:00:00.000Z");
+    const backup = (name: string, createdAtMs: number) => ({
+      directory: name,
+      name,
+      createdAtMs,
+    });
+    const retained = selectControllerBackupRetention(
+      [
+        backup("future", nowMs + DAY_MS),
+        backup("today-newest", nowMs - 1_000),
+        backup("today-older", nowMs - 3_600_000),
+        backup("day-13", nowMs - 13 * DAY_MS),
+        backup("day-14", nowMs - 14 * DAY_MS),
+        backup("day-15", nowMs - 15 * DAY_MS),
+        backup("day-20-same-week", nowMs - 20 * DAY_MS),
+        backup("day-22", nowMs - 22 * DAY_MS),
+        backup("day-182", nowMs - 182 * DAY_MS),
+        backup("day-183", nowMs - 183 * DAY_MS),
+        backup("day-200", nowMs - 200 * DAY_MS),
+      ],
+      nowMs,
+    );
+
+    expect([...retained].sort()).toEqual(
+      [
+        "future",
+        "today-newest",
+        "day-13",
+        "day-14",
+        "day-15",
+        "day-22",
+        "day-182",
+      ].sort(),
+    );
+  });
 
   it("replaces deleted, corrupted, or legacy-unreferenced backups and exposes invalid artifacts as unhealthy first", async () => {
     const directory = await createTemporaryDirectory();
@@ -286,8 +329,8 @@ describe("controller backup maintenance", () => {
           },
         ),
     ).toThrow(/must not be empty/u);
-    await expect(pruneVerifiedControllerBackups(directory, 0)).rejects.toThrow(
-      /positive safe integer/u,
+    await expect(pruneVerifiedControllerBackups(directory, -1)).rejects.toThrow(
+      /valid non-negative timestamp/u,
     );
   });
 });

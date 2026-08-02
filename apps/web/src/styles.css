@@ -84,20 +84,12 @@ select {
 }
 
 .brand-mark {
-  display: grid;
+  display: block;
   width: 40px;
   height: 40px;
-  place-items: center;
   border: 1px solid #3b9293;
   border-radius: 13px;
-  color: #8de8df;
-  background: linear-gradient(
-    145deg,
-    rgba(32, 132, 137, 0.3),
-    rgba(4, 47, 54, 0.5)
-  );
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
+  object-fit: cover;
 }
 
 nav {
@@ -2486,7 +2478,7 @@ button:disabled {
   grid-template-columns: 74px 115px minmax(0, 1fr) auto auto;
   align-items: end;
   gap: 8px;
-  padding: 8px 0;
+  padding: 8px 10px;
   border-bottom: 1px solid rgba(128, 206, 200, 0.12);
 }
 
