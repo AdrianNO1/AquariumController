@@ -278,6 +278,7 @@ test("an unmapped created channel can be deleted with its owned schedule", async
   await mappingDialog
     .getByRole("button", { name: "Close mapping profiles" })
     .click();
+  await expect(mappingDialog).toBeHidden();
 
   await page.getByRole("button", { name: "Manage channels" }).click();
   const channelDialog = page.getByRole("dialog", {
