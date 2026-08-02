@@ -186,6 +186,10 @@ npm run verify
 docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
 ```
 
+For a new OTA release, use `npm run firmware:release -- <version>` rather than
+copying a local Arduino build. The complete versioning, artifact, and review
+checklist is in [the ESP32 firmware guide](firmware/esp32/README.md#preparing-a-firmware-release).
+
 CI defines six validation jobs: static/unit, critical, real-Mosquitto
 integration, production-Chromium, firmware, and amd64/ARM64 container. It also
 renders the fail-closed production Compose template and rejects

@@ -616,7 +616,9 @@ describe("persistent device operation service", () => {
   });
 
   it("records a firmware-reported command error without quarantining the device", async () => {
-    const context = await setup();
+    const onDeviceContact = vi.fn();
+    const context = await setup({ onDeviceContact });
+    context.setNowMs(2_500);
     context.executor.outcomes.push({
       index: 0,
       command: "A1 p",
@@ -635,10 +637,16 @@ describe("persistent device operation service", () => {
       },
     });
     expect(context.executor.calls).toHaveLength(1);
-    await expect(readDevice(context.databases.state)).resolves.toMatchObject({
+    const device = await readDevice(context.databases.state);
+    expect(device).toMatchObject({
       enabled: 1,
       status: "online",
       last_error_code: null,
+    });
+    expect(device.last_seen_at_ms).toBeGreaterThan(1_000);
+    expect(onDeviceContact).toHaveBeenCalledWith({
+      deviceId: "A1",
+      observedAtMs: device.last_seen_at_ms,
     });
   });
 
