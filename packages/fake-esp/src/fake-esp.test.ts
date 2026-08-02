@@ -12,7 +12,7 @@ describe("independent fake ESP actor commands", () => {
 
     harness.connectAll();
     expect(actorPayloads(harness, harness.topics.announce)).toEqual([
-      '{"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"4.1.0","scheduleHash":"0"}',
+      '{"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"5.0.5","hardwareProfile":"nodemcu-esp32s-v1.1","hardwareModel":"Ai-Thinker NodeMCU-32S V1.1","scheduleHash":"0"}',
     ]);
 
     harness.publishCommand("discover");
@@ -45,12 +45,12 @@ describe("independent fake ESP actor commands", () => {
       { key: "alpha", deviceName: "Alpha", deviceId: DEVICE_ID },
       { key: "beta", deviceName: "Beta", deviceId: "B1C2D3E4" },
     ]);
-    harness.actor("alpha").setAnalogValue(7, 321);
+    harness.actor("alpha").setAnalogValue(34, 321);
     harness.connectAll();
     harness.bus.clearPublications();
 
     harness.publishCommand(
-      `${DEVICE_ID} p;B1C2D3E4 p;Other p;${DEVICE_ID} s 4 128 1;${DEVICE_ID} r 7`,
+      `${DEVICE_ID} p;B1C2D3E4 p;Other p;${DEVICE_ID} s 4 128 1;${DEVICE_ID} r 34`,
     );
 
     expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
@@ -60,7 +60,7 @@ describe("independent fake ESP actor commands", () => {
         responses: [
           { index: 0, response: "o" },
           { index: 3, response: "s 4 128 1" },
-          { index: 4, response: "r 7 321" },
+          { index: 4, response: "r 34 321" },
         ],
       },
       {
@@ -82,7 +82,7 @@ describe("independent fake ESP actor commands", () => {
     harness.bus.clearPublications();
 
     harness.publishCommand(
-      `${DEVICE_ID} e Alpha 5000 12;${DEVICE_ID} s 4 0 0;${DEVICE_ID} s 5 128 1;${DEVICE_ID} s 6 255 0`,
+      `${DEVICE_ID} e Alpha 5000 12;${DEVICE_ID} s 4 0 0;${DEVICE_ID} s 12 128 1;${DEVICE_ID} s 13 255 0`,
     );
 
     expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
@@ -92,23 +92,23 @@ describe("independent fake ESP actor commands", () => {
         responses: [
           { index: 0, response: "Alpha 5000 12" },
           { index: 1, response: "s 4 0 0" },
-          { index: 2, response: "s 5 128 1" },
-          { index: 3, response: "s 6 255 0" },
+          { index: 2, response: "s 12 128 1" },
+          { index: 3, response: "s 13 255 0" },
         ],
       },
     ]);
     expect(harness.actor("alpha").pinSnapshot(4).outputValue).toBe(0);
-    expect(harness.actor("alpha").pinSnapshot(5)).toMatchObject({
+    expect(harness.actor("alpha").pinSnapshot(12)).toMatchObject({
       outputValue: 2_055,
       lastManualValue: 2_055,
       overwritten: true,
     });
-    expect(harness.actor("alpha").pinSnapshot(6).outputValue).toBe(4_095);
+    expect(harness.actor("alpha").pinSnapshot(13).outputValue).toBe(4_095);
   });
 
   it("implements command, configuration, synchronization, and analog errors", () => {
     const harness = createConnectedHarness();
-    harness.actor("alpha").setAnalogValue(9, 777);
+    harness.actor("alpha").setAnalogValue(34, 777);
     harness.bus.clearPublications();
 
     harness.publishCommand(
@@ -117,7 +117,7 @@ describe("independent fake ESP actor commands", () => {
         `${DEVICE_ID} s 4 256 0`,
         `${DEVICE_ID} s 4 1 2`,
         `${DEVICE_ID} r nope`,
-        `${DEVICE_ID} r 9 metadata`,
+        `${DEVICE_ID} r 34 metadata`,
         `${DEVICE_ID} sc {`,
         `${DEVICE_ID} sync 0`,
         `${DEVICE_ID} sync -1`,
@@ -149,7 +149,7 @@ describe("independent fake ESP actor commands", () => {
 
     harness.bus.clearPublications();
     harness.publishCommand(
-      `${DEVICE_ID} r 9 metadata extra;${DEVICE_ID} r 9metadata;${DEVICE_ID} r 9`,
+      `${DEVICE_ID} r 34 metadata extra;${DEVICE_ID} r 34metadata;${DEVICE_ID} r 34`,
     );
     expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
       {
@@ -158,7 +158,7 @@ describe("independent fake ESP actor commands", () => {
         responses: [
           { index: 0, response: "E: Metadata not supported" },
           { index: 1, response: "E: Metadata not supported" },
-          { index: 2, response: "r 9 777" },
+          { index: 2, response: "r 34 777" },
         ],
       },
     ]);
@@ -199,7 +199,7 @@ describe("independent fake ESP actor commands", () => {
     harness.bus.clearPublications();
 
     harness.publishCommand(
-      `${DEVICE_ID} s -1 255 1;${DEVICE_ID} s 64 255 1;${DEVICE_ID} r -1;${DEVICE_ID} r 64;${DEVICE_ID} s 4 1 0 extra;${DEVICE_ID} s 999999999999999999999 1 0;${DEVICE_ID} s 4 128 0;${DEVICE_ID} r 4;${DEVICE_ID} r 999999999999999999999`,
+      `${DEVICE_ID} s -1 255 1;${DEVICE_ID} s 64 255 1;${DEVICE_ID} r -1;${DEVICE_ID} r 64;${DEVICE_ID} s 32 1 0 extra;${DEVICE_ID} s 999999999999999999999 1 0;${DEVICE_ID} s 32 128 0;${DEVICE_ID} r 32;${DEVICE_ID} r 999999999999999999999`,
     );
 
     expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
@@ -213,7 +213,7 @@ describe("independent fake ESP actor commands", () => {
           { index: 3, response: "E: Invalid pin" },
           { index: 4, response: "E: Invalid arguments" },
           { index: 5, response: "E: Invalid arguments" },
-          { index: 6, response: "s 4 128 0" },
+          { index: 6, response: "s 32 128 0" },
           { index: 7, response: "E: Pin is configured as output" },
           { index: 8, response: "E: Invalid arguments" },
         ],
@@ -221,7 +221,7 @@ describe("independent fake ESP actor commands", () => {
     ]);
     expect(harness.actor("alpha").pinSnapshot(-1).attached).toBe(false);
     expect(harness.actor("alpha").pinSnapshot(64).attached).toBe(false);
-    expect(harness.actor("alpha").pinSnapshot(4)).toMatchObject({
+    expect(harness.actor("alpha").pinSnapshot(32)).toMatchObject({
       attached: true,
       outputValue: 128,
     });
@@ -371,7 +371,7 @@ describe("independent fake ESP actor commands", () => {
     });
   });
 
-  it("retains SPIFFS schedule while bare clear resets EEPROM and targeted clear stays invalid", () => {
+  it("ignores bare clear and rejects targeted clear without erasing state", () => {
     const harness = createConnectedHarness();
     harness.publishCommand(`${DEVICE_ID} sc ${FIRMWARE_FLAT_DOCUMENT_JSON}`);
     harness.publishCommand(`${DEVICE_ID} e Renamed 6000 10`);
@@ -388,21 +388,19 @@ describe("independent fake ESP actor commands", () => {
 
     harness.bus.clearPublications();
     harness.publishCommand("clear");
-    expect(actorPayloads(harness, harness.topics.response)).toEqual([
-      "EEPROM cleared",
-    ]);
+    expect(actorPayloads(harness, harness.topics.response)).toEqual([]);
     expect(harness.actor("alpha").identity()).toEqual({
-      deviceName: "Alpha",
+      deviceName: "Renamed",
       deviceId: DEVICE_ID,
-      frequency: 5000,
-      resolution: 8,
+      frequency: 6000,
+      resolution: 10,
     });
     expect(harness.actor("alpha").persistenceSnapshot().schedule).toBe(
       FIRMWARE_FLAT_DOCUMENT_JSON,
     );
   });
 
-  it("broadcasts the bare clear plaintext response from every connected actor", () => {
+  it("does not let a bare clear broadcast affect any connected actor", () => {
     const harness = new FakeEspHarness([
       { key: "alpha", deviceName: "Alpha", deviceId: DEVICE_ID },
       { key: "beta", deviceName: "Beta", deviceId: "B1C2D3E4" },
@@ -411,10 +409,9 @@ describe("independent fake ESP actor commands", () => {
     harness.bus.clearPublications();
 
     harness.publishCommand("clear");
-    expect(actorPayloads(harness, harness.topics.response)).toEqual([
-      "EEPROM cleared",
-      "EEPROM cleared",
-    ]);
+    expect(actorPayloads(harness, harness.topics.response)).toEqual([]);
+    expect(harness.actor("alpha").identity().deviceName).toBe("Alpha");
+    expect(harness.actor("beta").identity().deviceName).toBe("Beta");
   });
 
   it("injects drop, malformed, duplicate, delay, and reconnect response faults", () => {

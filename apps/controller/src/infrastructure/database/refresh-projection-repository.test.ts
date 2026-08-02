@@ -108,6 +108,7 @@ describe("refresh projection repository", () => {
 
 async function seedProjection(context: ControllerDatabases): Promise<void> {
   const now = 1_000;
+  await context.state.deleteFrom("throttles").execute();
   await context.state
     .insertInto("throttles")
     .values({

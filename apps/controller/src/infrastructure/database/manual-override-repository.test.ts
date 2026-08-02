@@ -537,6 +537,7 @@ async function activate(
 
 async function seed(state: Kysely<StateDatabaseSchema>): Promise<void> {
   const now = 1_000;
+  await state.deleteFrom("throttles").execute();
   await state
     .insertInto("throttles")
     .values({

@@ -3,6 +3,7 @@ import type {
   ControlArea,
   ControllerSnapshot,
   Device,
+  FirmwareDeployment,
   MappingProfile,
   OperationSummary,
   Output,
@@ -25,6 +26,7 @@ export interface ControlAreaModel {
   readonly mappingProfiles: readonly MappingProfile[];
   readonly relevantProfileIds: ReadonlySet<string>;
   readonly devices: readonly Device[];
+  readonly firmware: FirmwareDeployment;
   readonly operations: readonly OperationSummary[];
   readonly overrides: readonly Override[];
 }
@@ -93,6 +95,7 @@ export function projectControlArea(
     ),
     relevantProfileIds,
     devices,
+    firmware: snapshot.firmware,
     operations: snapshot.operations.items,
     overrides,
   };

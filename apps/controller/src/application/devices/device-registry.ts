@@ -1,17 +1,20 @@
 import {
   boundedTextSchema,
   canonicalUint32HashSchema,
+  hardwareProfileIdSchema,
   identifierSchema,
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
 import {
-  CURRENT_ESP_FIRMWARE_VERSION,
   espFirmwareDiagnosticSchema,
-  isCurrentEspFirmwareVersion,
+  espOtaStatusSchema,
+  espOutputStateSchema,
+  isSupportedEspFirmwareVersion,
   isSupportedEsp32PwmConfiguration,
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   type EspAnnouncement,
 } from "@aquarium/esp-protocol";
-import { sql, type Kysely, type Selectable, type Transaction } from "kysely";
+import { sql, type Kysely, type Selectable } from "kysely";
 import { z } from "zod";
 
 import {
@@ -34,7 +37,12 @@ const registryAnnouncementSchema = z
     res: z.number().int().min(1).max(16),
     status: boundedTextSchema,
     version: boundedTextSchema,
+    hardwareProfile: hardwareProfileIdSchema.optional(),
+    hardwareModel: boundedTextSchema.optional(),
     scheduleHash: canonicalUint32HashSchema,
+    outputsOff: z.boolean().optional(),
+    outputs: espOutputStateSchema.optional(),
+    ota: espOtaStatusSchema.optional(),
     lastError: espFirmwareDiagnosticSchema.optional(),
   })
   .superRefine((announcement, context) => {
@@ -234,9 +242,40 @@ export class DeviceRegistry {
           .selectAll()
           .where("hardware_id", "=", announcement.id)
           .executeTakeFirst();
-        const mappingProfileId =
-          existing?.mapping_profile_id ??
-          (await matchingMappingProfileId(transaction, announcement.name));
+        const reportedHardwareProfileId =
+          announcement.hardwareProfile ??
+          existing?.reported_hardware_profile_id ??
+          null;
+        const reportedHardwareModel =
+          announcement.hardwareModel ??
+          existing?.reported_hardware_model ??
+          null;
+        let mappingProfileId = existing?.mapping_profile_id ?? null;
+        if (mappingProfileId !== null && reportedHardwareProfileId !== null) {
+          const assignedProfile = await transaction
+            .selectFrom("mapping_profiles")
+            .select("hardware_profile_id")
+            .where("id", "=", mappingProfileId)
+            .executeTakeFirst();
+          if (
+            assignedProfile === undefined ||
+            assignedProfile.hardware_profile_id !== reportedHardwareProfileId
+          ) {
+            mappingProfileId = null;
+          }
+        }
+        const outputStateJson =
+          announcement.outputs === undefined ||
+          announcement.outputsOff === undefined
+            ? null
+            : JSON.stringify({
+                outputs: announcement.outputs,
+                outputsOff: announcement.outputsOff,
+              });
+        const otaStatusJson =
+          announcement.ota === undefined
+            ? null
+            : JSON.stringify(announcement.ota);
         if (
           existing?.last_seen_at_ms !== null &&
           existing?.last_seen_at_ms !== undefined &&
@@ -269,10 +308,14 @@ export class DeviceRegistry {
               reported_pwm_frequency_hz: announcement.freq,
               reported_pwm_resolution_bits: announcement.res,
               firmware_version: announcement.version,
+              reported_hardware_profile_id: reportedHardwareProfileId,
+              reported_hardware_model: reportedHardwareModel,
               reported_schedule_hash: announcement.scheduleHash,
+              output_state_json: outputStateJson,
+              ota_status_json: otaStatusJson,
               status:
                 announcement.status === "online" &&
-                error?.code !== "firmware_outdated"
+                error?.code !== "firmware_unsupported"
                   ? "online"
                   : "error",
               last_seen_at_ms: event.receivedAtMs,
@@ -321,7 +364,7 @@ export class DeviceRegistry {
         const nextStatus: DeviceStatus = quarantinedForProtocolFault
           ? "error"
           : announcement.status === "online" &&
-              error?.code !== "firmware_outdated"
+              error?.code !== "firmware_unsupported"
             ? "online"
             : "error";
         const reportedStateChanged =
@@ -331,7 +374,11 @@ export class DeviceRegistry {
           existing.reported_pwm_frequency_hz !== announcement.freq ||
           existing.reported_pwm_resolution_bits !== announcement.res ||
           existing.firmware_version !== announcement.version ||
+          existing.reported_hardware_profile_id !== reportedHardwareProfileId ||
+          existing.reported_hardware_model !== reportedHardwareModel ||
           existing.reported_schedule_hash !== announcement.scheduleHash ||
+          existing.output_state_json !== outputStateJson ||
+          existing.ota_status_json !== otaStatusJson ||
           existing.status !== nextStatus ||
           existing.last_error_code !== (error?.code ?? null) ||
           existing.last_error_message !== (error?.message ?? null);
@@ -360,7 +407,11 @@ export class DeviceRegistry {
             reported_pwm_frequency_hz: announcement.freq,
             reported_pwm_resolution_bits: announcement.res,
             firmware_version: announcement.version,
+            reported_hardware_profile_id: reportedHardwareProfileId,
+            reported_hardware_model: reportedHardwareModel,
             reported_schedule_hash: announcement.scheduleHash,
+            output_state_json: outputStateJson,
+            ota_status_json: otaStatusJson,
             status: nextStatus,
             last_seen_at_ms: event.receivedAtMs,
             last_error_code: error?.code ?? null,
@@ -710,26 +761,6 @@ export class DeviceRegistry {
   }
 }
 
-async function matchingMappingProfileId(
-  transaction: Transaction<StateDatabaseSchema>,
-  deviceName: string,
-): Promise<string | null> {
-  const profiles = await transaction
-    .selectFrom("mapping_profiles")
-    .select(["id", "device_name_prefix"])
-    .orderBy("id", "asc")
-    .execute();
-  const matches = profiles.filter((profile) =>
-    deviceName.startsWith(profile.device_name_prefix),
-  );
-  if (matches.length > 1) {
-    throw new Error(
-      `Device ${deviceName} matches multiple mapping profile prefixes`,
-    );
-  }
-  return matches[0]?.id ?? null;
-}
-
 function announcementError(
   announcement: z.infer<typeof registryAnnouncementSchema>,
   desired: {
@@ -744,10 +775,10 @@ function announcementError(
       message: `Device reported status ${announcement.status}`,
     };
   }
-  if (!isCurrentEspFirmwareVersion(announcement.version)) {
+  if (!isSupportedEspFirmwareVersion(announcement.version)) {
     return {
-      code: "firmware_outdated",
-      message: `Firmware ${announcement.version} is outdated; install ${CURRENT_ESP_FIRMWARE_VERSION}`,
+      code: "firmware_unsupported",
+      message: `Firmware ${announcement.version} is unsupported; install ${MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION} or newer`,
     };
   }
   if (

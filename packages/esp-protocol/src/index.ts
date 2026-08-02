@@ -1,10 +1,9 @@
 import { z } from "zod";
+import { hardwareProfileIdSchema } from "@aquarium/contracts";
 
 import {
-  LEGACY_CHUNK_DATA_BYTES,
-  LEGACY_CHUNK_THRESHOLD_BYTES,
+  ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES,
   LEGACY_COMMANDS_PER_DEVICE_PER_BATCH,
-  LEGACY_MAX_CHUNKS,
   isSupportedEsp32PwmConfiguration,
   utf8ByteLength,
 } from "./limits.js";
@@ -12,11 +11,68 @@ import {
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "4.1.0";
+export const CURRENT_ESP_FIRMWARE_VERSION = "5.0.5";
+export const MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION = "5.0.0";
+export const MINIMUM_PULL_OTA_FIRMWARE_VERSION =
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION;
+export const ESP_FIRMWARE_ARTIFACT = {
+  version: CURRENT_ESP_FIRMWARE_VERSION,
+  fileName: "ESP32Code-5.0.5.bin",
+  sizeBytes: 1_174_448,
+  sha256: "7f7f59d8bd4acb12d38c8836d390f49f1f3f3f7a0e644c6aee33b46d040476ea",
+} as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
   return version === CURRENT_ESP_FIRMWARE_VERSION;
 }
+
+export function isSupportedEspFirmwareVersion(version: string): boolean {
+  const [major] = version.split(".");
+  return /^\d+$/u.test(major ?? "") && Number(major) >= 5;
+}
+
+export function supportsPullOta(version: string): boolean {
+  return isSupportedEspFirmwareVersion(version);
+}
+
+export const espOtaStatusSchema = z.strictObject({
+  status: z.enum([
+    "idle",
+    "accepted",
+    "downloading",
+    "verifying",
+    "rebooting",
+    "probation",
+    "succeeded",
+    "failed",
+    "rolling_back",
+  ]),
+  targetVersion: z.string().max(31),
+  progress: z.number().int().min(0).max(100),
+  error: z.string().min(1).max(96).optional(),
+});
+
+export const espOutputStateSchema = z
+  .array(
+    z.tuple([
+      z.number().int().min(0).max(63),
+      z.number().int().min(0).max(100),
+    ]),
+  )
+  .max(64)
+  .superRefine((outputs, context) => {
+    const pins = new Set<number>();
+    for (const [index, [pin]] of outputs.entries()) {
+      if (pins.has(pin)) {
+        context.addIssue({
+          code: "custom",
+          path: [index, 0],
+          message: "Reported output pins must be unique",
+        });
+      }
+      pins.add(pin);
+    }
+  });
 
 export const espFirmwareDiagnosticSchema = z.strictObject({
   code: z.string().regex(/^[a-z0-9_]{1,48}$/u),
@@ -35,7 +91,12 @@ export const espAnnouncementSchema = z
     res: z.number().int().min(1).max(16),
     status: z.string().min(1),
     version: z.string().min(1),
+    hardwareProfile: hardwareProfileIdSchema.optional(),
+    hardwareModel: z.string().min(1).max(256).optional(),
     scheduleHash: z.string().regex(/^\d+$/),
+    outputsOff: z.boolean().optional(),
+    outputs: espOutputStateSchema.optional(),
+    ota: espOtaStatusSchema.optional(),
     lastError: espFirmwareDiagnosticSchema.optional(),
   })
   .superRefine((announcement, context) => {
@@ -106,28 +167,21 @@ export function createEspTopicSet(testMode: boolean): EspTopicSet {
   };
 }
 
-export function encodeLegacyMessage(payload: string): readonly string[] {
+export function encodeLegacyMessage(payload: string): string {
   if (payload.length === 0) {
     throw new TypeError("Cannot publish an empty legacy ESP payload");
   }
   if (payload.includes("\0")) {
     throw new TypeError("Legacy ESP payloads cannot contain null bytes");
   }
-  if (utf8ByteLength(payload) <= LEGACY_CHUNK_THRESHOLD_BYTES) {
-    return [payload];
-  }
-
-  const dataChunks = splitUtf8(payload, LEGACY_CHUNK_DATA_BYTES);
-  if (dataChunks.length > LEGACY_MAX_CHUNKS) {
+  const payloadBytes = utf8ByteLength(payload);
+  if (payloadBytes > ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES) {
     throw new RangeError(
-      `Payload needs ${dataChunks.length} chunks; deployed firmware supports at most ${LEGACY_MAX_CHUNKS}`,
+      `MQTT command payload is ${payloadBytes} bytes; firmware supports at most ${ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES}`,
     );
   }
 
-  return dataChunks.map((data, index) => {
-    const isLast = index === dataChunks.length - 1 ? 1 : 0;
-    return `chunk:${index}:${dataChunks.length}:${isLast}:${data}`;
-  });
+  return payload;
 }
 
 export function batchLegacyCommands(
@@ -177,28 +231,4 @@ export function batchLegacyCommands(
 
   flush();
   return batches;
-}
-
-function splitUtf8(value: string, maximumBytes: number): string[] {
-  const chunks: string[] = [];
-  let chunk = "";
-  let chunkBytes = 0;
-
-  for (const character of value) {
-    const characterBytes = utf8ByteLength(character);
-    if (chunkBytes + characterBytes > maximumBytes) {
-      chunks.push(chunk);
-      chunk = character;
-      chunkBytes = characterBytes;
-    } else {
-      chunk += character;
-      chunkBytes += characterBytes;
-    }
-  }
-
-  if (chunk.length > 0) {
-    chunks.push(chunk);
-  }
-
-  return chunks;
 }

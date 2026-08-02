@@ -2,14 +2,6 @@
 .agents
 .codex
 .old
-!.old/
-.old/*
-!.old/slaveCode/
-.old/slaveCode/*
-!.old/slaveCode/ESP32Code/
-.old/slaveCode/ESP32Code/*
-!.old/slaveCode/ESP32Code/ESP32Code.ino
-!.old/slaveCode/ESP32Code/firmware-config.example.h
 .vscode
 .data
 **/.data
@@ -25,6 +17,7 @@
 .env.*
 **/.env
 **/.env.*
+firmware/esp32/ESP32Code/firmware-config.h
 .npmrc
 **/.npmrc
 **/.ssh

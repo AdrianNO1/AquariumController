@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 // @vitest-environment-options {"url":"http://localhost/"}
 
-import type { Device, MappingProfile } from "@aquarium/contracts";
+import type {
+  Device,
+  FirmwareDeployment,
+  MappingProfile,
+  OperationSummary,
+} from "@aquarium/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
@@ -28,10 +33,16 @@ import {
 import { DevicesPanel } from "./DevicesPanel.js";
 
 const timestamp = "2026-07-13T10:00:00.000Z";
+const firmware: FirmwareDeployment = {
+  currentVersion: "5.0.4",
+  sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+  sizeBytes: 1,
+  fleetPolicy: null,
+};
 const profile: MappingProfile = {
   id: "profile-main",
   name: "Main rack",
-  deviceNamePrefix: "main",
+  hardwareProfileId: "nodemcu-esp32s-v1.1",
   outputGain: 1,
   createdAt: timestamp,
   updatedAt: timestamp,
@@ -43,7 +54,7 @@ const devices: readonly Device[] = [
     name: "Online rack",
     hardwareId: "A1B2C3D4",
     status: "online",
-    firmwareVersion: "4.0.0",
+    firmwareVersion: "5.0.4",
     lastError: null,
   }),
   device({
@@ -51,11 +62,8 @@ const devices: readonly Device[] = [
     name: "Stale rack",
     hardwareId: "B2C3D4E5",
     status: "stale",
-    firmwareVersion: "4.0.0",
-    lastError: {
-      code: "firmware_outdated",
-      message: "Firmware 4.1.0 is available",
-    },
+    firmwareVersion: "5.0.0-beta.1",
+    lastError: null,
   }),
   device({
     id: "device-offline",
@@ -104,8 +112,10 @@ describe("DevicesPanel", () => {
     expect(screen.getByText("ID: A1B2C3D4")).toBeTruthy();
     expect(screen.getByText("ID: B2C3D4E5")).toBeTruthy();
     expect(screen.getByText("ID: C3D4E5F6")).toBeTruthy();
-    expect(screen.getByText(/4\.0\.0 .* current/u)).toBeTruthy();
-    expect(screen.getByText(/4\.0\.0 .* update available/u)).toBeTruthy();
+    expect(screen.getByText(/5\.0\.4 .* current/u)).toBeTruthy();
+    expect(
+      screen.getByText(/5\.0\.0-beta\.1 .* update available/u),
+    ).toBeTruthy();
     expect(screen.getByText(/3\.9\.2 .* upgrade required/u)).toBeTruthy();
     expect(screen.queryByText("Controls")).toBeNull();
   });
@@ -214,7 +224,7 @@ describe("DevicesPanel", () => {
     ).toBeTruthy();
   });
 
-  it("allows a reported configuration mismatch to be reapplied when a firmware warning masks its error code", async () => {
+  it("allows a reported configuration mismatch to be reapplied when an unsupported-firmware error masks it", async () => {
     let requestBody: object | null = null;
     server.use(
       http.patch(
@@ -247,8 +257,8 @@ describe("DevicesPanel", () => {
           pwmFrequencyHz: 500,
         },
         lastError: {
-          code: "firmware_outdated",
-          message: "Firmware 4.1.0 is available",
+          code: "firmware_unsupported",
+          message: "Firmware 4.1.0 is unsupported",
         },
       },
     ]);
@@ -264,8 +274,158 @@ describe("DevicesPanel", () => {
         name: "online-rack",
         pwmFrequencyHz: 1_000,
         pwmResolutionBits: 8,
+        mappingProfileId: "profile-main",
       }),
     );
+  });
+
+  it("presents an in-flight configuration mismatch as an update pending", () => {
+    const sourceDevice = devices[0];
+    if (sourceDevice === undefined) {
+      throw new Error("Test devices are missing the online ESP32");
+    }
+    const pendingOperation: OperationSummary = {
+      id: "operation-edit-online",
+      deviceId: sourceDevice.id,
+      kind: "edit_configuration",
+      status: "in_flight",
+      requestedAt: timestamp,
+      deadlineAt: "2026-07-13T10:00:05.000Z",
+      completedAt: null,
+    };
+
+    renderPanel(
+      vi.fn(),
+      [
+        {
+          ...sourceDevice,
+          desired: { ...sourceDevice.desired, name: "Renamed rack" },
+          lastError: {
+            code: "configuration_mismatch",
+            message:
+              "Reported configuration differs from desired configuration",
+          },
+        },
+      ],
+      [pendingOperation],
+    );
+
+    expect(screen.getByText("Update pending…")).toBeTruthy();
+    expect(
+      screen.queryByText("Desired and reported configuration differ."),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "Reported configuration differs from desired configuration",
+      ),
+    ).toBeNull();
+  });
+
+  it("changes the explicit pin profile without renaming the ESP", async () => {
+    let requestBody: object | null = null;
+    server.use(
+      http.patch(
+        "http://localhost/api/devices/device-online/configuration",
+        async ({ request }) => {
+          requestBody = (await request.json()) as object;
+          return HttpResponse.json({
+            changed: false,
+            revision: 9,
+            event: null,
+          });
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderPanel();
+
+    const editButton = screen.getAllByRole("button", { name: "Edit" }).at(0);
+    if (editButton === undefined)
+      throw new Error("Expected an ESP edit button");
+    await user.click(editButton);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Pin mapping profile" }),
+      "",
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(requestBody).toEqual({
+        expectedRevision: 8,
+        mappingProfileId: null,
+      }),
+    );
+  });
+
+  it("hides a successful firmware update after ten minutes", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(timestamp));
+    try {
+      const sourceDevice = devices[0];
+      if (sourceDevice === undefined) {
+        throw new Error("Test devices are missing the online ESP32");
+      }
+      renderPanel(vi.fn(), [
+        {
+          ...sourceDevice,
+          firmwareUpdate: {
+            targetVersion: firmware.currentVersion,
+            mode: "immediate",
+            status: "succeeded",
+            progress: 100,
+            operationId: "operation-firmware-online",
+            error: null,
+            requestedAt: timestamp,
+            updatedAt: timestamp,
+          },
+        },
+      ]);
+
+      expect(screen.getByText("Update: succeeded · 100%")).toBeTruthy();
+      act(() => vi.advanceTimersByTime(10 * 60 * 1_000 - 1));
+      expect(screen.getByText("Update: succeeded · 100%")).toBeTruthy();
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByText("Update: succeeded · 100%")).toBeNull();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it("confirms whether an available firmware update runs now or waits for outputs off", async () => {
+    let requestBody: object | null = null;
+    server.use(
+      http.post(
+        "http://localhost/api/devices/device-stale/firmware-update",
+        async ({ request }) => {
+          requestBody = (await request.json()) as object;
+          return HttpResponse.json({
+            changed: false,
+            revision: 8,
+            event: null,
+          });
+        },
+      ),
+    );
+    const refresh = vi.fn();
+    const user = userEvent.setup();
+    renderPanel(refresh);
+
+    await user.click(screen.getByRole("button", { name: "Update to 5.0.4" }));
+    expect(
+      screen.getByRole("dialog", { name: "Update Stale rack?" }),
+    ).toBeTruthy();
+    await user.click(
+      screen.getByRole("button", { name: /Update when outputs are off/u }),
+    );
+
+    await waitFor(() =>
+      expect(requestBody).toEqual({
+        expectedRevision: 8,
+        mode: "when_off",
+      }),
+    );
+    expect(refresh).toHaveBeenCalledOnce();
   });
 
   it("requires edited configuration to be saved or discarded before backdrop close", async () => {
@@ -277,6 +437,11 @@ describe("DevicesPanel", () => {
         { name: "Edit" },
       ),
     );
+    expect(
+      screen.queryByText(
+        /Saving records controller intent\. Reported values update only/u,
+      ),
+    ).toBeNull();
     const name = screen.getByRole("textbox", { name: "Device name" });
     await user.clear(name);
     await user.type(name, "Renamed-rack");
@@ -305,6 +470,7 @@ describe("DevicesPanel", () => {
 function renderPanel(
   refresh = vi.fn(),
   renderedDevices: readonly Device[] = devices,
+  operations: readonly OperationSummary[] = [],
 ): void {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -319,6 +485,8 @@ function renderPanel(
       createElement(DevicesPanel, {
         devices: renderedDevices,
         mappingProfiles: [profile],
+        operations,
+        firmware,
         expectedRevision: 8,
         refresh,
       }),
@@ -356,7 +524,13 @@ function device({
       pwmResolutionBits: 8,
       firmwareVersion,
       scheduleHash: "1234",
+      outputsOff: true,
+      outputs: [],
+      ota: null,
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
+      hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
     },
+    firmwareUpdate: null,
     status,
     lastSeenAt: status === "offline" ? null : timestamp,
     lastError,

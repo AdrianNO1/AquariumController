@@ -20,6 +20,11 @@ import {
   positiveSafeIntegerSchema,
   retentionClassSchema,
 } from "./primitives.js";
+import {
+  hardwareProfileById,
+  hardwareProfileIdSchema,
+  isAllowedPwmPin,
+} from "./hardware-profiles.js";
 
 export const controlAreaSchema = z.strictObject({
   slug: controlAreaSlugSchema,
@@ -139,7 +144,7 @@ export const mappingProfileSchema = z
   .strictObject({
     id: identifierSchema,
     name: boundedTextSchema,
-    deviceNamePrefix: boundedTextSchema,
+    hardwareProfileId: hardwareProfileIdSchema,
     outputGain: gainSchema,
     createdAt: isoTimestampSchema,
     updatedAt: isoTimestampSchema,
@@ -166,6 +171,16 @@ export const mappingProfileSchema = z
       }
       pins.add(mapping.pin);
       targets.add(targetKey);
+      if (
+        mapping.enabled &&
+        !isAllowedPwmPin(profile.hardwareProfileId, mapping.pin)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["mappings", index, "pin"],
+          message: `GPIO${mapping.pin} is not an allowed PWM output on ${hardwareProfileById(profile.hardwareProfileId).label}`,
+        });
+      }
     }
   });
 
@@ -200,12 +215,65 @@ const deviceConfigurationSchema = z.strictObject({
   pwmResolutionBits: pwmResolutionBitsSchema,
 });
 
+export const firmwareUpdateModeSchema = z.enum(["immediate", "when_off"]);
+export const firmwareUpdateStatusSchema = z.enum([
+  "pending",
+  "waiting_for_device",
+  "waiting_for_off",
+  "accepted",
+  "downloading",
+  "verifying",
+  "rebooting",
+  "probation",
+  "succeeded",
+  "failed",
+  "usb_required",
+]);
+
+const reportedOutputStateSchema = z.strictObject({
+  pin: z.number().int().min(0).max(63),
+  valuePercentage: percentageSchema,
+});
+
+const reportedOtaStateSchema = z.strictObject({
+  status: z.enum([
+    "idle",
+    "accepted",
+    "downloading",
+    "verifying",
+    "rebooting",
+    "probation",
+    "succeeded",
+    "failed",
+    "rolling_back",
+  ]),
+  targetVersion: z.string().max(31),
+  progress: z.number().int().min(0).max(100),
+  error: boundedTextSchema.nullable(),
+});
+
+const deviceFirmwareUpdateSchema = z.strictObject({
+  targetVersion: boundedTextSchema,
+  mode: firmwareUpdateModeSchema,
+  status: firmwareUpdateStatusSchema,
+  progress: z.number().int().min(0).max(100),
+  operationId: identifierSchema.nullable(),
+  error: boundedTextSchema.nullable(),
+  requestedAt: isoTimestampSchema,
+  updatedAt: isoTimestampSchema,
+});
+
 const reportedDeviceConfigurationSchema = z.strictObject({
   name: boundedTextSchema.nullable(),
   pwmFrequencyHz: pwmFrequencyHzSchema.nullable(),
   pwmResolutionBits: pwmResolutionBitsSchema.nullable(),
   firmwareVersion: boundedTextSchema.nullable(),
   scheduleHash: canonicalUint32HashSchema.nullable(),
+  outputsOff: z.boolean().nullable(),
+  outputs: z.array(reportedOutputStateSchema).max(64),
+  ota: reportedOtaStateSchema.nullable(),
+  hardwareProfileId: hardwareProfileIdSchema.nullable(),
+  hardwareModel: boundedTextSchema.nullable(),
 });
 
 export const deviceSchema = z.strictObject({
@@ -214,6 +282,7 @@ export const deviceSchema = z.strictObject({
   mappingProfileId: identifierSchema.nullable(),
   desired: deviceConfigurationSchema,
   reported: reportedDeviceConfigurationSchema,
+  firmwareUpdate: deviceFirmwareUpdateSchema.nullable(),
   status: deviceStatusSchema,
   lastSeenAt: isoTimestampSchema.nullable(),
   lastError: z
@@ -222,6 +291,19 @@ export const deviceSchema = z.strictObject({
   enabled: z.boolean(),
   createdAt: isoTimestampSchema,
   updatedAt: isoTimestampSchema,
+});
+
+export const firmwareDeploymentSchema = z.strictObject({
+  currentVersion: boundedTextSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  sizeBytes: positiveSafeIntegerSchema,
+  fleetPolicy: z
+    .strictObject({
+      targetVersion: boundedTextSchema,
+      mode: firmwareUpdateModeSchema,
+      requestedAt: isoTimestampSchema,
+    })
+    .nullable(),
 });
 
 export const operationSummarySchema = z
@@ -866,6 +948,7 @@ export const controllerSnapshotSchema = z
     outputs: z.array(outputSchema),
     mappingProfiles: z.array(mappingProfileSchema),
     devices: z.array(deviceSchema),
+    firmware: firmwareDeploymentSchema,
     operations: recentOperationsSchema,
     unresolvedDeviceOperations: unresolvedDeviceOperationsSchema,
     importRuns: z.array(importRunSummarySchema).max(100),
@@ -1062,26 +1145,6 @@ export const controllerSnapshotSchema = z
           path: ["alerts", index, "details", "observation"],
           message: "Active alert observation must identify its rule source",
         });
-      }
-    }
-    for (const [index, profile] of snapshot.mappingProfiles.entries()) {
-      for (
-        let otherIndex = index + 1;
-        otherIndex < snapshot.mappingProfiles.length;
-        otherIndex += 1
-      ) {
-        const other = snapshot.mappingProfiles[otherIndex];
-        if (
-          other !== undefined &&
-          (profile.deviceNamePrefix.startsWith(other.deviceNamePrefix) ||
-            other.deviceNamePrefix.startsWith(profile.deviceNamePrefix))
-        ) {
-          context.addIssue({
-            code: "custom",
-            path: ["mappingProfiles", otherIndex, "deviceNamePrefix"],
-            message: "Mapping profile prefixes must not overlap",
-          });
-        }
       }
     }
     if ((snapshot.revision === 0) !== (snapshot.committedAt === null)) {
@@ -1286,7 +1349,7 @@ export const replaceMappingProfileRequestSchema = z
   .strictObject({
     expectedRevision: nonnegativeSafeIntegerSchema,
     name: boundedTextSchema,
-    deviceNamePrefix: boundedTextSchema,
+    hardwareProfileId: hardwareProfileIdSchema,
     outputGain: gainSchema,
     mappings: z.array(pinMappingSchema).max(64),
   })
@@ -1311,6 +1374,13 @@ export const replaceMappingProfileRequestSchema = z
       }
       pins.add(mapping.pin);
       targets.add(targetKey);
+      if (!isAllowedPwmPin(request.hardwareProfileId, mapping.pin)) {
+        context.addIssue({
+          code: "custom",
+          path: ["mappings", index, "pin"],
+          message: `GPIO${mapping.pin} is not an allowed PWM output on ${hardwareProfileById(request.hardwareProfileId).label}`,
+        });
+      }
     }
   });
 
@@ -1328,12 +1398,14 @@ export const patchDeviceConfigurationRequestSchema = z
       .optional(),
     pwmFrequencyHz: pwmFrequencyHzSchema.optional(),
     pwmResolutionBits: pwmResolutionBitsSchema.optional(),
+    mappingProfileId: identifierSchema.nullable().optional(),
   })
   .superRefine((request, context) => {
     if (
       request.name === undefined &&
       request.pwmFrequencyHz === undefined &&
-      request.pwmResolutionBits === undefined
+      request.pwmResolutionBits === undefined &&
+      request.mappingProfileId === undefined
     ) {
       context.addIssue({
         code: "custom",
@@ -1360,6 +1432,11 @@ export const patchDeviceConfigurationRequestSchema = z
 export const setDeviceEnabledRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
   enabled: z.boolean(),
+});
+
+export const requestFirmwareUpdateSchema = z.strictObject({
+  expectedRevision: nonnegativeSafeIntegerSchema,
+  mode: firmwareUpdateModeSchema,
 });
 
 export const alertRuleSourceSchema = z.discriminatedUnion("type", [
@@ -1650,6 +1727,9 @@ export type Output = z.infer<typeof outputSchema>;
 export type PinMapping = z.infer<typeof pinMappingSchema>;
 export type MappingProfile = z.infer<typeof mappingProfileSchema>;
 export type Device = z.infer<typeof deviceSchema>;
+export type FirmwareDeployment = z.infer<typeof firmwareDeploymentSchema>;
+export type FirmwareUpdateMode = z.infer<typeof firmwareUpdateModeSchema>;
+export type FirmwareUpdateStatus = z.infer<typeof firmwareUpdateStatusSchema>;
 export type OperationSummary = z.infer<typeof operationSummarySchema>;
 export type RecentOperations = z.infer<typeof recentOperationsSchema>;
 export type UnresolvedDeviceOperations = z.infer<
@@ -1700,6 +1780,7 @@ export type PatchDeviceConfigurationRequest = z.infer<
 export type SetDeviceEnabledRequest = z.infer<
   typeof setDeviceEnabledRequestSchema
 >;
+export type RequestFirmwareUpdate = z.infer<typeof requestFirmwareUpdateSchema>;
 export type AlertRuleSource = z.infer<typeof alertRuleSourceSchema>;
 export type AlertRuleCondition = z.infer<typeof alertRuleConditionSchema>;
 export type AlertRuleInput = z.infer<typeof alertRuleInputSchema>;

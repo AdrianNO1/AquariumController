@@ -156,7 +156,7 @@ describe("legacy JSON import", () => {
       expect(result.committed).toBe(false);
       expect(result.report.valid).toBe(true);
       await expectTableCount(database, "import_runs", 0);
-      await expectTableCount(database, "throttles", 0);
+      await expectTableCount(database, "throttles", 11);
       await expectTableCount(database, "channels", 0);
       await expectTableCount(database, "state_revisions", 0);
       await expectTableCount(database, "state_outbox", 0);
@@ -207,7 +207,7 @@ describe("legacy JSON import", () => {
       expect(result.committed).toBe(false);
       expect(countIssues(result.report, "schedule-end-minute")).toBe(1);
       await expectTableCount(database, "import_runs", 0);
-      await expectTableCount(database, "throttles", 0);
+      await expectTableCount(database, "throttles", 11);
       await expectTableCount(database, "channels", 0);
       await expectTableCount(database, "state_revisions", 0);
     } finally {
@@ -258,12 +258,20 @@ describe("legacy JSON import", () => {
           display_order: 1,
         },
       ]);
-      expect(
-        await database
-          .selectFrom("mapping_profiles")
-          .select(["device_name_prefix", "output_gain"])
-          .executeTakeFirstOrThrow(),
-      ).toEqual({ device_name_prefix: "mainLys", output_gain: 0.7 });
+      const importedProfile = await database
+        .selectFrom("mapping_profiles")
+        .select([
+          "id",
+          "device_name_prefix",
+          "hardware_profile_id",
+          "output_gain",
+        ])
+        .executeTakeFirstOrThrow();
+      expect(importedProfile).toMatchObject({
+        hardware_profile_id: "nodemcu-esp32s-v1.1",
+        output_gain: 0.7,
+      });
+      expect(importedProfile.device_name_prefix).toBe(importedProfile.id);
       expect(
         await database
           .selectFrom("throttles")
@@ -363,7 +371,7 @@ describe("legacy JSON import", () => {
       await expectTableCount(database, "mapping_profiles", 1);
       await expectTableCount(database, "import_runs", 0);
       await expectTableCount(database, "import_issues", 0);
-      await expectTableCount(database, "throttles", 0);
+      await expectTableCount(database, "throttles", 11);
       await expectTableCount(database, "channels", 0);
       await expectTableCount(database, "schedules", 0);
       await expectTableCount(database, "schedule_points", 0);

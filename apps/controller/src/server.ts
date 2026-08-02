@@ -1,10 +1,12 @@
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdir, readFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import {
   deviceContactEventSchema,
   type CommittedStateEvent,
 } from "@aquarium/contracts";
+import { ESP_FIRMWARE_ARTIFACT } from "@aquarium/esp-protocol";
 import { sql } from "kysely";
 
 import { buildApp } from "./app.js";
@@ -63,6 +65,18 @@ import { StateEventStreamHub } from "./realtime/state-event-stream.js";
 import { runSignalShutdown } from "./signal-shutdown.js";
 
 const configuration = parseControllerConfiguration(process.env);
+const firmwareData = await readFile(
+  join(configuration.firmware.directory, ESP_FIRMWARE_ARTIFACT.fileName),
+);
+const firmwareSha256 = createHash("sha256").update(firmwareData).digest("hex");
+if (
+  firmwareData.byteLength !== ESP_FIRMWARE_ARTIFACT.sizeBytes ||
+  firmwareSha256 !== ESP_FIRMWARE_ARTIFACT.sha256
+) {
+  throw new Error(
+    "Bundled ESP32 firmware artifact failed integrity validation",
+  );
+}
 
 await Promise.all([
   mkdir(dirname(configuration.storage.stateDatabaseFile), { recursive: true }),
@@ -264,6 +278,11 @@ const app = buildApp({
   alertHistoryReader,
   logsService,
   httpInteractionRecorder: controllerInteractionLogger,
+  firmwareArtifact: {
+    version: ESP_FIRMWARE_ARTIFACT.version,
+    sha256: ESP_FIRMWARE_ARTIFACT.sha256,
+    data: firmwareData,
+  },
   readinessProbe: async () => {
     await Promise.all([
       sql`select 1`.execute(databases.state),
@@ -292,6 +311,7 @@ const app = buildApp({
         deviceConfigurationCommands: runtimeComposition.deviceOperations,
         manualOverrideCommands: runtimeComposition.manualOverrideCommands,
         deviceDiscoveryCommands: runtimeComposition.deviceDiscovery,
+        firmwareUpdateCommands: runtimeComposition.firmwareUpdates,
       }
     : {}),
 });
@@ -496,6 +516,9 @@ function scheduleTriggersFor(
             },
           ];
         case "device":
+          if (event.type.startsWith("firmware.")) {
+            return [];
+          }
           return [{ kind: "device_configuration", deviceId: invalidation.id }];
         case "controller":
         case "control_area":

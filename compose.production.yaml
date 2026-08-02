@@ -32,6 +32,8 @@ services:
       - AQUARIUM_HOST=0.0.0.0
       - AQUARIUM_PORT=3001
       - AQUARIUM_WEB_ROOT=/app/apps/web/dist
+      - AQUARIUM_FIRMWARE_BASE_URL=${AQUARIUM_FIRMWARE_BASE_URL:?Set the ESP-reachable controller HTTP URL explicitly}
+      - AQUARIUM_FIRMWARE_DIRECTORY=/app/firmware/esp32/artifacts
       - AQUARIUM_STATE_DB_PATH=/var/lib/aquarium/state/state.db
       - AQUARIUM_EVENTS_DB_PATH=/var/lib/aquarium/events/events.db
       - AQUARIUM_ARCHIVE_DIRECTORY=/var/lib/aquarium/archives

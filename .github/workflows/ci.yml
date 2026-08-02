@@ -47,6 +47,7 @@ jobs:
           AQUARIUM_CONTROLLER_IMAGE_SHA256: "0000000000000000000000000000000000000000000000000000000000000000"
           AQUARIUM_HTTP_BIND_ADDRESS: 127.0.0.1
           AQUARIUM_HTTP_PORT: "3001"
+          AQUARIUM_FIRMWARE_BASE_URL: http://controller.invalid:3001
           AQUARIUM_MQTT_BROKER_URL: mqtt://broker.invalid:1883
           AQUARIUM_PRODUCTION_MQTT_CONFIRMATION: ENABLE_PRODUCTION_AQUARIUM_MQTT
           AQUARIUM_STATE_HOST_DIRECTORY: /srv/aquarium/state
@@ -64,6 +65,7 @@ jobs:
           rendered="$(docker compose --file compose.production.yaml config --format json)"
           jq --exit-status '
             .services.controller.image == "ghcr.io/example/aquarium-controller@sha256:0000000000000000000000000000000000000000000000000000000000000000" and
+            .services.controller.environment.AQUARIUM_FIRMWARE_BASE_URL == "http://controller.invalid:3001" and
             .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_URL == "https://alerts.invalid/aquarium" and
             .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_KEY == "ci-primary" and
             .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS == "10000" and

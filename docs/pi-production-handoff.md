@@ -1,6 +1,6 @@
 # Raspberry Pi production handoff
 
-Updated: 2026-07-26
+Updated: 2026-08-02
 
 This is the concise external-operator checklist for putting AquariumController
 into production. Repository implementation and validation did **not** contact,
@@ -10,19 +10,19 @@ this checklist does not replace it.
 
 ## Current handoff state
 
-The repository contains the firmware 4.1, correlated-request, per-device-lane,
+The repository contains firmware 5.0.5, correlated-request, per-device-lane,
 latest-only scheduler, and device-local failure implementation. Before this
 checklist becomes a deployment handoff, the branch must pass protected CI,
 merge, publish a new image, and record that image's exact digest.
 
-Current firmware 4.1/per-device-lane local evidence:
+Current firmware 5.0.5/per-device-lane local evidence:
 
 - formatting, lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 98 files/684 tests;
-- critical: 83 files/616 tests;
+- unit: 111 files/773 tests;
+- critical: 88 files/654 tests;
 - real Mosquitto integration: 5/5;
-- production Playwright: 18/18 with zero retries; and
-- pinned firmware compile: 80% flash and 19% global RAM.
+- production Playwright: 21/21 with zero retries; and
+- pinned firmware compile: 89% flash and 16% global RAM.
 
 These results have not yet been confirmed by the protected pull-request or
 default-branch workflows.
@@ -93,7 +93,7 @@ There is deliberately no CI job that deploys to the Pi.
 ## 3. Network, MQTT, and notifications
 
 - [ ] Provision a production MQTT account for the controller and a credential
-      for firmware 4.1.0.
+      for firmware 5.0.5.
 - [ ] Restrict the plaintext MQTT listener to the trusted aquarium LAN.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
       interlock.
@@ -118,17 +118,26 @@ future firmware work and physical validation.
 - [ ] Set a reviewed minimum-free-space threshold for preflight.
 - [ ] Define archive/offsite retention. Database backups do not contain
       `.ndjson.zst` event archives.
+- [ ] Confirm the automated database-backup policy keeps one verified backup
+      per UTC day for 14 days and then one per UTC week for 183 days.
 - [ ] Record the prior image digest and prior storage paths for an upgrade.
 - [ ] For a first migration, record the legacy service, data path, and immutable
       rollback-snapshot destination instead; there is no prior SQLite release.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 4.1.0 with an ignored local configuration containing the
+- [ ] Build firmware 5.0.5 with an ignored local configuration containing the
       intended Wi-Fi, MQTT username/password, and NTP host.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports exactly `4.1.0`; older/unexpected firmware is
-      intentionally marked `firmware_outdated` and receives no actuator work.
+- [ ] Confirm every device reports firmware 5.0.5 and hardware profile
+      `nodemcu-esp32s-v1.1`; firmware older than 5.0.0 is intentionally marked
+      `firmware_unsupported` and receives no actuator work.
+- [ ] Review each device's explicit mapping-profile selection after import.
+      Names no longer select profiles. Investigate every GPIO12 warning and
+      confirm the existing driver still does not pull that strapping pin high
+      during reset.
+- [ ] Review any disabled legacy pin mappings and remap or remove them. The
+      upgrade preserves unsupported rows but prevents them from driving pins.
 - [ ] Bench-test pin assignments, normalized PWM at configured resolutions,
       override expiry, schedule restoration, resolution reattachment, NTP/DNS
       loss, EEPROM-time fallback, broker/Wi-Fi loss, reboot, power cycling,

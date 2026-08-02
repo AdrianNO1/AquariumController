@@ -1,6 +1,6 @@
-export const LEGACY_CHUNK_THRESHOLD_BYTES = 256;
-export const LEGACY_CHUNK_DATA_BYTES = 200;
-export const LEGACY_MAX_CHUNKS = 50;
+// Includes the request envelope and command batch. The firmware allocates a
+// larger MQTT packet buffer so MQTT framing and the topic also fit.
+export const ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES = 5_120;
 export const LEGACY_MAX_SYNC_TIME = 2_147_483_647;
 // currentSchedule is a 4096-byte C string buffer. One byte is required for the
 // terminating NUL written by strlcpy, leaving 4095 safe payload bytes.

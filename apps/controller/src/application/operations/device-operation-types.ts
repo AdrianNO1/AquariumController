@@ -118,6 +118,24 @@ const analogReadRequestSchema = z.strictObject({
   pin: z.number().int().min(0).max(63),
 });
 
+const firmwareUpdateRequestSchema = z.strictObject({
+  kind: z.literal("firmware_update"),
+  version: z
+    .string()
+    .min(1)
+    .max(31)
+    .regex(/^[A-Za-z0-9._-]+$/u),
+  url: z
+    .string()
+    .url()
+    .max(240)
+    .refine((value) => value.startsWith("http://"), {
+      message: "ESP32 firmware URLs must use local HTTP",
+    }),
+  size: z.number().int().min(100_000).max(1_900_000),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
 export const deviceOperationRequestSchema = z.discriminatedUnion("kind", [
   setPwmRequestSchema,
   pingRequestSchema,
@@ -125,6 +143,7 @@ export const deviceOperationRequestSchema = z.discriminatedUnion("kind", [
   scheduleRequestSchema,
   syncTimeRequestSchema,
   analogReadRequestSchema,
+  firmwareUpdateRequestSchema,
 ]);
 
 const succeededResultSchema = z.strictObject({

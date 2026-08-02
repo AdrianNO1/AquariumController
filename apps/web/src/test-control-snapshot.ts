@@ -67,7 +67,7 @@ export function createTestControlSnapshot(revision = 8): ControllerSnapshot {
       {
         id: "profile-main",
         name: "Main rack",
-        deviceNamePrefix: "main",
+        hardwareProfileId: "nodemcu-esp32s-v1.1",
         outputGain: 1,
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -81,7 +81,7 @@ export function createTestControlSnapshot(revision = 8): ControllerSnapshot {
           },
           {
             id: "mapping-pump",
-            pin: 5,
+            pin: 12,
             displayOrder: 1,
             enabled: true,
             target: { kind: "channel", id: "pump-main" },
@@ -197,9 +197,15 @@ function device(
     desired: { name: id, pwmFrequencyHz: 1_000, pwmResolutionBits: 8 },
     reported: {
       ...reportedConfiguration,
-      firmwareVersion: "4.0.0",
+      firmwareVersion: "5.0.4",
       scheduleHash: "1234",
+      outputsOff: true,
+      outputs: [],
+      ota: null,
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
+      hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
     },
+    firmwareUpdate: null,
     status,
     lastSeenAt: status === "offline" ? null : timestamp,
     lastError:

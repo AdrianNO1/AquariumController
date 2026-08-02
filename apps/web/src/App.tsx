@@ -401,7 +401,7 @@ function ControlArea(): React.JSX.Element {
   if (!parsedArea.success) {
     return <NotFound />;
   }
-  return <ControlAreaPage slug={parsedArea.data} />;
+  return <ControlAreaPage key={parsedArea.data} slug={parsedArea.data} />;
 }
 
 function NotFound(): React.JSX.Element {
@@ -428,9 +428,7 @@ export default function App(): React.JSX.Element {
     <div className="app-shell">
       <header className="topbar">
         <Link className="brand" to="/">
-          <span className="brand-mark" aria-hidden="true">
-            AQ
-          </span>
+          <img className="brand-mark" src="/aquarium-controller.png" alt="" />
           <span>
             Aquarium
             <small>Controller</small>

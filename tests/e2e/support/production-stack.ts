@@ -121,6 +121,7 @@ class RunningProductionE2eStack implements ProductionE2eStack {
         ),
       "both fake ESP devices to announce",
     );
+    await this.assignSeededMappingProfiles();
     await this.waitForSettled();
   }
 
@@ -456,6 +457,36 @@ class RunningProductionE2eStack implements ProductionE2eStack {
     }
   }
 
+  private async assignSeededMappingProfiles(): Promise<void> {
+    for (const fakeDevice of fakeDevices) {
+      const snapshot = await this.waitForSettled();
+      const device = snapshot.devices.find(
+        (candidate) => candidate.hardwareId === fakeDevice.id,
+      );
+      if (device === undefined) {
+        throw new Error(
+          `Cannot assign a mapping profile before ${fakeDevice.id} is discovered`,
+        );
+      }
+      const response = await fetch(
+        `${this.baseUrl}/api/devices/${encodeURIComponent(device.id)}/configuration`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expectedRevision: snapshot.revision,
+            mappingProfileId: "profile-main",
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(
+          `Mapping-profile assignment for ${fakeDevice.id} failed with HTTP ${response.status}`,
+        );
+      }
+    }
+  }
+
   private async stopFakeDevices(): Promise<void> {
     const launcher = this.#fakeLauncher;
     const controlServer = this.#fakeControlServer;
@@ -569,31 +600,11 @@ async function seedState(paths: E2ePaths): Promise<void> {
   });
   try {
     const nowMs = Date.now();
-    const areaTypeKeys = [
-      "light",
-      "pump",
-      "testlight",
-      "bad",
-      "loft",
-      "biljard",
-      "frag",
-      "qt1",
-      "qt2",
-      "qt3",
-      "qt4",
-    ] as const;
     await databases.state
-      .insertInto("throttles")
-      .values(
-        areaTypeKeys.map((typeKey) => ({
-          id: `throttle-${typeKey}`,
-          type_key: typeKey,
-          percentage: typeKey === "light" ? 80 : 100,
-          created_at_ms: nowMs,
-          updated_at_ms: nowMs,
-        })),
-      )
-      .execute();
+      .updateTable("throttles")
+      .set({ percentage: 80, updated_at_ms: nowMs })
+      .where("type_key", "=", "light")
+      .executeTakeFirstOrThrow();
     await databases.state
       .insertInto("outputs")
       .values({
@@ -651,7 +662,7 @@ async function seedState(paths: E2ePaths): Promise<void> {
     await repository.replaceMappingProfile("profile-main", {
       expectedRevision: revision,
       name: "Main rack",
-      deviceNamePrefix: "main",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       outputGain: 1,
       mappings: [
         {
@@ -663,14 +674,14 @@ async function seedState(paths: E2ePaths): Promise<void> {
         },
         {
           id: "mapping-pump",
-          pin: 5,
+          pin: 12,
           displayOrder: 1,
           enabled: true,
           target: { kind: "channel", id: "pump-main" },
         },
         {
           id: "mapping-moonlight",
-          pin: 6,
+          pin: 13,
           displayOrder: 2,
           enabled: true,
           target: { kind: "output", id: "output-moonlight" },

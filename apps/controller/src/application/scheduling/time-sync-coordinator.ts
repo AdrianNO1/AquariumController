@@ -88,6 +88,7 @@ export class TimeSyncCoordinator {
   readonly #onDiagnostic: (diagnostic: TimeSyncDiagnostic) => void;
   readonly #onError: (error: Error) => void;
   readonly #announcementTasks = new Map<string, Promise<void>>();
+  readonly #announcementSyncedDeviceIds = new Set<string>();
   #cancelDailyTimer: CancelScheduledTask | null = null;
   #dailyTask: Promise<void> | null = null;
   #lastMonotonicMs: number | null = null;
@@ -158,14 +159,23 @@ export class TimeSyncCoordinator {
       throw new Error("Time sync coordinator is not accepting announcements");
     }
     const parsedDeviceId = identifierSchema.parse(deviceId);
+    if (this.#announcementSyncedDeviceIds.has(parsedDeviceId)) {
+      return Promise.resolve();
+    }
     const existing = this.#announcementTasks.get(parsedDeviceId);
     if (existing !== undefined) {
       return existing;
     }
 
-    const task = this.#runAnnouncementSync(parsedDeviceId).catch((error) => {
-      this.#fail(toError(error));
-    });
+    const task = this.#runAnnouncementSync(parsedDeviceId)
+      .then((succeeded) => {
+        if (succeeded) {
+          this.#announcementSyncedDeviceIds.add(parsedDeviceId);
+        }
+      })
+      .catch((error) => {
+        this.#fail(toError(error));
+      });
     this.#announcementTasks.set(parsedDeviceId, task);
     void task.then(() => {
       if (this.#announcementTasks.get(parsedDeviceId) === task) {
@@ -173,6 +183,10 @@ export class TimeSyncCoordinator {
       }
     });
     return task;
+  }
+
+  signalDeviceUnavailable(deviceId: string): void {
+    this.#announcementSyncedDeviceIds.delete(identifierSchema.parse(deviceId));
   }
 
   async stop(): Promise<void> {
@@ -335,13 +349,15 @@ export class TimeSyncCoordinator {
         operationId: operation.id,
         status: operation.status,
       });
+      return;
     }
+    this.#announcementSyncedDeviceIds.add(deviceId);
   }
 
-  async #runAnnouncementSync(deviceId: string): Promise<void> {
+  async #runAnnouncementSync(deviceId: string): Promise<boolean> {
     const dispatch = await this.#syncDevice(deviceId);
     if (dispatch === null) {
-      return;
+      return false;
     }
     if (dispatch.kind === "blocked") {
       this.#onDiagnostic({
@@ -349,7 +365,7 @@ export class TimeSyncCoordinator {
         deviceId,
         reason: dispatch.reason,
       });
-      return;
+      return false;
     }
     if (dispatch.operation.status !== "succeeded") {
       this.#onDiagnostic({
@@ -358,7 +374,9 @@ export class TimeSyncCoordinator {
         operationId: dispatch.operation.id,
         status: dispatch.operation.status,
       });
+      return false;
     }
+    return true;
   }
 
   async #syncDevice(

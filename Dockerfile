@@ -58,6 +58,7 @@ COPY --from=build --chown=node:node /app/packages/esp-protocol/package.json ./pa
 COPY --from=build --chown=node:node /app/packages/esp-protocol/dist ./packages/esp-protocol/dist
 COPY --from=build --chown=node:node /app/packages/fake-esp/package.json ./packages/fake-esp/package.json
 COPY --from=build --chown=node:node /app/packages/fake-esp/dist ./packages/fake-esp/dist
+COPY --from=build --chown=node:node /app/firmware/esp32/artifacts ./firmware/esp32/artifacts
 
 RUN mkdir -p \
       /var/lib/aquarium/state \

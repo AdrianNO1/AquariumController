@@ -15,10 +15,8 @@ import {
 } from "./transport.js";
 
 export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
-export const FAKE_ESP_FIRMWARE_VERSION = "4.1.0";
-export const FAKE_ESP_CHUNK_DATA_BYTES = 200;
-export const FAKE_ESP_MAX_CHUNKS = 50;
-export const FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS = 10_000;
+export const FAKE_ESP_FIRMWARE_VERSION = "5.0.5";
+export const FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES = 5_120;
 export const FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS = 120_000;
 
 const DEFAULT_DEVICE_NAME = "ESP32_Device";
@@ -38,6 +36,14 @@ const CURRENT_SCHEDULE_BUFFER_BYTES = 4_095;
 const MINIMUM_PIN = 0;
 const MAXIMUM_PIN = 63;
 const UINT32_MODULUS = 0x1_0000_0000;
+const HARDWARE_PROFILE = "nodemcu-esp32s-v1.1";
+const HARDWARE_MODEL = "Ai-Thinker NodeMCU-32S V1.1";
+const ALLOWED_PWM_PINS: readonly number[] = Object.freeze([
+  4, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33,
+]);
+const ALLOWED_ANALOG_INPUT_PINS: readonly number[] = Object.freeze([
+  32, 33, 34, 35, 36, 39,
+]);
 
 export interface FakeEspResponseFaults {
   readonly delayMilliseconds?: number;
@@ -105,13 +111,6 @@ interface PinState {
   overwriteStartedAtMilliseconds: number;
 }
 
-interface ChunkAssembly {
-  readonly chunks: Array<string | undefined>;
-  totalChunks: number;
-  lastChunkTimeMilliseconds: number;
-  complete: boolean;
-}
-
 interface PendingPublication {
   readonly dueAtMilliseconds: number;
   readonly payload: string;
@@ -143,13 +142,6 @@ export class FakeEspActor {
   private readonly analogValues = new Map<number, number>();
   private readonly pinAttachmentFailures = new Set<number>();
   private readonly pendingResponses: PendingPublication[] = [];
-  private readonly chunkAssembly: ChunkAssembly = {
-    chunks: Array.from<string | undefined>({ length: FAKE_ESP_MAX_CHUNKS }),
-    totalChunks: 0,
-    lastChunkTimeMilliseconds: 0,
-    complete: false,
-  };
-
   private unsubscribe: (() => void) | undefined;
   private connected = false;
   private deviceName = DEFAULT_DEVICE_NAME;
@@ -346,7 +338,6 @@ export class FakeEspActor {
   public runLoop(): void {
     const clockNow = this.clock.nowMilliseconds();
     const now = this.firmwareMillis(clockNow);
-    this.checkChunkTimeout(now);
 
     this.serviceTimeCheckpoint(now, clockNow);
     this.serviceDiagnosticPersistence(now);
@@ -533,32 +524,19 @@ export class FakeEspActor {
     if (!this.connected || topic !== this.topics.command) {
       return;
     }
-
-    this.flushPendingResponses(this.clock.nowMilliseconds());
-    if (message.startsWith("chunk:")) {
-      this.handleChunk(message.slice(6));
+    if (
+      new TextEncoder().encode(message).length >
+      FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES
+    ) {
       return;
     }
+
+    this.flushPendingResponses(this.clock.nowMilliseconds());
     if (message === "discover") {
       this.announcePresence();
       return;
     }
-    if (message === "clear") {
-      this.clearEeprom();
-      this.publishResponse("EEPROM cleared");
-      return;
-    }
     this.processCompleteMessage(message);
-  }
-
-  private clearEeprom(): void {
-    this.persistence.clearEeprom();
-    this.persistedTime = undefined;
-    this.deviceName = this.defaultDeviceName;
-    this.deviceId = this.idGenerator();
-    this.frequency = DEFAULT_FREQUENCY;
-    this.resolution = DEFAULT_RESOLUTION;
-    this.persistEeprom();
   }
 
   private announcePresence(): void {
@@ -574,6 +552,8 @@ export class FakeEspActor {
         id: this.deviceId,
         status: "online",
         version: this.firmwareVersion,
+        hardwareProfile: HARDWARE_PROFILE,
+        hardwareModel: HARDWARE_MODEL,
         ...(this.lastError === undefined
           ? {}
           : { lastError: { ...this.lastError } }),
@@ -712,7 +692,7 @@ export class FakeEspActor {
     ) {
       return "E: Invalid arguments";
     }
-    if (!validPin(pin)) {
+    if (!validPwmPin(pin)) {
       return "E: Invalid pin";
     }
     if (value < 0 || value > 255 || (overwrite !== 0 && overwrite !== 1)) {
@@ -802,7 +782,7 @@ export class FakeEspActor {
     if (!validFirmwareInteger(pin)) {
       return "E: Invalid arguments";
     }
-    if (!validPin(pin)) {
+    if (!validAnalogInputPin(pin)) {
       return "E: Invalid pin";
     }
     if (this.attachedPins.has(pin)) {
@@ -1018,92 +998,6 @@ export class FakeEspActor {
     return true;
   }
 
-  private handleChunk(chunkData: string): void {
-    const firstColon = chunkData.indexOf(":");
-    const secondColon = chunkData.indexOf(":", firstColon + 1);
-    const thirdColon = chunkData.indexOf(":", secondColon + 1);
-    if (firstColon === -1 || secondColon === -1 || thirdColon === -1) {
-      return;
-    }
-
-    const chunkIndex = arduinoToInteger(chunkData.slice(0, firstColon));
-    const totalChunks = arduinoToInteger(
-      chunkData.slice(firstColon + 1, secondColon),
-    );
-    const chunkIndexValue = chunkData.slice(0, firstColon);
-    const totalChunksValue = chunkData.slice(firstColon + 1, secondColon);
-    const isLastValue = chunkData.slice(secondColon + 1, thirdColon);
-    const data = chunkData.slice(thirdColon + 1);
-    if (
-      !/^\d+$/.test(chunkIndexValue) ||
-      !/^\d+$/.test(totalChunksValue) ||
-      chunkIndex < 0 ||
-      chunkIndex >= FAKE_ESP_MAX_CHUNKS ||
-      totalChunks < 1 ||
-      totalChunks > FAKE_ESP_MAX_CHUNKS ||
-      chunkIndex >= totalChunks ||
-      (isLastValue !== "0" && isLastValue !== "1") ||
-      (isLastValue === "1") !== (chunkIndex === totalChunks - 1) ||
-      new TextEncoder().encode(data).length > FAKE_ESP_CHUNK_DATA_BYTES
-    ) {
-      return;
-    }
-
-    const now = this.firmwareMillis();
-    if (
-      chunkIndex === 0 ||
-      this.chunkAssembly.lastChunkTimeMilliseconds === 0 ||
-      uint32Elapsed(now, this.chunkAssembly.lastChunkTimeMilliseconds) >
-        FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS
-    ) {
-      this.resetChunkAssembly(false);
-      this.chunkAssembly.totalChunks = totalChunks;
-      this.chunkAssembly.lastChunkTimeMilliseconds = now;
-    }
-    if (
-      this.chunkAssembly.totalChunks !== 0 &&
-      this.chunkAssembly.totalChunks !== totalChunks
-    ) {
-      this.resetChunkAssembly(false);
-      return;
-    }
-
-    this.chunkAssembly.chunks[chunkIndex] = data;
-    this.chunkAssembly.lastChunkTimeMilliseconds = now;
-    const allReceived = Array.from(
-      { length: totalChunks },
-      (_, index) => this.chunkAssembly.chunks[index] !== undefined,
-    ).every(Boolean);
-    if (!allReceived) {
-      return;
-    }
-
-    const completeMessage = this.chunkAssembly.chunks
-      .slice(0, totalChunks)
-      .map((chunk) => chunk ?? "")
-      .join("");
-    this.processCompleteMessage(completeMessage);
-    this.resetChunkAssembly(true);
-  }
-
-  private checkChunkTimeout(now: number): void {
-    if (
-      !this.chunkAssembly.complete &&
-      this.chunkAssembly.lastChunkTimeMilliseconds > 0 &&
-      uint32Elapsed(now, this.chunkAssembly.lastChunkTimeMilliseconds) >
-        FAKE_ESP_CHUNK_TIMEOUT_MILLISECONDS
-    ) {
-      this.resetChunkAssembly(false);
-    }
-  }
-
-  private resetChunkAssembly(complete: boolean): void {
-    this.chunkAssembly.chunks.fill(undefined);
-    this.chunkAssembly.totalChunks = 0;
-    this.chunkAssembly.complete = complete;
-    this.chunkAssembly.lastChunkTimeMilliseconds = 0;
-  }
-
   private publishResponse(
     payload: string,
     commandNames: readonly (string | null)[] = [],
@@ -1286,6 +1180,14 @@ function validPin(value: number): boolean {
   );
 }
 
+function validPwmPin(value: number): boolean {
+  return validPin(value) && ALLOWED_PWM_PINS.includes(value);
+}
+
+function validAnalogInputPin(value: number): boolean {
+  return validPin(value) && ALLOWED_ANALOG_INPUT_PINS.includes(value);
+}
+
 function validFirmwareInteger(value: number): boolean {
   return (
     Number.isInteger(value) &&
@@ -1371,7 +1273,7 @@ function validScheduleDocument(schedule: unknown): boolean {
     if (
       !isJsonRecord(rawChannel) ||
       typeof rawChannel.o !== "number" ||
-      !validPin(rawChannel.o) ||
+      !validPwmPin(rawChannel.o) ||
       (rawChannel.t !== 108 && rawChannel.t !== 112) ||
       !Array.isArray(rawChannel.l) ||
       seenPins.has(rawChannel.o)

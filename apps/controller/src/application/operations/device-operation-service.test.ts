@@ -683,6 +683,7 @@ describe("persistent device operation service", () => {
       id: "user-operation",
       deviceId: "A1",
       expectedRevision: 1,
+      mappingProfileId: null,
       requestedAtMs: 2_002,
       deadlineAtMs: 7_002,
       request: {
@@ -718,6 +719,7 @@ describe("persistent device operation service", () => {
         id: "stale-operation",
         deviceId: "A1",
         expectedRevision: 1,
+        mappingProfileId: null,
         requestedAtMs: 2_003,
         deadlineAtMs: 7_003,
         request: {
@@ -736,6 +738,7 @@ describe("persistent device operation service", () => {
       id: "same-value-operation",
       deviceId: "A1",
       expectedRevision: 4,
+      mappingProfileId: null,
       requestedAtMs: 2_004,
       deadlineAtMs: 7_004,
       request: {
@@ -783,14 +786,14 @@ describe("persistent device operation service", () => {
     expect(Number(operationCount.count)).toBe(0);
   });
 
-  it("reapplies an actual configuration mismatch when another device warning masks its error code", async () => {
+  it("reapplies an actual configuration mismatch when another device error masks its error code", async () => {
     const context = await setup();
     await context.databases.state
       .updateTable("devices")
       .set({
         name: "Desired",
-        last_error_code: "firmware_outdated",
-        last_error_message: "Firmware update available",
+        last_error_code: "firmware_unsupported",
+        last_error_message: "Firmware version is unsupported",
       })
       .where("id", "=", "A1")
       .executeTakeFirstOrThrow();

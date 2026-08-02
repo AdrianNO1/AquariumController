@@ -5,6 +5,7 @@ import {
   type AlertNotificationV1,
   type ControllerSnapshot,
 } from "@aquarium/contracts";
+import { ESP_FIRMWARE_ARTIFACT } from "@aquarium/esp-protocol";
 import { sql, type Kysely, type Selectable } from "kysely";
 import { z, type ZodType } from "zod";
 
@@ -31,6 +32,33 @@ const outcomeUnknownReconciliationSchema = z.object({
     .nonnegative()
     .max(Number.MAX_SAFE_INTEGER)
     .nullable(),
+});
+const storedOutputStateSchema = z.strictObject({
+  outputs: z
+    .array(
+      z.tuple([
+        z.number().int().min(0).max(63),
+        z.number().int().min(0).max(100),
+      ]),
+    )
+    .max(64),
+  outputsOff: z.boolean(),
+});
+const storedOtaStateSchema = z.strictObject({
+  status: z.enum([
+    "idle",
+    "accepted",
+    "downloading",
+    "verifying",
+    "rebooting",
+    "probation",
+    "succeeded",
+    "failed",
+    "rolling_back",
+  ]),
+  targetVersion: z.string().max(31),
+  progress: z.number().int().min(0).max(100),
+  error: z.string().min(1).max(96).optional(),
 });
 
 export interface ControllerSnapshotRepositoryOptions {
@@ -100,6 +128,23 @@ function parseOptionalStoredJson<Output>(
     schema,
     subject,
   );
+}
+
+function parseOptionalJson<Output>(
+  source: string | null,
+  schema: ZodType<Output>,
+  subject: string,
+): Output | null {
+  if (source === null) return null;
+  try {
+    const document = parseJsonDocument(source, subject);
+    if (document.duplicateKeys.length > 0) {
+      throw new Error("Persisted JSON contains duplicate keys");
+    }
+    return schema.parse(document.value);
+  } catch {
+    throw new InvalidPersistedSnapshotDataError(subject);
+  }
 }
 
 function toOperationSummary(
@@ -181,6 +226,8 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         profileRows,
         mappingRows,
         deviceRows,
+        firmwareUpdateRows,
+        firmwareRolloutPolicy,
         operationRows,
         unresolvedDeviceOperationRows,
         importRunRows,
@@ -230,7 +277,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         transaction
           .selectFrom("mapping_profiles")
           .selectAll()
-          .orderBy("device_name_prefix", "asc")
+          .orderBy("name", "asc")
           .orderBy("id", "asc")
           .execute(),
         transaction
@@ -246,6 +293,16 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
           .where("id", "!=", CONTROLLER_STORAGE_HEALTH_DEVICE_ID)
           .orderBy("id", "asc")
           .execute(),
+        transaction
+          .selectFrom("firmware_update_requests")
+          .selectAll()
+          .orderBy("device_id", "asc")
+          .execute(),
+        transaction
+          .selectFrom("firmware_rollout_policy")
+          .selectAll()
+          .where("singleton_key", "=", 1)
+          .executeTakeFirstOrThrow(),
         transaction
           .selectFrom("control_operations")
           .selectAll()
@@ -362,7 +419,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
       const mappingProfiles = profileRows.map((profile) => ({
         id: profile.id,
         name: profile.name,
-        deviceNamePrefix: profile.device_name_prefix,
+        hardwareProfileId: profile.hardware_profile_id,
         outputGain: profile.output_gain,
         createdAt: toIsoTimestamp(
           profile.created_at_ms,
@@ -412,6 +469,19 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
             `device ${device.id} error`,
           );
         }
+        const outputState = parseOptionalJson(
+          device.output_state_json,
+          storedOutputStateSchema,
+          `device ${device.id} output state`,
+        );
+        const otaState = parseOptionalJson(
+          device.ota_status_json,
+          storedOtaStateSchema,
+          `device ${device.id} OTA state`,
+        );
+        const firmwareUpdate = firmwareUpdateRows.find(
+          (candidate) => candidate.device_id === device.id,
+        );
         return {
           id: device.id,
           hardwareId: device.hardware_id,
@@ -427,7 +497,43 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
             pwmResolutionBits: device.reported_pwm_resolution_bits,
             firmwareVersion: device.firmware_version,
             scheduleHash: device.reported_schedule_hash,
+            outputsOff: outputState?.outputsOff ?? null,
+            outputs:
+              outputState?.outputs.map(([pin, valuePercentage]) => ({
+                pin,
+                valuePercentage,
+              })) ?? [],
+            ota:
+              otaState === null
+                ? null
+                : {
+                    status: otaState.status,
+                    targetVersion: otaState.targetVersion,
+                    progress: otaState.progress,
+                    error: otaState.error ?? null,
+                  },
+            hardwareProfileId: device.reported_hardware_profile_id,
+            hardwareModel: device.reported_hardware_model,
           },
+          firmwareUpdate:
+            firmwareUpdate === undefined
+              ? null
+              : {
+                  targetVersion: firmwareUpdate.target_version,
+                  mode: firmwareUpdate.mode,
+                  status: firmwareUpdate.status,
+                  progress: firmwareUpdate.progress,
+                  operationId: firmwareUpdate.operation_id,
+                  error: firmwareUpdate.error_message,
+                  requestedAt: toIsoTimestamp(
+                    firmwareUpdate.requested_at_ms,
+                    `device ${device.id} firmware update request time`,
+                  ),
+                  updatedAt: toIsoTimestamp(
+                    firmwareUpdate.updated_at_ms,
+                    `device ${device.id} firmware update time`,
+                  ),
+                },
           status: device.status,
           lastSeenAt:
             device.last_seen_at_ms === null
@@ -741,6 +847,24 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
         })),
         mappingProfiles,
         devices,
+        firmware: {
+          currentVersion: ESP_FIRMWARE_ARTIFACT.version,
+          sha256: ESP_FIRMWARE_ARTIFACT.sha256,
+          sizeBytes: ESP_FIRMWARE_ARTIFACT.sizeBytes,
+          fleetPolicy:
+            firmwareRolloutPolicy.enabled === 0 ||
+            firmwareRolloutPolicy.target_version !==
+              ESP_FIRMWARE_ARTIFACT.version
+              ? null
+              : {
+                  targetVersion: firmwareRolloutPolicy.target_version,
+                  mode: firmwareRolloutPolicy.mode,
+                  requestedAt: toIsoTimestamp(
+                    firmwareRolloutPolicy.requested_at_ms,
+                    "firmware fleet rollout request time",
+                  ),
+                },
+        },
         operations: {
           items: operations,
           limit: RECENT_OPERATION_LIMIT,

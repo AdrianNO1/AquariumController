@@ -52,6 +52,7 @@ export interface DeviceOperationLifecycleOptions {
 
 export interface CreatePendingUserConfigurationOperationInput extends CreatePendingDeviceOperationInput {
   readonly expectedRevision: number;
+  readonly mappingProfileId: string | null;
   readonly request: Extract<
     DeviceOperationRequest,
     { kind: "edit_configuration" }
@@ -108,6 +109,27 @@ export class DeviceOperationDeviceNotFoundError extends Error {
 
   constructor(readonly deviceId: string) {
     super(`Device ${deviceId} does not exist`);
+  }
+}
+
+export class DeviceOperationMappingProfileNotFoundError extends Error {
+  override readonly name = "DeviceOperationMappingProfileNotFoundError";
+
+  constructor(readonly mappingProfileId: string) {
+    super(`Mapping profile ${mappingProfileId} does not exist`);
+  }
+}
+
+export class DeviceOperationHardwareProfileMismatchError extends Error {
+  override readonly name = "DeviceOperationHardwareProfileMismatchError";
+
+  constructor(
+    readonly deviceId: string,
+    readonly mappingProfileId: string,
+  ) {
+    super(
+      `Mapping profile ${mappingProfileId} is not compatible with device ${deviceId}`,
+    );
   }
 }
 
@@ -173,6 +195,10 @@ export class ControlOperationRepository {
     const expectedRevision = nonnegativeSafeIntegerSchema.parse(
       input.expectedRevision,
     );
+    const mappingProfileId =
+      input.mappingProfileId === null
+        ? null
+        : identifierSchema.parse(input.mappingProfileId);
     if (parsed.request.kind !== "edit_configuration") {
       throw new TypeError(
         "User device configuration operation requires edit_configuration",
@@ -185,6 +211,7 @@ export class ControlOperationRepository {
           request: parsed.request,
         },
         expectedRevision,
+        mappingProfileId,
       ),
     );
   }
@@ -192,6 +219,7 @@ export class ControlOperationRepository {
   async #createPending(
     parsed: CreatePendingDeviceOperationInput,
     expectedRevision: number | null,
+    mappingProfileId?: string | null,
   ): Promise<CreatedUserConfigurationOperation> {
     const updatesDesiredConfiguration =
       parsed.request.kind === "edit_configuration";
@@ -229,6 +257,28 @@ export class ControlOperationRepository {
         if (existingDevice === undefined) {
           throw new DeviceOperationDeviceNotFoundError(parsed.deviceId);
         }
+        if (mappingProfileId !== undefined && mappingProfileId !== null) {
+          const mappingProfile = await transaction
+            .selectFrom("mapping_profiles")
+            .select(["id", "hardware_profile_id"])
+            .where("id", "=", mappingProfileId)
+            .executeTakeFirst();
+          if (mappingProfile === undefined) {
+            throw new DeviceOperationMappingProfileNotFoundError(
+              mappingProfileId,
+            );
+          }
+          if (
+            existingDevice.reported_hardware_profile_id !== null &&
+            mappingProfile.hardware_profile_id !==
+              existingDevice.reported_hardware_profile_id
+          ) {
+            throw new DeviceOperationHardwareProfileMismatchError(
+              existingDevice.id,
+              mappingProfile.id,
+            );
+          }
+        }
         if (
           expectedRevision !== null &&
           parsed.request.kind === "edit_configuration"
@@ -245,9 +295,13 @@ export class ControlOperationRepository {
               parsed.request.pwmFrequencyHz &&
             existingDevice.reported_pwm_resolution_bits ===
               parsed.request.pwmResolutionBits;
+          const mappingProfileMatches =
+            mappingProfileId === undefined ||
+            existingDevice.mapping_profile_id === mappingProfileId;
           if (
             desiredConfigurationMatches &&
             reportedConfigurationMatches &&
+            mappingProfileMatches &&
             existingDevice.last_error_code !== "configuration_mismatch"
           ) {
             return { changed: false, result: null };
@@ -283,6 +337,9 @@ export class ControlOperationRepository {
               name: parsed.request.name,
               desired_pwm_frequency_hz: parsed.request.pwmFrequencyHz,
               desired_pwm_resolution_bits: parsed.request.pwmResolutionBits,
+              ...(mappingProfileId === undefined
+                ? {}
+                : { mapping_profile_id: mappingProfileId }),
               last_error_code: configurationMatches
                 ? existingDevice.last_error_code === "configuration_mismatch"
                   ? null

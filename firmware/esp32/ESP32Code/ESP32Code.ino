@@ -1,5 +1,8 @@
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <Preferences.h>
 #include <PubSubClient.h>
+#include <Update.h>
 #include <EEPROM.h>
 #include <ArduinoJson.h>
 #include <map>
@@ -12,8 +15,12 @@
 #include <atomic>
 #include <cerrno>
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>  // for strlcpy, strlen
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
+#include <mbedtls/sha256.h>
 #include "firmware-config.h"
 
 unsigned long lastReconnectAttempt = 0;
@@ -24,10 +31,21 @@ const int DEFAULT_FREQ = 5000; // Default frequency in Hz
 const int DEFAULT_RES = 8;    // Don't change without altering manager.py
 const int MIN_PIN = 0;
 const int MAX_PIN = 63;
+const char* HARDWARE_PROFILE = "nodemcu-esp32s-v1.1";
+const char* HARDWARE_MODEL = "Ai-Thinker NodeMCU-32S V1.1";
+// Conservative production outputs: GPIO0/2/5/15 are reset strapping pins,
+// GPIO1/3 are the serial console, GPIO6-11 drive flash, and GPIO34-39 are
+// input-only. GPIO12 is the sole strapping-pin exception because it is already
+// deployed and its attached driver circuit is known not to pull it high at
+// reset; see isAllowedPwmPin() for the replacement-wiring warning.
+const int ALLOWED_PWM_PINS[] = {
+    4, 12, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33
+};
+const int ALLOWED_ANALOG_INPUT_PINS[] = {32, 33, 34, 35, 36, 39};
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "4.1.0";
+const char* VERSION = "5.0.5";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
@@ -40,6 +58,12 @@ const unsigned long PERSISTENCE_RETRY_INTERVAL_MS =
     TIME_CHECKPOINT_INTERVAL_MS;
 const unsigned long DIAGNOSTIC_PERSIST_INTERVAL_MS = 60UL * 60UL * 1000UL;
 const unsigned long DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS = 60UL * 1000UL;
+const unsigned long TELEMETRY_ANNOUNCEMENT_INTERVAL_MS = 1000;
+const unsigned long OTA_PROBATION_TIMEOUT_MS = 5UL * 60UL * 1000UL;
+const unsigned int OTA_MAX_PROBATION_BOOTS = 3;
+const size_t OTA_DOWNLOAD_BUFFER_SIZE = 4096;
+const size_t OTA_MINIMUM_IMAGE_SIZE = 100000;
+const size_t OTA_MAXIMUM_IMAGE_SIZE = 1900000;
 
 std::atomic<bool> ntpTimeAvailable(false);
 bool ntpSyncInProgress = false;
@@ -51,25 +75,6 @@ unsigned long lastNtpSyncCompletedAt = 0;
 
 JsonDocument globalDoc;
 
-// Chunking configuration
-#define MAX_CHUNK_SIZE 200
-#define MAX_CHUNKS 50
-#define CHUNK_TIMEOUT 10000  // 10 seconds timeout for receiving all chunks
-
-struct ChunkInfo {
-    char data[MAX_CHUNK_SIZE + 1]; // fixed-size buffer per chunk
-    bool received;
-};
-
-struct ChunkedMessage {
-    ChunkInfo chunks[MAX_CHUNKS];
-    int totalChunks;
-    unsigned long lastChunkTime;
-    bool complete;
-};
-
-ChunkedMessage currentMessage;
-
 // EEPROM configuration
 #define EEPROM_SIZE 512
 #define NAME_ADDR 0
@@ -80,7 +85,8 @@ ChunkedMessage currentMessage;
 #define ID_MAX_LENGTH 8
 #define SCHEDULE_UPDATE_INTERVAL 1000  // Check schedule every 1000ms
 #define SCHEDULE_ATTACH_RETRY_INTERVAL 60000
-#define MQTT_PACKET_BUFFER_SIZE 512
+#define MQTT_MAX_COMMAND_PAYLOAD_SIZE 5120
+#define MQTT_PACKET_BUFFER_SIZE 6144
 #define MAX_REQUEST_ID_LENGTH 64
 #define MAX_LAST_ERROR_CODE_LENGTH 48
 #define MAX_LAST_ERROR_MESSAGE_LENGTH 160
@@ -96,6 +102,37 @@ std::map<int, PinState> pinStates;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
+
+String configuredWifiSsid;
+String configuredWifiPassword;
+String configuredMqttServer;
+uint16_t configuredMqttPort = 0;
+String configuredMqttUsername;
+String configuredMqttPassword;
+String configuredNtpServer;
+
+struct OtaRequest {
+    String targetVersion;
+    String url;
+    String sha256;
+    size_t size;
+    bool pending;
+};
+
+struct OtaReport {
+    String status;
+    String targetVersion;
+    String error;
+    unsigned int progress;
+};
+
+OtaRequest otaRequest = {"", "", "", 0, false};
+OtaReport otaReport = {"idle", "", "", 0};
+bool otaProbationActive = false;
+unsigned long otaProbationStartedAt = 0;
+esp_partition_subtype_t otaPreviousPartitionSubtype = ESP_PARTITION_SUBTYPE_APP_OTA_MIN;
+bool telemetryAnnouncementPending = false;
+unsigned long telemetryAnnouncementAttemptAt = 0;
 
 bool attachedPins[64] = {false};
 int lastPinValues[64] = {0};
@@ -156,6 +193,7 @@ struct ScheduleAttachResult {
 
 FirmwareLastError lastError = {"", "", "", 0, false, 0};
 bool spiffsAvailable = false;
+bool spiffsReformattedThisBoot = false;
 bool lastErrorPersistenceDirty = false;
 bool lastErrorPersistedThisBoot = false;
 bool lastErrorPersistenceFailed = false;
@@ -529,6 +567,10 @@ void resolveLastErrorForPin(const String& code, int pin) {
 }
 
 bool storeSchedule(const String& schedule) {
+    if (!spiffsAvailable) {
+        Serial.println("Cannot save schedule because SPIFFS is unavailable");
+        return false;
+    }
     const char* currentPath = "/schedule.json";
     const char* nextPath = "/schedule.next";
     const char* previousPath = "/schedule.previous";
@@ -583,6 +625,10 @@ bool storeSchedule(const String& schedule) {
 }
 
 String loadSchedule() {
+    if (!spiffsAvailable) {
+        Serial.println("Cannot load schedule because SPIFFS is unavailable");
+        return "";
+    }
     const char* schedulePath = "/schedule.json";
     if (!SPIFFS.exists(schedulePath)) {
         if (!SPIFFS.exists("/schedule.previous") || !SPIFFS.exists("/schedule.next")) {
@@ -637,8 +683,33 @@ int getScheduledValue(JsonArray& links, int currentMinute) {
     return 0;
 }
 
-bool isValidPin(int pin) {
-    return pin >= MIN_PIN && pin <= MAX_PIN;
+bool pinAppearsIn(const int* pins, size_t count, int pin) {
+    for (size_t index = 0; index < count; index++) {
+        if (pins[index] == pin) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isAllowedPwmPin(int pin) {
+    // GPIO12 is an ESP32 flash-voltage strapping pin. It is intentionally
+    // allowed because the deployed aquarium driver wiring is proven not to
+    // pull it high during reset. Replacement circuits must preserve that.
+    return pinAppearsIn(
+        ALLOWED_PWM_PINS,
+        sizeof(ALLOWED_PWM_PINS) / sizeof(ALLOWED_PWM_PINS[0]),
+        pin
+    );
+}
+
+bool isAllowedAnalogInputPin(int pin) {
+    return pinAppearsIn(
+        ALLOWED_ANALOG_INPUT_PINS,
+        sizeof(ALLOWED_ANALOG_INPUT_PINS) /
+            sizeof(ALLOWED_ANALOG_INPUT_PINS[0]),
+        pin
+    );
 }
 
 bool isValidDeviceName(const String& name) {
@@ -747,6 +818,7 @@ bool reattachConfiguredPins(
         for (auto& channel : activeChannels) {
             channel.currentValue = -1;
         }
+        queueOutputAnnouncement();
         return true;
     }
 
@@ -821,6 +893,7 @@ bool reattachConfiguredPins(
         }
         Serial.println("LEDC rollback failed for pin " + String(pin) + "; output forced off");
     }
+    queueOutputAnnouncement();
     return false;
 }
 
@@ -975,7 +1048,7 @@ bool schedulePinsAreValid(JsonDocument& doc) {
             return false;
         }
         JsonVariant pinValue = channel["o"];
-        if (!pinValue.is<int>() || !isValidPin(pinValue.as<int>())) {
+        if (!pinValue.is<int>() || !isAllowedPwmPin(pinValue.as<int>())) {
             return false;
         }
         JsonVariant typeValue = channel["t"];
@@ -1032,6 +1105,7 @@ void rollbackNewSchedulePins(bool newlyAttached[MAX_PIN + 1]) {
         digitalWrite(pin, LOW);
         lastPinValues[pin] = 0;
     }
+    queueOutputAnnouncement();
 }
 
 ScheduleAttachResult attachMissingSchedulePins(
@@ -1090,6 +1164,7 @@ ScheduleAttachResult attachMissingSchedulePins(
         lastPinValues[pin] = 0;
         resolveLastErrorForPin("pin_write_failed", pin);
     }
+    queueOutputAnnouncement();
     return result;
 }
 
@@ -1157,6 +1232,7 @@ void turnOffRemovedSchedulePins(JsonArray& nextChannels) {
             "Replacement schedule removed and detached pin " + String(pin)
         );
     }
+    queueOutputAnnouncement();
 }
 
 bool parseSyncTime(const String& value, unsigned long& parsed) {
@@ -1229,6 +1305,7 @@ void processSchedule(const String& schedule) {
     }
     lastScheduleAttachRetry = millis();
     reportScheduleAttachResult(attachResult);
+    queueOutputAnnouncement();
 }
 
 void retryMissingSchedulePins() {
@@ -1276,6 +1353,7 @@ void retryMissingSchedulePins() {
         Serial.println("Recovered scheduled pin " + String(pin));
     }
     reportScheduleAttachResult(result);
+    queueOutputAnnouncement();
 }
 
 const int MAX_RETRIES = 3;
@@ -1300,12 +1378,427 @@ bool publishWithRetry(const char* topic, const char* payload) {
 }
 
 
+bool loadNetworkConfiguration() {
+    Preferences preferences;
+    if (!preferences.begin("aquarium", false)) {
+        Serial.println("Could not open persistent network configuration");
+        return false;
+    }
+
+    if (!preferences.getBool("cfgReady", false)) {
+        Serial.println("Migrating compile-time network settings to persistent storage");
+        bool stored =
+            preferences.putString("wifiSsid", ssid) > 0 &&
+            preferences.putString("wifiPass", password) > 0 &&
+            preferences.putString("mqttHost", mqtt_server) > 0 &&
+            preferences.putUShort("mqttPort", mqtt_port) > 0 &&
+            preferences.putString("ntpHost", ntp_server) > 0;
+        if (strlen(mqtt_username) > 0) {
+            stored = preferences.putString("mqttUser", mqtt_username) > 0 && stored;
+        } else {
+            preferences.remove("mqttUser");
+        }
+        if (strlen(mqtt_password) > 0) {
+            stored = preferences.putString("mqttPass", mqtt_password) > 0 && stored;
+        } else {
+            preferences.remove("mqttPass");
+        }
+        if (!stored || preferences.putBool("cfgReady", true) == 0) {
+            preferences.end();
+            Serial.println("Could not persist the bootstrap network configuration");
+            return false;
+        }
+    }
+
+    configuredWifiSsid = preferences.getString("wifiSsid", "");
+    configuredWifiPassword = preferences.getString("wifiPass", "");
+    configuredMqttServer = preferences.getString("mqttHost", "");
+    configuredMqttPort = preferences.getUShort("mqttPort", 0);
+    configuredMqttUsername = preferences.getString("mqttUser", "");
+    configuredMqttPassword = preferences.getString("mqttPass", "");
+    configuredNtpServer = preferences.getString("ntpHost", "");
+    preferences.end();
+
+    const bool credentialsPaired =
+        configuredMqttUsername.isEmpty() == configuredMqttPassword.isEmpty();
+    if (
+        configuredWifiSsid.isEmpty() || configuredMqttServer.isEmpty() ||
+        configuredMqttPort == 0 || configuredNtpServer.isEmpty() ||
+        !credentialsPaired
+    ) {
+        Serial.println("Persistent network configuration is incomplete");
+        return false;
+    }
+    Serial.println("Persistent network configuration loaded");
+    return true;
+}
+
+void clearOtaMarker(Preferences& preferences) {
+    preferences.remove("otaPending");
+    preferences.remove("otaTarget");
+    preferences.remove("otaPrev");
+    preferences.remove("otaBoots");
+}
+
+bool selectPreviousOtaPartition() {
+    const esp_partition_t* previous = esp_partition_find_first(
+        ESP_PARTITION_TYPE_APP,
+        otaPreviousPartitionSubtype,
+        nullptr
+    );
+    if (previous == nullptr) {
+        Serial.println("Previous OTA partition was not found");
+        return false;
+    }
+    esp_err_t result = esp_ota_set_boot_partition(previous);
+    if (result != ESP_OK) {
+        Serial.println("Could not select the previous OTA partition: " + String(result));
+        return false;
+    }
+    return true;
+}
+
+void rollbackOta(const String& reason) {
+    Serial.println("OTA probation failed: " + reason);
+    otaReport.status = "rolling_back";
+    otaReport.error = reason;
+    otaReport.progress = 0;
+    if (client.connected()) {
+        announcePresence();
+    }
+    if (!selectPreviousOtaPartition()) {
+        otaReport.status = "failed";
+        otaReport.error = "rollback_partition_unavailable";
+        telemetryAnnouncementPending = true;
+        return;
+    }
+    Serial.println("Rebooting into the previous firmware partition");
+    Serial.flush();
+    delay(250);
+    ESP.restart();
+}
+
+void initializeOtaBootState() {
+    Preferences preferences;
+    if (!preferences.begin("aquarium", false)) {
+        Serial.println("Could not inspect OTA probation state");
+        return;
+    }
+    if (!preferences.getBool("otaPending", false)) {
+        preferences.end();
+        return;
+    }
+
+    const String targetVersion = preferences.getString("otaTarget", "");
+    otaPreviousPartitionSubtype = static_cast<esp_partition_subtype_t>(
+        preferences.getUChar(
+            "otaPrev",
+            static_cast<uint8_t>(ESP_PARTITION_SUBTYPE_APP_OTA_MIN)
+        )
+    );
+    if (targetVersion != VERSION) {
+        clearOtaMarker(preferences);
+        preferences.end();
+        otaReport = {"failed", targetVersion, "rolled_back", 0};
+        telemetryAnnouncementPending = true;
+        Serial.println("Previous firmware restored after OTA probation failure");
+        return;
+    }
+
+    unsigned int probationBoots = preferences.getUInt("otaBoots", 0) + 1;
+    preferences.putUInt("otaBoots", probationBoots);
+    preferences.end();
+    otaReport = {"probation", targetVersion, "", 100};
+    otaProbationActive = true;
+    otaProbationStartedAt = millis();
+    telemetryAnnouncementPending = true;
+    Serial.println(
+        "OTA probation boot " + String(probationBoots) + " of " +
+        String(OTA_MAX_PROBATION_BOOTS)
+    );
+    if (probationBoots >= OTA_MAX_PROBATION_BOOTS) {
+        rollbackOta("boot_loop_detected");
+    }
+}
+
+void confirmOtaProbation() {
+    if (!otaProbationActive) {
+        return;
+    }
+    esp_ota_mark_app_valid_cancel_rollback();
+    Preferences preferences;
+    if (preferences.begin("aquarium", false)) {
+        clearOtaMarker(preferences);
+        preferences.end();
+    }
+    otaProbationActive = false;
+    otaReport.status = "succeeded";
+    otaReport.error = "";
+    otaReport.progress = 100;
+    telemetryAnnouncementPending = true;
+    Serial.println("OTA probation succeeded after MQTT announcement");
+}
+
+void serviceOtaProbation() {
+    if (
+        otaProbationActive &&
+        millis() - otaProbationStartedAt >= OTA_PROBATION_TIMEOUT_MS
+    ) {
+        rollbackOta("mqtt_confirmation_timeout");
+    }
+}
+
+bool isValidOtaToken(const String& value, size_t maximumLength) {
+    if (value.isEmpty() || value.length() > maximumLength) {
+        return false;
+    }
+    for (size_t index = 0; index < value.length(); index++) {
+        const char character = value[index];
+        if (!(
+            (character >= 'a' && character <= 'z') ||
+            (character >= 'A' && character <= 'Z') ||
+            (character >= '0' && character <= '9') ||
+            character == '.' || character == '-' || character == '_'
+        )) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool isValidSha256(const String& value) {
+    if (value.length() != 64) {
+        return false;
+    }
+    for (size_t index = 0; index < value.length(); index++) {
+        const char character = value[index];
+        if (!(
+            (character >= '0' && character <= '9') ||
+            (character >= 'a' && character <= 'f') ||
+            (character >= 'A' && character <= 'F')
+        )) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool parseOtaArguments(const String& args, OtaRequest& request) {
+    int firstSpace = args.indexOf(' ');
+    int secondSpace = args.indexOf(' ', firstSpace + 1);
+    int thirdSpace = args.indexOf(' ', secondSpace + 1);
+    if (firstSpace <= 0 || secondSpace <= firstSpace || thirdSpace <= secondSpace) {
+        return false;
+    }
+    request.targetVersion = args.substring(0, firstSpace);
+    const String sizeText = args.substring(firstSpace + 1, secondSpace);
+    request.sha256 = args.substring(secondSpace + 1, thirdSpace);
+    request.url = args.substring(thirdSpace + 1);
+    int parsedSize = 0;
+    if (
+        !isValidOtaToken(request.targetVersion, 31) ||
+        !parseBoundedDecimal(sizeText, OTA_MAXIMUM_IMAGE_SIZE, parsedSize) ||
+        parsedSize < static_cast<int>(OTA_MINIMUM_IMAGE_SIZE) ||
+        !isValidSha256(request.sha256) || request.url.length() > 240 ||
+        !request.url.startsWith("http://") || request.url.indexOf(' ') >= 0
+    ) {
+        return false;
+    }
+    request.size = static_cast<size_t>(parsedSize);
+    request.pending = true;
+    return true;
+}
+
+void setOtaFailure(const String& error) {
+    otaRequest.pending = false;
+    otaReport.status = "failed";
+    otaReport.targetVersion = otaRequest.targetVersion;
+    otaReport.error = error;
+    otaReport.progress = 0;
+    telemetryAnnouncementPending = true;
+    Serial.println("OTA update failed: " + error);
+    if (client.connected()) {
+        announcePresence();
+    }
+}
+
+String sha256Hex(const unsigned char digest[32]) {
+    const char hex[] = "0123456789abcdef";
+    String result;
+    result.reserve(64);
+    for (size_t index = 0; index < 32; index++) {
+        result += hex[digest[index] >> 4];
+        result += hex[digest[index] & 0x0f];
+    }
+    return result;
+}
+
+void publishOtaProgress(const String& status, unsigned int progress) {
+    otaReport.status = status;
+    otaReport.targetVersion = otaRequest.targetVersion;
+    otaReport.error = "";
+    otaReport.progress = progress;
+    telemetryAnnouncementPending = true;
+    if (client.connected()) {
+        announcePresence();
+        client.loop();
+    }
+}
+
+void performOtaUpdate() {
+    otaRequest.pending = false;
+    publishOtaProgress("downloading", 0);
+
+    HTTPClient http;
+    if (!http.begin(otaRequest.url)) {
+        setOtaFailure("http_initialization_failed");
+        return;
+    }
+    http.setConnectTimeout(10000);
+    http.setTimeout(10000);
+    const int statusCode = http.GET();
+    if (statusCode != HTTP_CODE_OK) {
+        http.end();
+        setOtaFailure("http_status_" + String(statusCode));
+        return;
+    }
+    const int contentLength = http.getSize();
+    if (contentLength != static_cast<int>(otaRequest.size)) {
+        http.end();
+        setOtaFailure("image_size_mismatch");
+        return;
+    }
+    if (!Update.begin(otaRequest.size, U_FLASH)) {
+        http.end();
+        setOtaFailure("update_begin_failed_" + String(Update.getError()));
+        return;
+    }
+
+    mbedtls_sha256_context shaContext;
+    mbedtls_sha256_init(&shaContext);
+    if (mbedtls_sha256_starts(&shaContext, 0) != 0) {
+        Update.abort();
+        http.end();
+        mbedtls_sha256_free(&shaContext);
+        setOtaFailure("sha256_initialization_failed");
+        return;
+    }
+
+    WiFiClient* stream = http.getStreamPtr();
+    uint8_t buffer[OTA_DOWNLOAD_BUFFER_SIZE];
+    size_t received = 0;
+    unsigned int publishedProgress = 0;
+    unsigned long lastDataAt = millis();
+    bool downloadFailed = false;
+    while (received < otaRequest.size) {
+        size_t available = stream->available();
+        if (available == 0) {
+            if (!http.connected() || millis() - lastDataAt >= 10000) {
+                downloadFailed = true;
+                break;
+            }
+            client.loop();
+            delay(5);
+            continue;
+        }
+        size_t toRead = min(
+            available,
+            min(sizeof(buffer), otaRequest.size - received)
+        );
+        int read = stream->readBytes(buffer, toRead);
+        if (read <= 0) {
+            downloadFailed = true;
+            break;
+        }
+        lastDataAt = millis();
+        if (mbedtls_sha256_update(&shaContext, buffer, read) != 0) {
+            downloadFailed = true;
+            break;
+        }
+        if (Update.write(buffer, read) != static_cast<size_t>(read)) {
+            downloadFailed = true;
+            break;
+        }
+        received += static_cast<size_t>(read);
+        unsigned int progress = static_cast<unsigned int>(
+            (static_cast<uint64_t>(received) * 100U) / otaRequest.size
+        );
+        if (progress == 100 || progress / 10 > publishedProgress / 10) {
+            publishedProgress = progress;
+            Serial.printf("OTA download progress: %u%%\n", progress);
+            publishOtaProgress("downloading", progress);
+        }
+    }
+
+    unsigned char digest[32];
+    const int finishResult = mbedtls_sha256_finish(&shaContext, digest);
+    mbedtls_sha256_free(&shaContext);
+    http.end();
+    if (downloadFailed || received != otaRequest.size || finishResult != 0) {
+        Update.abort();
+        setOtaFailure("firmware_download_failed");
+        return;
+    }
+
+    publishOtaProgress("verifying", 100);
+    const String actualSha256 = sha256Hex(digest);
+    if (!actualSha256.equalsIgnoreCase(otaRequest.sha256)) {
+        Update.abort();
+        setOtaFailure("sha256_mismatch");
+        return;
+    }
+    const esp_partition_t* running = esp_ota_get_running_partition();
+    if (running == nullptr) {
+        Update.abort();
+        setOtaFailure("running_partition_unavailable");
+        return;
+    }
+    Preferences preferences;
+    if (!preferences.begin("aquarium", false)) {
+        setOtaFailure("probation_marker_unavailable");
+        return;
+    }
+    bool markerStored =
+        preferences.putString("otaTarget", otaRequest.targetVersion) > 0 &&
+        preferences.putUChar("otaPrev", static_cast<uint8_t>(running->subtype)) > 0 &&
+        preferences.putUInt("otaBoots", 0) > 0 &&
+        preferences.putBool("otaPending", true) > 0;
+    preferences.end();
+    if (!markerStored) {
+        Update.abort();
+        setOtaFailure("probation_marker_write_failed");
+        return;
+    }
+    if (!Update.end(true)) {
+        Preferences cleanup;
+        if (cleanup.begin("aquarium", false)) {
+            clearOtaMarker(cleanup);
+            cleanup.end();
+        }
+        setOtaFailure("update_finalize_failed_" + String(Update.getError()));
+        return;
+    }
+
+    publishOtaProgress("rebooting", 100);
+    Serial.println("OTA image installed; rebooting into probation");
+    Serial.flush();
+    delay(250);
+    ESP.restart();
+}
+
+void serviceFirmwareUpdate() {
+    if (otaRequest.pending && !otaProbationActive) {
+        performOtaUpdate();
+    }
+    serviceOtaProbation();
+}
+
 void setup_wifi() {
 	Serial.println("Connecting to WiFi...");
 	Serial.print("SSID: ");
-	Serial.println(ssid);
+	Serial.println(configuredWifiSsid);
 	
-	WiFi.begin(ssid, password);
+	WiFi.begin(configuredWifiSsid.c_str(), configuredWifiPassword.c_str());
 
 	WiFi.setSleep(false);           // Arduino-style call
     esp_wifi_set_ps(WIFI_PS_NONE);  // IDF-style call, does the same
@@ -1336,6 +1829,30 @@ unsigned long calculateHash(const String& str) {
     return hash;
 }
 
+void queueOutputAnnouncement() {
+	telemetryAnnouncementPending = true;
+}
+
+unsigned int outputPercentage(int pwmValue) {
+	const int maximumDuty = (1 << resolution) - 1;
+	if (maximumDuty <= 0 || pwmValue <= 0) {
+		return 0;
+	}
+	return static_cast<unsigned int>(
+		(static_cast<uint64_t>(pwmValue) * 100U + maximumDuty / 2) /
+		maximumDuty
+	);
+}
+
+bool allOutputsAreOff() {
+	for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+		if (attachedPins[pin] && lastPinValues[pin] != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
 String buildPresenceMessage() {
 	JsonDocument doc;
 	doc["name"] = deviceName;
@@ -1344,6 +1861,25 @@ String buildPresenceMessage() {
 	doc["id"] = deviceId;
 	doc["status"] = "online";
   	doc["version"] = VERSION;
+	doc["hardwareProfile"] = HARDWARE_PROFILE;
+	doc["hardwareModel"] = HARDWARE_MODEL;
+	doc["outputsOff"] = allOutputsAreOff();
+	JsonArray outputs = doc["outputs"].to<JsonArray>();
+	for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+		if (!attachedPins[pin]) {
+			continue;
+		}
+		JsonArray output = outputs.add<JsonArray>();
+		output.add(pin);
+		output.add(outputPercentage(lastPinValues[pin]));
+	}
+	JsonObject ota = doc["ota"].to<JsonObject>();
+	ota["status"] = otaReport.status;
+	ota["targetVersion"] = otaReport.targetVersion;
+	ota["progress"] = otaReport.progress;
+	if (!otaReport.error.isEmpty()) {
+		ota["error"] = otaReport.error;
+	}
 	if (lastError.code.length() > 0) {
 		JsonObject error = doc["lastError"].to<JsonObject>();
 		error["code"] = lastError.code;
@@ -1381,41 +1917,60 @@ String buildPresenceMessage() {
 	return message;
 }
 
-void announcePresence() {
+void finishPublishedAnnouncement() {
+	diagnosticAnnouncementPending = false;
+	diagnosticAnnouncementAttempted = false;
+	telemetryAnnouncementPending = false;
+	if (
+		spiffsReformattedThisBoot &&
+		lastError.code == "spiffs_reformatted" &&
+		lastError.active
+	) {
+		spiffsReformattedThisBoot = false;
+		resolveLastError("spiffs_reformatted");
+	}
+}
+
+bool announcePresence() {
 	String message = buildPresenceMessage();
 	bool published = TEST
 		? publishWithRetry("test/aquarium/announce", message.c_str())
 		: publishWithRetry("aquarium/announce", message.c_str());
 	if (published) {
-		diagnosticAnnouncementPending = false;
-		diagnosticAnnouncementAttempted = false;
 		Serial.println("Announced presence: " + message);
+		finishPublishedAnnouncement();
 	}
+	return published;
 }
 
 void serviceDiagnosticAnnouncement() {
-	if (!diagnosticAnnouncementPending || !client.connected()) {
+	if (
+		(!diagnosticAnnouncementPending && !telemetryAnnouncementPending) ||
+		!client.connected()
+	) {
 		return;
 	}
 	unsigned long currentMillis = millis();
-	if (
-		diagnosticAnnouncementAttempted &&
-		currentMillis - diagnosticAnnouncementAttemptAt <
-			DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS
-	) {
+	const unsigned long retryInterval = telemetryAnnouncementPending
+		? TELEMETRY_ANNOUNCEMENT_INTERVAL_MS
+		: DIAGNOSTIC_ANNOUNCEMENT_RETRY_INTERVAL_MS;
+	const unsigned long priorAttempt = telemetryAnnouncementPending
+		? telemetryAnnouncementAttemptAt
+		: diagnosticAnnouncementAttemptAt;
+	if (priorAttempt > 0 && currentMillis - priorAttempt < retryInterval) {
 		return;
 	}
 
 	diagnosticAnnouncementAttempted = true;
 	diagnosticAnnouncementAttemptAt = currentMillis;
+	telemetryAnnouncementAttemptAt = currentMillis;
 	String message = buildPresenceMessage();
 	const char* topic = TEST
 		? "test/aquarium/announce"
 		: "aquarium/announce";
 	if (client.publish(topic, message.c_str())) {
-		diagnosticAnnouncementPending = false;
-		diagnosticAnnouncementAttempted = false;
 		Serial.println("Published queued diagnostic announcement: " + message);
+		finishPublishedAnnouncement();
 	} else {
 		Serial.println("Queued diagnostic announcement publish failed; retry remains pending");
 	}
@@ -1486,7 +2041,7 @@ String handleCommand(String command, String args) {
 			Serial.println("Pin: " + String(pin));
 			Serial.println("Value: " + String(value));
 			Serial.println("Overwrite: " + String(overwrite));
-			if (!isValidPin(pin)) {
+			if (!isAllowedPwmPin(pin)) {
 				response = "E: Invalid pin";
 			} else if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
 				const int pwmValue = scaleNormalizedPwmValue(value, resolution);
@@ -1505,6 +2060,8 @@ String handleCommand(String command, String args) {
 					}
 				}
 				if (attachedPins[pin]) {
+					const bool outputStateChanged =
+						newlyAttached || lastPinValues[pin] != pwmValue;
 					if (!ledcWrite(pin, pwmValue)) {
 						if (newlyAttached) {
 							if (ledcDetach(pin)) {
@@ -1527,16 +2084,19 @@ String handleCommand(String command, String args) {
 						);
 						response = "E: LEDC write failed";
 					} else {
-					lastPinValues[pin] = pwmValue;
+						lastPinValues[pin] = pwmValue;
+						if (outputStateChanged) {
+							queueOutputAnnouncement();
+						}
 					
-					// Update pin state with overwrite information
-					if (overwrite == 1) {
-						pinStates[pin] = {pwmValue, true, millis()};
-					} else {
-						pinStates[pin] = {pwmValue, false, 0};
-					}
+						// Update pin state with overwrite information
+						if (overwrite == 1) {
+							pinStates[pin] = {pwmValue, true, millis()};
+						} else {
+							pinStates[pin] = {pwmValue, false, 0};
+						}
 					
-					response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
+						response = "s " + String(pin) + " " + String(value) + " " + String(overwrite);
 						resolveLastErrorForPin("pin_attach_failed", pin);
 						resolveLastErrorForPin("pin_write_failed", pin);
 					}
@@ -1549,6 +2109,25 @@ String handleCommand(String command, String args) {
 		}
 	}
 	
+	else if (command == "ota") {
+		OtaRequest parsedRequest = {"", "", "", 0, false};
+		if (!parseOtaArguments(args, parsedRequest)) {
+			response = "E: Invalid OTA request";
+		} else if (otaProbationActive || otaRequest.pending) {
+			response = "E: OTA busy";
+		} else if (parsedRequest.targetVersion == VERSION) {
+			response = "E: Firmware already current";
+		} else {
+			otaRequest = parsedRequest;
+			otaReport = {"accepted", otaRequest.targetVersion, "", 0};
+			telemetryAnnouncementPending = true;
+			Serial.println(
+				"Accepted OTA update to firmware " + otaRequest.targetVersion
+			);
+			response = "ota_accepted";
+		}
+	}
+
 	else if (command == "p" || command == "e") {
 		if (command == "p") {
 			response = "o";
@@ -1642,7 +2221,7 @@ String handleCommand(String command, String args) {
             response = "E: Invalid arguments";
         } else if (*cursor != '\0') {
             response = "E: Metadata not supported";
-        } else if (!isValidPin(pin)) {
+        } else if (!isAllowedAnalogInputPin(pin)) {
             response = "E: Invalid pin";
         } else if (attachedPins[pin]) {
             response = "E: Pin is configured as output";
@@ -1656,44 +2235,26 @@ String handleCommand(String command, String args) {
 	return response;
 }
 
-void clearEEPROM() {
-    for (int i = 0; i < EEPROM_SIZE; i++) {
-        EEPROM.write(i, 0);
-    }
-    EEPROM.commit();
-}
-
 void callback(char* topic, byte* payload, unsigned int length) {
 	Serial.println("Message received on topic: " + String(topic));
-	
-	String message;
-	for (int i = 0; i < length; i++) {
-		message += (char)payload[i];
+
+	if (length > MQTT_MAX_COMMAND_PAYLOAD_SIZE) {
+		Serial.println("MQTT command exceeded the 5120-byte payload limit; ignoring message");
+		return;
 	}
+
+	String message;
+	if (!message.reserve(length)) {
+		Serial.println("Could not allocate memory for MQTT command; ignoring message");
+		return;
+	}
+	message.concat(reinterpret_cast<const char*>(payload), length);
 	Serial.println("Message content: " + message);
 
 	if ((!TEST && String(topic) == "aquarium/command") || (TEST && String(topic) == "test/aquarium/command")) {
-		// Check if this is a chunked message
-		if (message.startsWith("chunk:")) {
-			handleChunkedMessage(message.substring(6));
-			return;
-		}
-		
 		if (message == "discover") {
 			Serial.println("Discover message received, announcing presence");
 			announcePresence();
-			return;
-		}
-
-		if (message == "clear") {
-			Serial.println("Clearing EEPROM");
-			clearEEPROM();
-			initializeEEPROM();
-			if (TEST) {
-				publishWithRetry("test/aquarium/response", "EEPROM cleared");
-			} else {
-				publishWithRetry("aquarium/response", "EEPROM cleared");
-			}
 			return;
 		}
 
@@ -1751,7 +2312,7 @@ void beginNtpSync() {
     ntpSyncEverAttempted = true;
 
     Serial.println("Starting asynchronous NTP synchronization");
-    configTime(gmtOffset_sec, daylightOffset_sec, ntp_server);
+    configTime(gmtOffset_sec, daylightOffset_sec, configuredNtpServer.c_str());
 }
 
 void serviceTimeSynchronization() {
@@ -1958,9 +2519,56 @@ int getCurrentMinuteOfDay() {
     return timeinfo.tm_hour * 60 + timeinfo.tm_min;
 }
 
+bool mountSpiffsWithRecovery() {
+    const char* repairFailureKey = "fsRepairFails";
+    const unsigned char maximumRepairFailures = 2;
+    Preferences preferences;
+    const bool preferencesAvailable = preferences.begin("aquarium", false);
+
+    if (SPIFFS.begin(false)) {
+        if (preferencesAvailable && preferences.isKey(repairFailureKey)) {
+            preferences.remove(repairFailureKey);
+        }
+        if (preferencesAvailable) {
+            preferences.end();
+        }
+        return true;
+    }
+
+    if (!preferencesAvailable) {
+        Serial.println("SPIFFS repair counter is unavailable; refusing an unbounded format attempt");
+        return false;
+    }
+
+    unsigned char repairFailures = preferences.getUChar(repairFailureKey, 0);
+    if (repairFailures >= maximumRepairFailures) {
+        Serial.println("SPIFFS automatic repair limit reached");
+        if (preferencesAvailable) {
+            preferences.end();
+        }
+        return false;
+    }
+    preferences.putUChar(repairFailureKey, repairFailures + 1);
+
+    Serial.println("SPIFFS mount failed; formatting the filesystem once");
+    SPIFFS.end();
+    const bool recovered = SPIFFS.format() && SPIFFS.begin(false);
+    if (recovered) {
+        spiffsReformattedThisBoot = true;
+        if (preferencesAvailable) {
+            preferences.remove(repairFailureKey);
+        }
+    }
+    if (preferencesAvailable) {
+        preferences.end();
+    }
+    return recovered;
+}
+
 void setup() {
 	Serial.begin(115200);
 	Serial.println("\nStarting up...");
+	initializeOtaBootState();
 	
 	// Initialize EEPROM with proper partition verification
 	if (!EEPROM.begin(EEPROM_SIZE)) {
@@ -1970,12 +2578,24 @@ void setup() {
 	initializeEEPROM();
 	loadTimeInfo(); // Load time info from EEPROM
 
-    spiffsAvailable = SPIFFS.begin(true);
+    spiffsAvailable = mountSpiffsWithRecovery();
     if (!spiffsAvailable) {
         Serial.println("SPIFFS initialization failed!");
+        recordLastError(
+            "spiffs_mount_failed",
+            "error",
+            "SPIFFS could not be mounted or repaired"
+        );
     } else {
         Serial.println("SPIFFS initialized successfully");
         loadLastError();
+        if (spiffsReformattedThisBoot) {
+            recordLastError(
+                "spiffs_reformatted",
+                "warning",
+                "SPIFFS was reformatted after a mount failure; the controller must restore the schedule"
+            );
+        }
     }
 
     if (!client.setBufferSize(MQTT_PACKET_BUFFER_SIZE)) {
@@ -1983,7 +2603,7 @@ void setup() {
         recordLastError(
             "mqtt_buffer_allocation_failed",
             "error",
-            "Could not allocate the 512-byte MQTT packet buffer"
+            "Could not allocate the 6144-byte MQTT packet buffer"
         );
     } else {
         resolveLastError("mqtt_buffer_allocation_failed");
@@ -1995,8 +2615,8 @@ void setup() {
 		processSchedule(savedSchedule);
 	}
 	
-	if ((strlen(mqtt_username) == 0) != (strlen(mqtt_password) == 0)) {
-		Serial.println("MQTT username and password must either both be set or both be empty");
+	if (!loadNetworkConfiguration()) {
+		Serial.println("Network configuration is unavailable; stopping startup");
 		while (true) {
 			delay(1000);
 		}
@@ -2005,7 +2625,7 @@ void setup() {
 	setup_wifi();
 	initializeTime();
 	
-	client.setServer(mqtt_server, mqtt_port);
+	client.setServer(configuredMqttServer.c_str(), configuredMqttPort);
 	client.setKeepAlive(15);
 	client.setCallback(callback);
 	
@@ -2031,15 +2651,19 @@ void loop() {
 			clientId += String(random(0xffff), HEX);
 			
 			Serial.println("Attempting MQTT connection with client ID: " + clientId);
-			Serial.println("Broker: " + String(mqtt_server));
+			Serial.println("Broker: " + configuredMqttServer);
 			
 			// Print WiFi status
 			Serial.println("WiFi status - SSID: " + String(WiFi.SSID()) + 
 										" Signal strength: " + String(WiFi.RSSI()) + "dBm");
 			
-			const bool mqttConnected = strlen(mqtt_username) == 0
+			const bool mqttConnected = configuredMqttUsername.isEmpty()
 				? client.connect(clientId.c_str())
-				: client.connect(clientId.c_str(), mqtt_username, mqtt_password);
+				: client.connect(
+					clientId.c_str(),
+					configuredMqttUsername.c_str(),
+					configuredMqttPassword.c_str()
+				);
 			if (mqttConnected) {
 				Serial.println("MQTT connected");
 				if (TEST) {
@@ -2047,7 +2671,9 @@ void loop() {
 				} else {
 					client.subscribe("aquarium/command");
 				}
-				announcePresence();
+				if (announcePresence()) {
+					confirmOtaProbation();
+				}
 			} else {
 				Serial.print("MQTT connection failed, rc=");
 				Serial.println(client.state());
@@ -2069,9 +2695,6 @@ void loop() {
 		}
 	}
 
-	// Check for chunked message timeout
-	checkChunkTimeout();
-	
 	serviceTimeCheckpoint();
 	serviceLastErrorPersistence();
 
@@ -2137,6 +2760,7 @@ void loop() {
 									break;
 								}
 								lastPinValues[pin] = pwmValue;
+								queueOutputAnnouncement();
 								resolveLastErrorForPin("pin_write_failed", pin);
 								auto scheduledPinState = pinStates.find(pin);
 								if (scheduledPinState != pinStates.end()) {
@@ -2164,6 +2788,7 @@ void loop() {
  
 	client.loop();
 	serviceDiagnosticAnnouncement();
+	serviceFirmwareUpdate();
 
     // ------------------------------------------------------------------
     // Daily maintenance: restart WiFi and MQTT at 04:00 to reclaim memory
@@ -2236,6 +2861,7 @@ void checkOverwriteExpiries() {
                 resolveLastErrorForPin("pin_write_failed", pin);
                 state.isOverwritten = false;
                 lastPinValues[pin] = 0;
+				queueOutputAnnouncement();
 				state.lastValue = 0;
 			} else {
                 state.isOverwritten = false;
@@ -2249,114 +2875,6 @@ void checkOverwriteExpiries() {
 				}
             }
         }
-    }
-}
-
-void handleChunkedMessage(String chunkData) {
-    // Parse chunk data: format is "index:total:isLast:data"
-    int firstColon = chunkData.indexOf(':');
-    int secondColon = chunkData.indexOf(':', firstColon + 1);
-    int thirdColon = chunkData.indexOf(':', secondColon + 1);
-    
-    if (firstColon == -1 || secondColon == -1 || thirdColon == -1) {
-        Serial.println("Invalid chunk format: " + chunkData);
-        return;
-    }
-    
-    int chunkIndex;
-    int totalChunks;
-    if (!parseBoundedDecimal(chunkData.substring(0, firstColon), MAX_CHUNKS - 1, chunkIndex) ||
-        !parseBoundedDecimal(chunkData.substring(firstColon + 1, secondColon), MAX_CHUNKS, totalChunks)) {
-        Serial.println("Invalid chunk number; ignoring message");
-        return;
-    }
-    String isLastValue = chunkData.substring(secondColon + 1, thirdColon);
-    bool isLast = isLastValue == "1";
-    String data = chunkData.substring(thirdColon + 1);
-
-    if (chunkIndex < 0 || chunkIndex >= MAX_CHUNKS ||
-        totalChunks < 1 || totalChunks > MAX_CHUNKS ||
-        chunkIndex >= totalChunks ||
-        (isLastValue != "0" && isLastValue != "1") ||
-        isLast != (chunkIndex == totalChunks - 1) ||
-        data.length() > MAX_CHUNK_SIZE) {
-        Serial.println("Invalid chunk metadata; ignoring message");
-        return;
-    }
-    
-    Serial.println("Received chunk " + String(chunkIndex + 1) + " of " + String(totalChunks) + 
-                  ", isLast: " + String(isLast) + ", size: " + String(data.length()) + " bytes");
-    
-    // Initialize or update chunked message
-    bool startsNewAssembly = chunkIndex == 0 || currentMessage.lastChunkTime == 0 ||
-        millis() - currentMessage.lastChunkTime > CHUNK_TIMEOUT;
-    if (!startsNewAssembly && totalChunks != currentMessage.totalChunks) {
-        Serial.println("Chunk total changed during assembly; resetting message");
-        for (int i = 0; i < MAX_CHUNKS; i++) {
-            currentMessage.chunks[i].data[0] = '\0';
-            currentMessage.chunks[i].received = false;
-        }
-        currentMessage.totalChunks = 0;
-        currentMessage.complete = false;
-        currentMessage.lastChunkTime = 0;
-        return;
-    }
-    if (startsNewAssembly) {
-        // Reset current message if this is the first chunk or if timeout occurred
-        Serial.println("Initializing new chunked message with " + String(totalChunks) + " chunks");
-        for (int i = 0; i < MAX_CHUNKS; i++) {
-            currentMessage.chunks[i].data[0] = '\0';
-            currentMessage.chunks[i].received = false;
-        }
-        currentMessage.totalChunks = totalChunks;
-        currentMessage.complete = false;
-        currentMessage.lastChunkTime = millis();
-    }
-    
-    // Store this chunk
-    if (chunkIndex < MAX_CHUNKS) {
-        strlcpy(currentMessage.chunks[chunkIndex].data, data.c_str(), sizeof(currentMessage.chunks[chunkIndex].data));
-        currentMessage.chunks[chunkIndex].received = true;
-        currentMessage.lastChunkTime = millis();
-        
-        // Check if we have all chunks
-        bool allReceived = true;
-        int receivedCount = 0;
-        for (int i = 0; i < totalChunks; i++) {
-            if (currentMessage.chunks[i].received) {
-                receivedCount++;
-            } else {
-                allReceived = false;
-            }
-        }
-        
-        Serial.println("Received " + String(receivedCount) + " of " + String(totalChunks) + " chunks");
-        
-        // If all chunks received, process the complete message
-        if (allReceived) {
-            Serial.println("All chunks received, assembling complete message");
-            String completeMessage = "";
-            for (int i = 0; i < totalChunks; i++) {
-                completeMessage += currentMessage.chunks[i].data;
-            }
-            
-            Serial.println("Complete message size: " + String(completeMessage.length()) + " bytes");
-            Serial.println("Processing complete message: " + completeMessage);
-            
-            // Process the complete message
-            processCompleteMessage(completeMessage);
-            
-            // Reset for next chunked message
-            for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data[0] = '\0';
-                currentMessage.chunks[i].received = false;
-            }
-            currentMessage.complete = true;
-            currentMessage.lastChunkTime = 0;
-            Serial.println("Chunked message processing complete");
-        }
-    } else {
-        Serial.println("Error: Chunk index " + String(chunkIndex) + " exceeds maximum chunks " + String(MAX_CHUNKS));
     }
 }
 
@@ -2412,23 +2930,6 @@ void processCompleteMessage(String message) {
             Serial.println("Publishing response to aquarium/response: " + responseStr);
             publishWithRetry("aquarium/response", responseStr.c_str());
             Serial.println("Published to aquarium/response");
-        }
-    }
-}
-
-void checkChunkTimeout() {
-    // Check if we have an incomplete chunked message that has timed out
-    if (!currentMessage.complete && currentMessage.lastChunkTime > 0) {
-        unsigned long currentTime = millis();
-        if (currentTime - currentMessage.lastChunkTime > CHUNK_TIMEOUT) {
-            Serial.println("Chunked message timed out, resetting");
-            // Reset the chunked message
-            for (int i = 0; i < MAX_CHUNKS; i++) {
-                currentMessage.chunks[i].data[0] = '\0';
-                currentMessage.chunks[i].received = false;
-            }
-            currentMessage.complete = false;
-            currentMessage.lastChunkTime = 0;
         }
     }
 }

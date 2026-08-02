@@ -142,20 +142,20 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     ).toEqual([]);
   }, 30_000);
 
-  it("runs independent device lanes with atomic frames, local response indexes, and command fixtures", async () => {
+  it("runs independent device lanes with complete messages, local response indexes, and command fixtures", async () => {
     const alpha = await startActor("alpha", "Alpha", ALPHA_ID);
     const beta = await startActor("beta", "Beta", BETA_ID);
-    alpha.session.actor.setAnalogValue(7, 321);
+    alpha.session.actor.setAnalogValue(34, 321);
     const controller = await startTransport(1_000);
     await waitForDiscovery(controller, ALPHA_ID, BETA_ID);
     broker.clearPublications();
 
     alpha.session.actor.setResponseFaults({ delayMilliseconds: 100 });
-    const alphaChunkedPing = paddedAsciiPingFor(ALPHA_ID, 500);
-    const betaChunkedPing = paddedAsciiPingFor(BETA_ID, 500);
+    const alphaLongPing = paddedAsciiPingFor(ALPHA_ID, 500);
+    const betaLongPing = paddedAsciiPingFor(BETA_ID, 500);
     let alphaSettled = false;
     const firstConcurrent = controller.transport.executeCommands([
-      exact(alphaChunkedPing, ALPHA_ID, "o"),
+      exact(alphaLongPing, ALPHA_ID, "o"),
     ]);
     void firstConcurrent.then(
       () => {
@@ -166,15 +166,15 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
       },
     );
     const secondConcurrent = controller.transport.executeCommands([
-      exact(betaChunkedPing, BETA_ID, "o"),
+      exact(betaLongPing, BETA_ID, "o"),
     ]);
 
     const concurrentRequests = await capturedCorrelatedRequests(2);
     expect(concurrentRequests.map(({ payload }) => payload)).toEqual([
-      alphaChunkedPing,
-      betaChunkedPing,
+      alphaLongPing,
+      betaLongPing,
     ]);
-    expect(concurrentRequests.every(({ frames }) => frames.length > 1)).toBe(
+    expect(concurrentRequests.every(({ frames }) => frames.length === 1)).toBe(
       true,
     );
     expect(
@@ -195,7 +195,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
       ping(BETA_ID),
       exact(`${ALPHA_ID} s 4 128 1`, ALPHA_ID, "s 4 128 1"),
       exact(`${BETA_ID} sync ${EPOCH_SECONDS}`, BETA_ID, `${EPOCH_SECONDS}`),
-      analogRead(ALPHA_ID, 7),
+      analogRead(ALPHA_ID, 34),
       exact(`${ALPHA_ID} e Renamed 6000 10`, ALPHA_ID, "Renamed 6000 10"),
       ping(ALPHA_ID),
     ]);
@@ -212,7 +212,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     expect(result.outcomes[4]).toMatchObject({ analogValue: 321 });
     const commandRequests = await capturedCorrelatedRequests(3);
     expect(commandRequests.map(({ payload }) => payload)).toEqual([
-      `${ALPHA_ID} p;${ALPHA_ID} s 4 128 1;${ALPHA_ID} r 7`,
+      `${ALPHA_ID} p;${ALPHA_ID} s 4 128 1;${ALPHA_ID} r 34`,
       `${BETA_ID} p;${BETA_ID} sync ${EPOCH_SECONDS}`,
       `${ALPHA_ID} e Renamed 6000 10;${ALPHA_ID} p`,
     ]);
@@ -231,7 +231,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
           responses: expect.arrayContaining([
             { index: 0, response: "o" },
             { index: 1, response: "s 4 128 1" },
-            { index: 2, response: "r 7 321" },
+            { index: 2, response: "r 34 321" },
           ]),
         }),
         expect.objectContaining({
@@ -286,18 +286,13 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     );
     broker.clearPublications();
     await broker.publish(topics.command, "clear");
-    await waitUntil(
-      () =>
-        capturedResponsePayloads().filter(
-          (payload) => payload === "EEPROM cleared",
-        ).length === 2,
-      "bare clear response from both actors",
-    );
-    expect(restartedAlpha.session.actor.identity().deviceName).toBe("Alpha");
+    await delay(100);
+    expect(capturedResponsePayloads()).toEqual([]);
+    expect(restartedAlpha.session.actor.identity().deviceName).toBe("Renamed");
     expect(beta.session.actor.identity().deviceName).toBe("Beta");
   }, 20_000);
 
-  it("carries UTF-8, chunk, schedule, hash, evaluation, persistence, and time boundaries over the broker", async () => {
+  it("carries UTF-8, large messages, schedules, hashes, persistence, and time boundaries over the broker", async () => {
     const actor = await startActor("alpha", "Alpha", ALPHA_ID);
     const controller = await startTransport(1_000);
     await waitForDiscovery(controller, ALPHA_ID);
@@ -305,6 +300,7 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
     for (const [wireByteLength, requestSequence] of [
       [256, 1],
       [257, 2],
+      [5_120, 3],
     ] as const) {
       broker.clearPublications();
       const requestId = `${controller.requestSessionId}-request-${requestSequence}`;
@@ -323,43 +319,13 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
         throw new Error("Expected a captured correlated request");
       }
       expect(request).toMatchObject({ requestId, payload: command });
-      expect(request.frames).toEqual(
+      expect(request.frames).toEqual([
         encodeLegacyMessage(
           encodeCorrelatedLegacyRequest(request.requestId, command),
         ),
-      );
-      expect(request.frames).toHaveLength(wireByteLength === 256 ? 1 : 2);
-      if (wireByteLength === 257) {
-        expect(request.frames.map(chunkDataByteLength)).toEqual([200, 57]);
-      }
+      ]);
+      expect(request.frames).toHaveLength(1);
     }
-
-    broker.clearPublications();
-    const fiftyChunkCommand = paddedAsciiPing(10_000);
-    const fiftyFrames = encodeLegacyMessage(fiftyChunkCommand);
-    expect(fiftyFrames).toHaveLength(50);
-    for (const frame of fiftyFrames) {
-      await broker.publish(topics.command, frame);
-    }
-    await waitUntil(
-      () =>
-        capturedResponsesAfterLastCommand().some((payload) =>
-          payload.includes('"response":"o"'),
-        ),
-      "fifty-chunk response",
-    );
-
-    broker.clearPublications();
-    const fiftyOneChunkCommand = paddedAsciiPing(10_001);
-    const unsafeFrames = manualChunkFrames(fiftyOneChunkCommand, 51);
-    expect(unsafeFrames).toHaveLength(51);
-    for (const frame of unsafeFrames) {
-      await broker.publish(topics.command, frame);
-    }
-    await delay(100);
-    expect(capturedResponsePayloads()).toEqual([]);
-
-    await exerciseChunkFaults(actor);
 
     broker.clearPublications();
     const scheduleCore = {
@@ -676,83 +642,9 @@ async function capturedCorrelatedRequests(
 }
 
 function decodeCorrelatedRequests(
-  frames: readonly string[],
+  messages: readonly string[],
 ): readonly CapturedCorrelatedRequest[] {
-  const requests: CapturedCorrelatedRequest[] = [];
-  let active:
-    | {
-        readonly total: number;
-        readonly data: string[];
-        readonly frames: string[];
-      }
-    | undefined;
-
-  for (const frame of frames) {
-    if (!frame.startsWith("chunk:")) {
-      if (active !== undefined) {
-        throw new Error(
-          "Observed an unchunked command inside a chunked request",
-        );
-      }
-      requests.push(parseCorrelatedRequest(frame, [frame]));
-      continue;
-    }
-
-    const parsed = parseChunkFrame(frame);
-    if (active === undefined) {
-      if (parsed.index !== 0) {
-        throw new Error("Captured chunk sequence did not start at index zero");
-      }
-      active = { total: parsed.total, data: [], frames: [] };
-    }
-    if (parsed.total !== active.total || parsed.index !== active.data.length) {
-      throw new Error("Concurrent MQTT chunk frames were interleaved");
-    }
-    active.data.push(parsed.data);
-    active.frames.push(frame);
-
-    const expectedLast = parsed.index === parsed.total - 1;
-    if (parsed.isLast !== expectedLast) {
-      throw new Error("Captured chunk finality did not match its index");
-    }
-    if (parsed.isLast) {
-      requests.push(
-        parseCorrelatedRequest(active.data.join(""), active.frames),
-      );
-      active = undefined;
-    }
-  }
-
-  return requests;
-}
-
-function parseChunkFrame(frame: string): {
-  readonly index: number;
-  readonly total: number;
-  readonly isLast: boolean;
-  readonly data: string;
-} {
-  const match = /^chunk:(\d+):(\d+):([01]):(.*)$/su.exec(frame);
-  if (match === null) {
-    throw new Error("Captured malformed MQTT chunk frame");
-  }
-  const index = Number(match[1]);
-  const total = Number(match[2]);
-  if (
-    !Number.isSafeInteger(index) ||
-    !Number.isSafeInteger(total) ||
-    total < 1 ||
-    index < 0 ||
-    index >= total
-  ) {
-    throw new Error("Captured MQTT chunk frame has invalid indexes");
-  }
-  return {
-    index,
-    total,
-    isLast: match[3] === "1",
-    data: match[4] ?? "",
-  };
+  return messages.map((message) => parseCorrelatedRequest(message, [message]));
 }
 
 function parseCorrelatedRequest(
@@ -819,10 +711,6 @@ function paddedPing(byteLength: number): string {
   return `${prefix}${"x".repeat(paddingLength)}${suffix}`;
 }
 
-function paddedAsciiPing(byteLength: number): string {
-  return paddedAsciiPingFor(ALPHA_ID, byteLength);
-}
-
 function paddedAsciiPingFor(targetId: string, byteLength: number): string {
   const prefix = `${targetId} p `;
   const paddingLength = byteLength - prefix.length;
@@ -830,68 +718,6 @@ function paddedAsciiPingFor(targetId: string, byteLength: number): string {
     throw new RangeError("Padded ping length is too small");
   }
   return `${prefix}${"x".repeat(paddingLength)}`;
-}
-
-function chunkDataByteLength(frame: string): number {
-  const separator = frame.indexOf(
-    ":",
-    frame.indexOf(":", frame.indexOf(":") + 1) + 1,
-  );
-  const dataSeparator = frame.indexOf(":", separator + 1);
-  if (dataSeparator < 0) {
-    throw new Error("Expected a chunk frame");
-  }
-  return utf8ByteLength(frame.slice(dataSeparator + 1));
-}
-
-function manualChunkFrames(
-  payload: string,
-  totalChunks: number,
-): readonly string[] {
-  return Array.from({ length: totalChunks }, (_, index) => {
-    const data = payload.slice(index * 200, (index + 1) * 200);
-    return `chunk:${index}:${totalChunks}:${index === totalChunks - 1 ? 1 : 0}:${data}`;
-  });
-}
-
-async function exerciseChunkFaults(actor: ActorFixture): Promise<void> {
-  broker.clearPublications();
-  await broker.publish(topics.command, `chunk:1:2:1:C3D4 p`);
-  await broker.publish(topics.command, `chunk:0:2:0:A1B2`);
-  await delay(25);
-  expect(capturedResponsePayloads()).toEqual([]);
-  await broker.publish(topics.command, `chunk:1:2:1:C3D4 p`);
-  await waitUntil(
-    () => capturedResponsePayloads().length === 1,
-    "out-of-order chunk recovery",
-  );
-
-  broker.clearPublications();
-  const threeChunkCommand = `${ALPHA_ID} p ${"x".repeat(390)}`;
-  const threeFrames = manualChunkFrames(threeChunkCommand, 3);
-  const first = threeFrames[0];
-  const second = threeFrames[1];
-  const third = threeFrames[2];
-  if (first === undefined || second === undefined || third === undefined) {
-    throw new Error("Expected three chunk fixtures");
-  }
-  await broker.publish(topics.command, first);
-  await broker.publish(topics.command, second);
-  await broker.publish(topics.command, second);
-  await broker.publish(topics.command, third);
-  await waitUntil(
-    () => capturedResponsePayloads().length === 1,
-    "duplicate nonzero chunk handling",
-  );
-
-  broker.clearPublications();
-  await broker.publish(topics.command, `chunk:0:2:0:${ALPHA_ID} `);
-  await delay(25);
-  actor.clock.advanceBy(10_001);
-  actor.session.actor.runLoop();
-  await broker.publish(topics.command, "chunk:1:2:1:p");
-  await delay(100);
-  expect(capturedResponsePayloads()).toEqual([]);
 }
 
 function paddedEmptySchedule(bytes: number): string {

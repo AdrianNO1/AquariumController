@@ -84,20 +84,12 @@ select {
 }
 
 .brand-mark {
-  display: grid;
+  display: block;
   width: 40px;
   height: 40px;
-  place-items: center;
   border: 1px solid #3b9293;
   border-radius: 13px;
-  color: #8de8df;
-  background: linear-gradient(
-    145deg,
-    rgba(32, 132, 137, 0.3),
-    rgba(4, 47, 54, 0.5)
-  );
-  font-size: 0.72rem;
-  letter-spacing: 0.08em;
+  object-fit: cover;
 }
 
 nav {
@@ -1105,6 +1097,12 @@ h2 {
   background: rgba(126, 37, 37, 0.16);
 }
 
+.hardware-warning-list {
+  border-color: rgba(232, 164, 65, 0.42);
+  background: rgba(232, 164, 65, 0.08);
+  color: #f4c77e;
+}
+
 .editor-actions {
   justify-content: flex-start;
 }
@@ -1691,6 +1689,7 @@ h2 {
   .device-card-heading,
   .override-card-heading,
   .override-command-notice,
+  .firmware-fleet-panel,
   .stale-banner,
   .delete-confirmation {
     align-items: stretch;
@@ -2479,7 +2478,7 @@ button:disabled {
   grid-template-columns: 74px 115px minmax(0, 1fr) auto auto;
   align-items: end;
   gap: 8px;
-  padding: 8px 0;
+  padding: 8px 10px;
   border-bottom: 1px solid rgba(128, 206, 200, 0.12);
 }
 
@@ -2912,6 +2911,106 @@ button:disabled {
 
 .device-card-error {
   color: #ffb4aa;
+}
+
+.firmware-update-state,
+.firmware-usb-required,
+.firmware-fleet-policy {
+  margin: 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.firmware-update-state,
+.firmware-fleet-policy {
+  color: #9ee3d8;
+}
+
+.firmware-update-failed,
+.firmware-usb-required {
+  color: #ffb4aa;
+}
+
+.firmware-update-waiting_for_off,
+.firmware-update-waiting_for_device,
+.firmware-update-probation {
+  color: #f0d28d;
+}
+
+.firmware-fleet-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px;
+  border: 1px solid rgba(128, 206, 200, 0.2);
+  border-radius: 12px;
+  background: rgba(5, 25, 30, 0.62);
+}
+
+.firmware-fleet-panel h2,
+.firmware-fleet-panel p {
+  margin: 0;
+}
+
+.firmware-fleet-panel > div {
+  display: grid;
+  gap: 7px;
+}
+
+.firmware-update-dialog {
+  width: min(540px, calc(100vw - 28px));
+}
+
+.firmware-update-options {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.firmware-update-options p {
+  margin: 0 0 4px;
+  color: var(--compact-text-soft);
+  line-height: 1.5;
+}
+
+.firmware-update-options button:not(.text-button) {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  padding: 12px 14px;
+  text-align: left;
+}
+
+.firmware-update-options button small {
+  font-weight: 500;
+  opacity: 0.76;
+}
+
+.firmware-update-targets {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(128, 206, 200, 0.18);
+  border-radius: 8px;
+  background: rgba(4, 23, 25, 0.42);
+}
+
+.firmware-update-targets h3,
+.firmware-update-targets ul {
+  margin: 0;
+}
+
+.firmware-update-targets ul {
+  display: grid;
+  gap: 7px;
+  padding-left: 20px;
+}
+
+.firmware-update-targets li span {
+  display: block;
+  color: var(--compact-text-soft);
+  font-size: 0.82rem;
 }
 
 .device-exclude-button {

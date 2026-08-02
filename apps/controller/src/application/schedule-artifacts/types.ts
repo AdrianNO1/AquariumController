@@ -1,3 +1,5 @@
+import type { HardwareProfileId } from "@aquarium/contracts";
+
 import type {
   DeviceOperationExecutionOptions,
   DeviceOperationResult,
@@ -38,6 +40,8 @@ export interface DeviceScheduleProjection {
   readonly deviceId: string;
   readonly firmwareVersion: string | null;
   readonly reportedScheduleHash: string | null;
+  readonly hardwareProfileId: HardwareProfileId;
+  readonly outputGain: number;
   readonly channels: readonly NormalizedScheduleChannelProjection[];
 }
 

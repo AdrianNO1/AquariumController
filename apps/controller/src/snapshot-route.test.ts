@@ -24,6 +24,12 @@ const EMPTY_SNAPSHOT: ControllerSnapshot = {
   outputs: [],
   mappingProfiles: [],
   devices: [],
+  firmware: {
+    currentVersion: "5.0.0",
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+    sizeBytes: 1,
+    fleetPolicy: null,
+  },
   operations: { items: [], limit: 100, truncated: false },
   unresolvedDeviceOperations: {
     items: [],

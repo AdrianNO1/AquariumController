@@ -199,14 +199,9 @@ describe("SQLite persistence foundation", () => {
         })
         .executeTakeFirstOrThrow();
       await databases.state
-        .insertInto("throttles")
-        .values({
-          id: "throttle-light",
-          type_key: "light",
-          percentage: 100,
-          created_at_ms: 1,
-          updated_at_ms: 1,
-        })
+        .updateTable("throttles")
+        .set({ created_at_ms: 1, updated_at_ms: 1 })
+        .where("id", "=", "throttle-light")
         .executeTakeFirstOrThrow();
       await databases.state
         .insertInto("channels")

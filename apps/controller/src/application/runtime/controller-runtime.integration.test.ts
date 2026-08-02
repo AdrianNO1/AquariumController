@@ -346,16 +346,6 @@ async function seedScheduledOutput(
     .where("id", "=", DEVICE_ID)
     .executeTakeFirstOrThrow();
   await database
-    .insertInto("throttles")
-    .values({
-      id: "throttle-light",
-      type_key: "light",
-      percentage: 100,
-      created_at_ms: nowMs,
-      updated_at_ms: nowMs,
-    })
-    .executeTakeFirstOrThrow();
-  await database
     .insertInto("channels")
     .values({
       id: CHANNEL_ID,

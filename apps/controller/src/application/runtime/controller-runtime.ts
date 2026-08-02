@@ -1,4 +1,7 @@
-import { createEspTopicSet } from "@aquarium/esp-protocol";
+import {
+  createEspTopicSet,
+  ESP_FIRMWARE_ARTIFACT,
+} from "@aquarium/esp-protocol";
 import type { Kysely } from "kysely";
 
 import type {
@@ -26,6 +29,7 @@ import {
 } from "../../infrastructure/storage/interaction-repository.js";
 import type { DeviceAlertEvaluatorPort } from "../alerts/index.js";
 import { DeviceRegistry } from "../devices/index.js";
+import { FirmwareUpdateService } from "../firmware/index.js";
 import { DeviceOperationService } from "../operations/index.js";
 import {
   ManualOverrideCommandAdapter,
@@ -61,6 +65,7 @@ export type ControllerRuntimeComposition =
       readonly manualOverrideCommands: null;
       readonly scheduleReconciliation: null;
       readonly deviceDiscovery: null;
+      readonly firmwareUpdates: null;
     }
   | {
       readonly mqttEnabled: true;
@@ -69,6 +74,7 @@ export type ControllerRuntimeComposition =
       readonly manualOverrideCommands: ManualOverrideService;
       readonly scheduleReconciliation: ScheduleReconciliationRequester;
       readonly deviceDiscovery: DeviceDiscoveryRequester;
+      readonly firmwareUpdates: FirmwareUpdateService;
     };
 
 export interface ScheduleReconciliationRequester {
@@ -97,6 +103,7 @@ export interface ComposeControllerRuntimeOptions {
 interface ControllerMqttRuntimeOptions {
   readonly mqtt: EnabledMqttConfiguration;
   readonly configuration: ControllerConfiguration["deviceRegistry"];
+  readonly firmware: ControllerConfiguration["firmware"];
   readonly stateDatabase: Kysely<StateDatabaseSchema>;
   readonly eventsDatabase: Kysely<EventsDatabaseSchema>;
   readonly clientFactory: LegacyMqttClientFactory;
@@ -127,6 +134,7 @@ export class ControllerMqttRuntime
   readonly #manualOverrides: ManualOverrideService;
   readonly #outputRefresh: OutputRefreshScheduler;
   readonly #timeSync: TimeSyncCoordinator;
+  readonly #firmwareUpdates: FirmwareUpdateService;
   readonly #tasks: RuntimeTaskTracker;
   readonly #now: () => number;
   readonly #healthSweepIntervalMs: number;
@@ -183,6 +191,12 @@ export class ControllerMqttRuntime
             });
             this.#tasks.run(() =>
               this.#evaluateDeviceAlerts(event.receivedAtMs),
+            );
+            if (update.reason === "connection_recovered") {
+              this.#timeSync.signalDeviceUnavailable(update.deviceId);
+            }
+            await this.#firmwareUpdates.signalDeviceAnnouncement(
+              update.deviceId,
             );
             if (this.#stopping) {
               return;
@@ -248,6 +262,20 @@ export class ControllerMqttRuntime
         ...(options.onDeviceContact === undefined
           ? {}
           : { onDeviceContact: options.onDeviceContact }),
+      },
+    );
+    this.#firmwareUpdates = new FirmwareUpdateService(
+      options.stateDatabase,
+      this.#deviceOperations,
+      {
+        artifact: {
+          version: ESP_FIRMWARE_ARTIFACT.version,
+          sizeBytes: ESP_FIRMWARE_ARTIFACT.sizeBytes,
+          sha256: ESP_FIRMWARE_ARTIFACT.sha256,
+          url: `${options.firmware.baseUrl}/api/firmware/esp32/current.bin`,
+        },
+        now: options.now,
+        onBackgroundError: options.onError,
       },
     );
     this.#scheduledCommands = new ScheduledDeviceOperationDispatcher(
@@ -321,6 +349,10 @@ export class ControllerMqttRuntime
 
   get manualOverrideCommands(): ManualOverrideService {
     return this.#manualOverrides;
+  }
+
+  get firmwareUpdateCommands(): FirmwareUpdateService {
+    return this.#firmwareUpdates;
   }
 
   isReady(): boolean {
@@ -408,8 +440,13 @@ export class ControllerMqttRuntime
       throw new Error("Stopped MQTT runtime cannot be restarted");
     }
     await this.#deviceOperations.start();
+    this.#firmwareUpdates.start();
     const startedAtMs = this.#now();
-    await this.#registry.refreshConnectionStatuses(startedAtMs);
+    const startupTransitions =
+      await this.#registry.refreshConnectionStatuses(startedAtMs);
+    for (const transition of startupTransitions) {
+      this.#timeSync.signalDeviceUnavailable(transition.deviceId);
+    }
     await this.#evaluateDeviceAlerts(startedAtMs);
     this.#transport.start();
     this.#healthTimer = setInterval(
@@ -466,6 +503,12 @@ export class ControllerMqttRuntime
     } catch (error) {
       errors.push(toError(error));
     }
+    this.#firmwareUpdates.stop();
+    try {
+      await this.#firmwareUpdates.drain();
+    } catch (error) {
+      errors.push(toError(error));
+    }
     this.#deviceOperations.beginShutdown();
     try {
       await this.#transport.stop();
@@ -495,7 +538,11 @@ export class ControllerMqttRuntime
     this.#tasks.run(async () => {
       try {
         const observedAtMs = this.#now();
-        await this.#registry.refreshConnectionStatuses(observedAtMs);
+        const transitions =
+          await this.#registry.refreshConnectionStatuses(observedAtMs);
+        for (const transition of transitions) {
+          this.#timeSync.signalDeviceUnavailable(transition.deviceId);
+        }
         await this.#evaluateDeviceAlerts(observedAtMs);
       } finally {
         this.#healthTickRunning = false;
@@ -542,6 +589,7 @@ export function composeControllerRuntime(
       manualOverrideCommands: null,
       scheduleReconciliation: null,
       deviceDiscovery: null,
+      firmwareUpdates: null,
     };
   }
   if (options.onError === undefined) {
@@ -556,6 +604,7 @@ export function composeControllerRuntime(
   const runtime = new ControllerMqttRuntime({
     mqtt: options.configuration.mqtt,
     configuration: options.configuration.deviceRegistry,
+    firmware: options.configuration.firmware,
     stateDatabase: options.stateDatabase,
     eventsDatabase: options.eventsDatabase,
     clientFactory,
@@ -574,6 +623,7 @@ export function composeControllerRuntime(
     manualOverrideCommands: runtime.manualOverrideCommands,
     scheduleReconciliation: runtime,
     deviceDiscovery: runtime,
+    firmwareUpdates: runtime.firmwareUpdateCommands,
   };
 }
 

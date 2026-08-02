@@ -8,10 +8,14 @@ import {
 
 import { channelColorMigration } from "./channel-color-migration.js";
 import { controlAreaMigration } from "./control-area-migration.js";
+import { controlAreaThrottleMigration } from "./control-area-throttle-migration.js";
 import { eventsQueryMigration } from "./events-query-migration.js";
 import { eventsRetentionMigration } from "./events-retention-migration.js";
 import { eventsNotificationOutcomeMigration } from "./events-notification-outcome-migration.js";
 import { eventsInitialMigration } from "./events-migrations.js";
+import { firmwareUpdateMigration } from "./firmware-update-migration.js";
+import { hardwarePinSafetyMigration } from "./hardware-pin-safety-migration.js";
+import { hardwareProfileMigration } from "./hardware-profile-migration.js";
 import { notificationOutcomeAuditMigration } from "./notification-outcome-audit-migration.js";
 import { operatorConcurrencyMigration } from "./operator-concurrency-migration.js";
 import { stateRuntimeMigration } from "./state-runtime-migration.js";
@@ -26,6 +30,12 @@ export const STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME =
   "004_operator_concurrency";
 export const STATE_CHANNEL_COLOR_MIGRATION_NAME = "005_channel_color";
 export const STATE_CONTROL_AREA_MIGRATION_NAME = "006_control_areas";
+export const STATE_FIRMWARE_UPDATE_MIGRATION_NAME = "007_firmware_updates";
+export const STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME =
+  "008_control_area_throttles";
+export const STATE_HARDWARE_PROFILE_MIGRATION_NAME = "009_hardware_profiles";
+export const STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME =
+  "010_hardware_pin_safety";
 export const EVENTS_INITIAL_MIGRATION_NAME = "001_initial_events";
 export const EVENTS_QUERY_MIGRATION_NAME = "002_log_query_indexes";
 export const EVENTS_RETENTION_MIGRATION_NAME =
@@ -39,7 +49,11 @@ export type StateMigrationTarget =
   | typeof STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME
   | typeof STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME
   | typeof STATE_CHANNEL_COLOR_MIGRATION_NAME
-  | typeof STATE_CONTROL_AREA_MIGRATION_NAME;
+  | typeof STATE_CONTROL_AREA_MIGRATION_NAME
+  | typeof STATE_FIRMWARE_UPDATE_MIGRATION_NAME
+  | typeof STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME
+  | typeof STATE_HARDWARE_PROFILE_MIGRATION_NAME
+  | typeof STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME;
 export type EventsMigrationTarget =
   | typeof EVENTS_INITIAL_MIGRATION_NAME
   | typeof EVENTS_QUERY_MIGRATION_NAME
@@ -66,6 +80,10 @@ const stateMigrationProvider = new EmbeddedMigrationProvider({
   [STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME]: operatorConcurrencyMigration,
   [STATE_CHANNEL_COLOR_MIGRATION_NAME]: channelColorMigration,
   [STATE_CONTROL_AREA_MIGRATION_NAME]: controlAreaMigration,
+  [STATE_FIRMWARE_UPDATE_MIGRATION_NAME]: firmwareUpdateMigration,
+  [STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME]: controlAreaThrottleMigration,
+  [STATE_HARDWARE_PROFILE_MIGRATION_NAME]: hardwareProfileMigration,
+  [STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME]: hardwarePinSafetyMigration,
 });
 
 const eventsMigrationProvider = new EmbeddedMigrationProvider({

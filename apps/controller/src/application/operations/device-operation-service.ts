@@ -20,6 +20,8 @@ import type { DeviceRegistry } from "../devices/index.js";
 import type { MqttInteractionLogger } from "../runtime/mqtt-interaction-logger.js";
 import {
   DeviceOperationDeviceNotFoundError,
+  DeviceOperationHardwareProfileMismatchError,
+  DeviceOperationMappingProfileNotFoundError,
   DeviceOperationNotFoundError,
   DeviceOperationReconciliationConflictError,
   DeviceOperationRevisionConflictError,
@@ -158,7 +160,10 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       },
       lifecycleOptions,
     );
-    if (!isCommandEligibleDevice(device)) {
+    if (
+      !isCommandEligibleDevice(device) &&
+      !(parsedRequest.kind === "firmware_update" && device.enabled === 1)
+    ) {
       return this.#repository.completePendingWithoutAttempt(
         operation.id,
         this.#now(),
@@ -277,6 +282,10 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
         requestedAtMs,
         deadlineAtMs: safeAdd(requestedAtMs, this.#operationTimeoutMs),
         request: operationRequest,
+        mappingProfileId:
+          parsedRequest.mappingProfileId === undefined
+            ? device.mapping_profile_id
+            : parsedRequest.mappingProfileId,
       });
     } catch (error) {
       if (error instanceof DeviceOperationRevisionConflictError) {
@@ -287,6 +296,22 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       }
       if (error instanceof DeviceOperationDeviceNotFoundError) {
         throw new ConfigurationNotFoundError("device", error.deviceId);
+      }
+      if (error instanceof DeviceOperationMappingProfileNotFoundError) {
+        throw new ConfigurationNotFoundError(
+          "mapping_profile",
+          error.mappingProfileId,
+        );
+      }
+      if (error instanceof DeviceOperationHardwareProfileMismatchError) {
+        throw new ConfigurationRelationalConflictError([
+          {
+            resource: "mapping_profile",
+            id: error.mappingProfileId,
+            relation: "hardware_profile",
+            message: error.message,
+          },
+        ]);
       }
       throw error;
     }

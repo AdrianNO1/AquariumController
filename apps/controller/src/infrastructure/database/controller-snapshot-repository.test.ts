@@ -1,4 +1,5 @@
 import { controllerSnapshotSchema } from "@aquarium/contracts";
+import { ESP_FIRMWARE_ARTIFACT } from "@aquarium/esp-protocol";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve, sep } from "node:path";
@@ -152,6 +153,40 @@ describe("controller snapshot repository", () => {
     expect(snapshot.alerts).toEqual([]);
   });
 
+  it("hides a rollout policy targeting an obsolete firmware artifact", async () => {
+    const database = await openDatabase(":memory:");
+    await database
+      .updateTable("firmware_rollout_policy")
+      .set({
+        enabled: 1,
+        target_version: "5.0.0",
+        mode: "when_off",
+        requested_at_ms: BASE_TIME_MS,
+        updated_at_ms: BASE_TIME_MS,
+      })
+      .where("singleton_key", "=", 1)
+      .executeTakeFirstOrThrow();
+
+    const repository = createRepository(database);
+    await expect(repository.read()).resolves.toMatchObject({
+      firmware: { fleetPolicy: null },
+    });
+
+    await database
+      .updateTable("firmware_rollout_policy")
+      .set({ target_version: ESP_FIRMWARE_ARTIFACT.version })
+      .where("singleton_key", "=", 1)
+      .executeTakeFirstOrThrow();
+    await expect(repository.read()).resolves.toMatchObject({
+      firmware: {
+        fleetPolicy: {
+          targetVersion: ESP_FIRMWARE_ARTIFACT.version,
+          mode: "when_off",
+        },
+      },
+    });
+  });
+
   it("projects populated normalized state, nested JSON, and current lifecycle records", async () => {
     const database = await openDatabase(":memory:");
     await seedPopulatedState(database);
@@ -184,8 +219,28 @@ describe("controller snapshot repository", () => {
     expect(snapshot.devices[0]).toMatchObject({
       id: "device-main",
       desired: { name: "reef-main" },
-      reported: { scheduleHash: "42" },
+      reported: {
+        scheduleHash: "42",
+        outputsOff: false,
+        outputs: [{ pin: 12, valuePercentage: 75 }],
+        ota: {
+          status: "idle",
+          targetVersion: "",
+          progress: 0,
+          error: null,
+        },
+      },
+      firmwareUpdate: {
+        targetVersion: "5.0.0",
+        mode: "when_off",
+        status: "usb_required",
+      },
       status: "online",
+    });
+    expect(snapshot.firmware).toMatchObject({
+      currentVersion: ESP_FIRMWARE_ARTIFACT.version,
+      sizeBytes: ESP_FIRMWARE_ARTIFACT.sizeBytes,
+      fleetPolicy: null,
     });
     expect(snapshot.operations.items.map((operation) => operation.id)).toEqual([
       "operation-apply",
@@ -453,7 +508,7 @@ describe("controller snapshot repository", () => {
     await firstDatabase.destroy();
     openDatabases.delete(firstDatabase);
 
-    const reopenedDatabase = await openDatabase(filename);
+    const reopenedDatabase = await openDatabase(filename, false);
     const after = await createRepository(reopenedDatabase).read();
 
     expect(after).toEqual(before);
@@ -543,8 +598,12 @@ class RecordingSink implements StateEventStreamSink {
 
 async function openDatabase(
   filename: string,
+  clearThrottles = true,
 ): Promise<Kysely<StateDatabaseSchema>> {
   const database = await openStateDatabase({ filename });
+  if (clearThrottles) {
+    await database.deleteFrom("throttles").execute();
+  }
   openDatabases.add(database);
   return database;
 }
@@ -689,12 +748,28 @@ async function seedPopulatedState(
       reported_pwm_resolution_bits: 8,
       firmware_version: "1.2.3",
       reported_schedule_hash: "42",
+      output_state_json: '{"outputsOff":false,"outputs":[[12,75]]}',
+      ota_status_json: '{"status":"idle","targetVersion":"","progress":0}',
       status: "online",
       last_seen_at_ms: BASE_TIME_MS + 1_000,
       created_at_ms: BASE_TIME_MS,
       updated_at_ms: BASE_TIME_MS + 1_000,
       metadata_json: '{"schemaVersion":1,"rack":"main"}',
       metadata_schema_version: 1,
+    })
+    .executeTakeFirstOrThrow();
+  await database
+    .insertInto("firmware_update_requests")
+    .values({
+      device_id: "device-main",
+      target_version: "5.0.0",
+      mode: "when_off",
+      status: "usb_required",
+      progress: 0,
+      operation_id: null,
+      error_message: "Install firmware 5.0.0 once over USB",
+      requested_at_ms: BASE_TIME_MS,
+      updated_at_ms: BASE_TIME_MS,
     })
     .executeTakeFirstOrThrow();
   await database

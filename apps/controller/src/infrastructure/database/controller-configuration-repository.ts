@@ -1052,7 +1052,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
           .executeTakeFirst();
         const profiles = await transaction
           .selectFrom("mapping_profiles")
-          .select(["id", "name", "device_name_prefix"])
+          .select(["id", "name"])
           .where("id", "!=", profileId)
           .execute();
         const conflicts: RelationConflict[] = [];
@@ -1064,19 +1064,6 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
             relation: "name",
             message: "Mapping profile name is already in use",
           });
-        }
-        for (const item of profiles) {
-          if (
-            item.device_name_prefix.startsWith(request.deviceNamePrefix) ||
-            request.deviceNamePrefix.startsWith(item.device_name_prefix)
-          ) {
-            conflicts.push({
-              resource: "mapping_profile",
-              id: item.id,
-              relation: "device_name_prefix",
-              message: "Mapping profile prefixes must not overlap",
-            });
-          }
         }
         const existingMappings =
           profile === undefined
@@ -1122,6 +1109,24 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
             });
           }
         }
+        const assignedDevices = await transaction
+          .selectFrom("devices")
+          .select(["id", "reported_hardware_profile_id"])
+          .where("mapping_profile_id", "=", profileId)
+          .execute();
+        for (const device of assignedDevices) {
+          if (
+            device.reported_hardware_profile_id !== null &&
+            device.reported_hardware_profile_id !== request.hardwareProfileId
+          ) {
+            conflicts.push({
+              resource: "device",
+              id: device.id,
+              relation: "hardware_profile",
+              message: `Device ${device.id} reports hardware profile ${device.reported_hardware_profile_id}`,
+            });
+          }
+        }
         if (conflicts.length > 0) {
           throw new ConfigurationRelationalConflictError(
             conflicts.slice(0, 100),
@@ -1130,7 +1135,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
         if (
           profile !== undefined &&
           profile.name === request.name &&
-          profile.device_name_prefix === request.deviceNamePrefix &&
+          profile.hardware_profile_id === request.hardwareProfileId &&
           profile.output_gain === request.outputGain &&
           mappingsEqual(existingMappings, request.mappings)
         ) {
@@ -1143,7 +1148,8 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
             .values({
               id: profileId,
               name: request.name,
-              device_name_prefix: request.deviceNamePrefix,
+              device_name_prefix: profileId,
+              hardware_profile_id: request.hardwareProfileId,
               output_gain: request.outputGain,
               created_at_ms: nowMs,
               updated_at_ms: nowMs,
@@ -1154,7 +1160,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
             .updateTable("mapping_profiles")
             .set({
               name: request.name,
-              device_name_prefix: request.deviceNamePrefix,
+              hardware_profile_id: request.hardwareProfileId,
               output_gain: request.outputGain,
               updated_at_ms: nowMs,
             })
@@ -1892,7 +1898,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
     replacedScheduleId: string,
     proposedGraph: ValidatedScheduleGraph,
   ): Promise<void> {
-    const [mappings, channels, schedules, points, throttles] =
+    const [mappings, mappingProfiles, channels, schedules, points, throttles] =
       await Promise.all([
         transaction
           .selectFrom("pin_mappings")
@@ -1903,6 +1909,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
           .orderBy("display_order")
           .orderBy("id")
           .execute(),
+        transaction.selectFrom("mapping_profiles").selectAll().execute(),
         transaction.selectFrom("channels").selectAll().execute(),
         transaction.selectFrom("schedules").selectAll().execute(),
         transaction
@@ -1922,10 +1929,17 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
     const throttleById = new Map(
       throttles.map((throttle) => [throttle.id, throttle]),
     );
+    const profileById = new Map(
+      mappingProfiles.map((profile) => [profile.id, profile]),
+    );
     const profileIds = [
       ...new Set(mappings.map((mapping) => mapping.mapping_profile_id)),
     ];
     for (const profileId of profileIds) {
+      const profile = profileById.get(profileId);
+      if (profile === undefined) {
+        throw new Error(`Persisted mapping profile ${profileId} is missing`);
+      }
       const inputs = mappings
         .filter((mapping) => mapping.mapping_profile_id === profileId)
         .flatMap((mapping) => {
@@ -1974,6 +1988,7 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
                   : ("light" as const),
               graph,
               throttlePercent: throttle.percentage,
+              outputGain: profile.output_gain,
             },
           ];
         });

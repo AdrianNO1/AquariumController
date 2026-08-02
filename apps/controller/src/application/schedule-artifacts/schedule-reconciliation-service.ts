@@ -3,9 +3,9 @@ import {
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
 import {
-  CURRENT_ESP_FIRMWARE_VERSION,
+  isSupportedEspFirmwareVersion,
   LEGACY_MAX_SYNC_TIME,
-  isCurrentEspFirmwareVersion,
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   serializeLegacyScheduleDocument,
 } from "@aquarium/esp-protocol";
 
@@ -175,8 +175,8 @@ export class ScheduleReconciliationService {
     }
 
     if (
-      projection.firmwareVersion !== null &&
-      !isCurrentEspFirmwareVersion(projection.firmwareVersion)
+      projection.firmwareVersion === null ||
+      !isSupportedEspFirmwareVersion(projection.firmwareVersion)
     ) {
       await this.artifacts.saveCompiledArtifact({
         deviceId,
@@ -185,8 +185,11 @@ export class ScheduleReconciliationService {
         delivery: {
           status: "unsupported",
           operationId: null,
-          errorCode: "firmware_outdated",
-          errorMessage: `Firmware ${projection.firmwareVersion} is outdated; install ${CURRENT_ESP_FIRMWARE_VERSION}`,
+          errorCode: "firmware_unsupported",
+          errorMessage:
+            projection.firmwareVersion === null
+              ? `Firmware version is unknown; install ${MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION} or newer`
+              : `Firmware ${projection.firmwareVersion} is unsupported; install ${MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION} or newer`,
         },
         nowMs,
       });

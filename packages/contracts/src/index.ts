@@ -8,6 +8,7 @@ import {
 } from "./primitives.js";
 
 export * from "./controller.js";
+export * from "./hardware-profiles.js";
 export * from "./logs.js";
 export * from "./manual-overrides.js";
 export * from "./primitives.js";

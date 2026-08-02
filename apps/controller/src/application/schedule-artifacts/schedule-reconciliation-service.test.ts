@@ -5,6 +5,7 @@ import { basename, join, resolve, sep } from "node:path";
 import {
   CURRENT_ESP_FIRMWARE_VERSION,
   legacyScheduleDocumentSchema,
+  MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   serializeLegacyScheduleCore,
 } from "@aquarium/esp-protocol";
 import type { Kysely } from "kysely";
@@ -91,9 +92,17 @@ describe("schedule artifact affected-device projection", () => {
       }),
     ).resolves.toEqual(["device-a"]);
 
+    await database
+      .updateTable("mapping_profiles")
+      .set({ output_gain: 0.5 })
+      .where("id", "=", "profile-main")
+      .executeTakeFirstOrThrow();
     const projection = await repository.loadProjection("device-a");
     if (projection === null) throw new Error("Missing device projection");
+    expect(projection.outputGain).toBe(0.5);
+    expect(projection.hardwareProfileId).toBe("nodemcu-esp32s-v1.1");
     const compiled = compileDeviceScheduleArtifact(projection);
+    expect(compiled.payloadJson).toContain('"d":{"t":360,"p":25}');
     await repository.saveCompiledArtifact({
       deviceId: "device-a",
       sourceStateRevision: projection.sourceStateRevision,
@@ -116,7 +125,7 @@ describe("schedule artifact affected-device projection", () => {
 });
 
 describe("ScheduleReconciliationService", () => {
-  it("dispatches current syncTime, stores the core hash, and persists across restart", async () => {
+  it("dispatches to supported non-current firmware and persists across restart", async () => {
     const directory = await mkdtemp(
       join(tmpdir(), "aquarium-schedule-artifact-"),
     );
@@ -124,6 +133,11 @@ describe("ScheduleReconciliationService", () => {
     const filename = join(directory, "state.sqlite");
     let database = await createDatabase(filename);
     await seedNormalizedState(database);
+    await database
+      .updateTable("devices")
+      .set({ firmware_version: MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION })
+      .where("id", "=", "device-a")
+      .executeTakeFirstOrThrow();
     let repository = new DeviceScheduleArtifactRepository(database);
     const operations = new RecordingScheduleOperations(database);
     const service = new ScheduleReconciliationService(repository, operations, {
@@ -166,7 +180,7 @@ describe("ScheduleReconciliationService", () => {
     );
 
     await closeDatabase(database);
-    database = await createDatabase(filename);
+    database = await createDatabase(filename, false);
     repository = new DeviceScheduleArtifactRepository(database);
     expect(await repository.getArtifact("device-a")).toEqual(
       storedBeforeRestart,
@@ -231,7 +245,7 @@ describe("ScheduleReconciliationService", () => {
     });
   });
 
-  it.each(["0", "1", "2w", "3.2w", "5.0.0"])(
+  it.each(["0", "1", "2w", "3.2w", "4.2.1"])(
     "marks non-current firmware %s explicitly unsupported",
     async (firmwareVersion) => {
       const database = await createDatabase();
@@ -263,7 +277,7 @@ describe("ScheduleReconciliationService", () => {
         delivery: {
           status: "unsupported",
           operationId: null,
-          errorCode: "firmware_outdated",
+          errorCode: "firmware_unsupported",
         },
       });
     },
@@ -500,8 +514,12 @@ class RecordingScheduleOperations implements DeviceScheduleOperationPort {
 
 async function createDatabase(
   filename = ":memory:",
+  clearThrottles = true,
 ): Promise<Kysely<StateDatabaseSchema>> {
   const database = await openStateDatabase({ filename });
+  if (clearThrottles) {
+    await database.deleteFrom("throttles").execute();
+  }
   openDatabases.add(database);
   return database;
 }
@@ -635,7 +653,7 @@ async function seedNormalizedState(
         "mapping-secondary-light",
         "profile-secondary",
         "channel-light",
-        8,
+        13,
         0,
       ),
     ])

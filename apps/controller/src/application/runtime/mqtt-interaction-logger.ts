@@ -236,7 +236,6 @@ export class MqttInteractionLogger {
           retentionClass: "raw",
           payload: {
             batchIndex: interaction.batchIndex,
-            frameCount: interaction.frameCount,
             payloadStored: false,
           },
           payloadSchemaVersion: 1,

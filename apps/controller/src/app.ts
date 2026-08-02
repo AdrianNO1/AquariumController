@@ -24,6 +24,7 @@ import type {
   DeviceConfigurationCommandPort,
 } from "./application/configuration/index.js";
 import type { ManualOverrideCommandService } from "./application/overrides/index.js";
+import type { FirmwareUpdateCommandService } from "./application/firmware/index.js";
 import type { HttpResponseInteractionRecorder } from "./application/runtime/controller-interaction-logger.js";
 import {
   registerConfigurationRoutes,
@@ -31,6 +32,10 @@ import {
 } from "./configuration-routes.js";
 import { registerLogsRoutes, type LogsRouteService } from "./logs-routes.js";
 import { registerManualOverrideRoutes } from "./manual-override-routes.js";
+import {
+  registerFirmwareRoutes,
+  type FirmwareArtifactSource,
+} from "./firmware-routes.js";
 import type { StateEventStreamHub } from "./realtime/state-event-stream.js";
 import { formatTransientSseEvent, resolveSseAfterRevision } from "./sse.js";
 
@@ -58,6 +63,8 @@ export interface BuildAppOptions {
   readonly deviceConfigurationCommands?: DeviceConfigurationCommandPort;
   readonly alertAcknowledgementCommands?: AlertAcknowledgementCommandPort;
   readonly deviceDiscoveryCommands?: DeviceDiscoveryCommandPort;
+  readonly firmwareUpdateCommands?: FirmwareUpdateCommandService;
+  readonly firmwareArtifact?: FirmwareArtifactSource;
   readonly alertHistoryReader?: AlertHistoryRouteReader;
   readonly logsService?: LogsRouteService;
   readonly manualOverrideCommands?: ManualOverrideCommandService;
@@ -127,6 +134,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   registerAlertHistoryRoutes(app, options);
   registerLogsRoutes(app, options);
   registerManualOverrideRoutes(app, options);
+  registerFirmwareRoutes(app, options);
 
   const healthResponse = (): HealthResponse =>
     healthResponseSchema.parse({

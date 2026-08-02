@@ -2,9 +2,9 @@
 
 This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
 controller. The previous Python and Flask application remains under `.old/` as
-migration evidence. The ESP32 sketch temporarily remains at
-`.old/slaveCode/ESP32Code/ESP32Code.ino`, but firmware 4.1.0 is now a supported,
-compiled part of this application rather than read-only legacy evidence.
+migration evidence. The supported ESP32 source is
+`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.5 is compiled and bundled
+with the controller release.
 
 Historical pre-4.1 release evidence dated 2026-07-25 includes 97 files/638 unit
 tests, 82 files/571 critical tests, real-Mosquitto 5/5, and retry-free
@@ -18,11 +18,9 @@ so it must not be deployed as the current release. Select and record a new
 source commit and exact image digest after this branch passes protected CI and
 is published from `master`.
 
-The current firmware 4.1/per-device-lane branch has passed local formatting,
-lint, workspace typechecks, production builds, 98 files/684 unit tests, 83
-files/616 critical tests, real-Mosquitto integration 5/5, and retry-free
-production Playwright 18/18. These are current source-tree results, not a
-substitute for the pending protected pull-request/default-branch jobs or a new
+Firmware 5.0 adds controller-managed pull OTA, output-state telemetry, persistent
+update-all policy, SHA-256 verification, and probation rollback. Run the
+repository verification lanes against the final source before selecting a new
 published image digest.
 
 All reachable hosted branches contain only redacted credential sentinels and
@@ -50,7 +48,15 @@ MQTT adapter. Mosquitto remains a separate process. The controller is
 deliberately not horizontally scalable because device queues, schedules, and
 state revisions need one owner. Within that process, firmware 4.1 request IDs
 support bounded per-device MQTT command lanes rather than one global
-response-waiting lane.
+response-waiting lane. Firmware 5.0.5 retains those request IDs and adds
+controller-managed pull OTA plus single-publication command delivery.
+
+ESP pin mappings use explicit hardware profiles and explicit per-device profile
+selection; device names no longer choose mappings. The bundled NodeMCU ESP-32S
+profile permits only pins usable by the deployed boards. Profiles assigned to
+an ESP warn when they use GPIO12 because it controls flash voltage during reset.
+Fallback schedule artifacts include both the area and mapping-profile
+multipliers, matching controller-driven intensity after Pi silence.
 
 The global state revision is the contiguous snapshot/SSE cursor. User mutations
 also serialize through a separate operator revision floor, so background device
@@ -132,8 +138,9 @@ missing, corrupt, replaced, escaped, or symlinked artifact; a stable filesystem
 identity cache avoids redundant verification without hiding later changes. A
 missing verified artifact makes startup create a fresh backup and keeps health
 from reporting a false-green success. The controller creates a backup at 02:00
-UTC and keeps the newest three fully verified backups without deleting unknown
-or damaged entries. Compose uses Docker's compressed `local` log driver with
+UTC and keeps the newest verified backup from each UTC day for 14 days, then
+the newest verified backup from each UTC week for 183 days, without deleting
+unknown or damaged entries. Compose uses Docker's compressed `local` log driver with
 five 10 MiB files per service.
 
 ## Local development
@@ -177,7 +184,7 @@ npm run test:integration
 npm run test:e2e
 npm run build
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:4.1.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.5 .
 ```
 
 CI defines six validation jobs: static/unit, critical, real-Mosquitto
@@ -286,10 +293,12 @@ separate verified database/archive backup procedure.
   to purge the directly addressable unreachable object/cached view, resolve the
   remaining secret-scanning alert as `revoked`, and keep secret scanning and
   push protection enabled.
-- Flash firmware 4.1.0 to every deployed ESP32 before enabling actuator work.
-  Older or unexpected versions remain visible but are marked
-  `firmware_outdated`, excluded from schedule/override commands, and identified
-  on the frontend. Firmware 4.1.0 adds correlated response IDs, wear-limited
+- Flash firmware 5.0.5 to every deployed ESP32 (USB is required for devices
+  older than 5.0.0) and persist its device-specific network configuration in NVS.
+  Versions older than 5.0.0 remain visible but are marked
+  `firmware_unsupported`, excluded from schedule/override commands, and
+  identified on the frontend. Supported 5.0.0+ firmware remains online when an
+  update is available. Firmware 5.0.0 adds correlated response IDs, wear-limited
   persisted diagnostics, best-effort per-pin schedule activation, and
   rollover-safe override expiry. Routine controller and manual PWM writes use
   `overwrite=true`, so the ESP suppresses its local schedule while the Pi is
@@ -300,12 +309,18 @@ separate verified database/archive backup procedure.
   so DNS/NTP failure does not delay MQTT or manual-control startup. If neither
   the Pi nor NTP is reachable after reboot, a valid persisted EEPROM timestamp
   intentionally authorizes the local schedule from that boundedly stale
-  estimate.
+  estimate. Firmware 5.0.5 additionally reports the board hardware profile,
+  enforces the safe output-pin set, bounds SPIFFS repair attempts, and removes
+  remote fleet-wide EEPROM clearing.
 - Configure the ESP32's ignored local firmware header with both an MQTT username
   and password plus the intended NTP host, and restrict that plaintext broker
   listener to the trusted aquarium LAN. The current ESP firmware does not
   support `mqtts://`; enabling
   TLS would require another firmware change and physical validation.
+- Set `AQUARIUM_FIRMWARE_BASE_URL` to the controller's ESP-reachable local HTTP
+  origin, such as `http://192.168.1.73:3000`. OTA has no separate password; the
+  controller and ESP validate the bundled image by exact size and SHA-256, so
+  the HTTP endpoint and MQTT broker must remain restricted to the trusted LAN.
 - After this branch is merged and published, set the production Compose
   `AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
   `AQUARIUM_CONTROLLER_IMAGE_SHA256` to that newly selected public package and

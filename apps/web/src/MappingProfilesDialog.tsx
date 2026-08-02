@@ -1,9 +1,17 @@
 import type {
   Channel,
   ControlArea,
+  Device,
+  HardwareProfileId,
   MappingProfile,
   Output,
   PinMapping,
+} from "@aquarium/contracts";
+import {
+  HARDWARE_PROFILES,
+  hardwareProfileById,
+  isAllowedPwmPin,
+  NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
 } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +32,7 @@ export interface MappingProfilesDialogProps {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly profiles: readonly MappingProfile[];
+  readonly devices: readonly Device[];
   readonly channels: readonly Channel[];
   readonly outputs: readonly Output[];
   readonly controlAreas: readonly ControlArea[];
@@ -39,9 +48,14 @@ interface EditableMapping extends Omit<PinMapping, "target"> {
 
 interface MappingDraft {
   readonly name: string;
-  readonly deviceNamePrefix: string;
+  readonly hardwareProfileId: HardwareProfileId;
   readonly outputGain: number;
   readonly mappings: readonly EditableMapping[];
+}
+
+interface NewMappingProfile {
+  readonly id: string;
+  readonly draft: MappingDraft;
 }
 
 interface MappingEditorState {
@@ -62,6 +76,7 @@ export function MappingProfilesDialog({
   open,
   onClose,
   profiles,
+  devices,
   channels,
   outputs,
   controlAreas,
@@ -72,7 +87,7 @@ export function MappingProfilesDialog({
   const [selectedProfileId, setSelectedProfileId] = useState(
     profiles[0]?.id ?? "",
   );
-  const [newProfileId, setNewProfileId] = useState<string | null>(null);
+  const [newProfile, setNewProfile] = useState<NewMappingProfile | null>(null);
   const [deletedProfileIds, setDeletedProfileIds] = useState<
     ReadonlySet<string>
   >(() => new Set());
@@ -89,7 +104,7 @@ export function MappingProfilesDialog({
     ? selectedProfileId
     : (visibleProfiles[0]?.id ?? "");
   const selectedProfile =
-    newProfileId === null
+    newProfile === null
       ? (visibleProfiles.find(
           (profile) => profile.id === effectiveSelectedId,
         ) ?? null)
@@ -99,7 +114,7 @@ export function MappingProfilesDialog({
     if (!restoreFocusAfterEditorReplacement.current) return;
     restoreFocusAfterEditorReplacement.current = false;
     closeButtonRef.current?.focus();
-  }, [deletedProfileIds, newProfileId]);
+  }, [deletedProfileIds, newProfile]);
 
   if (!open) return null;
 
@@ -109,19 +124,58 @@ export function MappingProfilesDialog({
       new Set(profiles.map((profile) => profile.id)),
     );
     setEditorDirty(false);
-    setNewProfileId(id);
+    setNewProfile({
+      id,
+      draft: {
+        name: "",
+        hardwareProfileId: NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
+        outputGain: 1,
+        mappings: [],
+      },
+    });
+  }
+
+  function duplicateSelectedProfile(): void {
+    if (selectedProfile === null) return;
+    const id = createHiddenIdentifier(
+      "profile",
+      new Set(profiles.map((profile) => profile.id)),
+    );
+    const mappingIds = new Set(
+      profiles.flatMap((profile) =>
+        profile.mappings.map((mapping) => mapping.id),
+      ),
+    );
+    const mappings = selectedProfile.mappings.map((mapping) => {
+      const mappingId = createHiddenIdentifier("mapping", mappingIds);
+      mappingIds.add(mappingId);
+      return toEditableMapping({ ...mapping, id: mappingId });
+    });
+    setEditorDirty(false);
+    setNewProfile({
+      id,
+      draft: {
+        name: duplicateProfileName(
+          selectedProfile.name,
+          new Set(profiles.map((profile) => profile.name)),
+        ),
+        hardwareProfileId: selectedProfile.hardwareProfileId,
+        outputGain: selectedProfile.outputGain,
+        mappings,
+      },
+    });
   }
 
   function selectProfile(profileId: string): void {
     setEditorDirty(false);
-    setNewProfileId(null);
+    setNewProfile(null);
     setSelectedProfileId(profileId);
   }
 
   function finishNewProfile(profileId: string): void {
     restoreFocusAfterEditorReplacement.current = true;
     setSelectedProfileId(profileId);
-    setNewProfileId(null);
+    setNewProfile(null);
   }
 
   function finishDeletion(profileId: string): void {
@@ -131,7 +185,7 @@ export function MappingProfilesDialog({
     restoreFocusAfterEditorReplacement.current = true;
     setDeletedProfileIds((existing) => new Set([...existing, profileId]));
     setSelectedProfileId(nextProfile?.id ?? "");
-    setNewProfileId(null);
+    setNewProfile(null);
   }
 
   function requestClose(): void {
@@ -147,7 +201,7 @@ export function MappingProfilesDialog({
   }
 
   function cancelNewProfile(): void {
-    setNewProfileId(null);
+    setNewProfile(null);
     finishEditorAction();
   }
 
@@ -185,10 +239,10 @@ export function MappingProfilesDialog({
               aria-describedby={
                 editorDirty ? "mapping-profile-switch-help" : undefined
               }
-              value={newProfileId === null ? effectiveSelectedId : ""}
+              value={newProfile === null ? effectiveSelectedId : ""}
               disabled={
                 editorDirty ||
-                newProfileId !== null ||
+                newProfile !== null ||
                 visibleProfiles.length === 0
               }
               onChange={(event) => selectProfile(event.currentTarget.value)}
@@ -206,10 +260,20 @@ export function MappingProfilesDialog({
             aria-describedby={
               editorDirty ? "mapping-profile-switch-help" : undefined
             }
-            disabled={editorDirty || newProfileId !== null}
+            disabled={editorDirty || newProfile !== null}
             onClick={startNewProfile}
           >
             New profile
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={
+              editorDirty || newProfile !== null || selectedProfile === null
+            }
+            onClick={duplicateSelectedProfile}
+          >
+            Duplicate profile
           </button>
         </div>
         <p
@@ -221,7 +285,7 @@ export function MappingProfilesDialog({
           Save or discard changes before switching profiles.
         </p>
 
-        {selectedProfile === null && newProfileId === null ? (
+        {selectedProfile === null && newProfile === null ? (
           <div className="empty-panel mapping-profile-empty">
             <p>No mapping profiles exist yet.</p>
             <button
@@ -234,9 +298,11 @@ export function MappingProfilesDialog({
           </div>
         ) : (
           <MappingProfileEditor
-            key={selectedProfile?.id ?? `new-${newProfileId}`}
+            key={selectedProfile?.id ?? `new-${newProfile?.id}`}
             profile={selectedProfile}
-            profileId={selectedProfile?.id ?? newProfileId ?? ""}
+            profileId={selectedProfile?.id ?? newProfile?.id ?? ""}
+            initialDraft={newProfile?.draft ?? null}
+            devices={devices}
             channels={channels}
             outputs={outputs}
             controlAreas={controlAreas}
@@ -261,6 +327,8 @@ export function MappingProfilesDialog({
 interface MappingProfileEditorProps {
   readonly profile: MappingProfile | null;
   readonly profileId: string;
+  readonly initialDraft: MappingDraft | null;
+  readonly devices: readonly Device[];
   readonly channels: readonly Channel[];
   readonly outputs: readonly Output[];
   readonly controlAreas: readonly ControlArea[];
@@ -280,6 +348,8 @@ interface MappingProfileEditorProps {
 function MappingProfileEditor({
   profile,
   profileId,
+  initialDraft,
+  devices,
   channels,
   outputs,
   controlAreas,
@@ -295,15 +365,18 @@ function MappingProfileEditor({
   closeRequested,
   onKeepEditing,
 }: MappingProfileEditorProps): React.JSX.Element {
-  const original = useMemo<MappingDraft>(
-    () => ({
-      name: profile?.name ?? "",
-      deviceNamePrefix: profile?.deviceNamePrefix ?? "",
-      outputGain: profile?.outputGain ?? 1,
-      mappings: (profile?.mappings ?? []).map(toEditableMapping),
-    }),
-    [profile],
-  );
+  const original = useMemo<MappingDraft>(() => {
+    if (initialDraft !== null) return initialDraft;
+    if (profile === null) {
+      throw new Error("A new mapping profile requires an initial draft");
+    }
+    return {
+      name: profile.name,
+      hardwareProfileId: profile.hardwareProfileId,
+      outputGain: profile.outputGain,
+      mappings: profile.mappings.map(toEditableMapping),
+    };
+  }, [initialDraft, profile]);
   const originalSignature = mappingDraftSignature(original);
   const [editorState, setEditorState] = useState<MappingEditorState>(() => ({
     authoritativeSignature: originalSignature,
@@ -329,6 +402,16 @@ function MappingProfileEditor({
       ? expectedRevision
       : Math.max(deleteConflictRevision, expectedRevision);
   const validationErrors = validateDraft(draft);
+  const assignedDevices = devices.filter(
+    (device) => device.mappingProfileId === profileId,
+  );
+  const hardwareWarnings = hardwareProfileById(
+    draft.hardwareProfileId,
+  ).pinWarnings.filter((warning) =>
+    draft.mappings.some(
+      (mapping) => mapping.enabled && mapping.pin === warning.pin,
+    ),
+  );
   const targetOptions = useMemo(
     () => buildTargetOptions(channels, outputs, controlAreas, currentTypeKey),
     [channels, controlAreas, currentTypeKey, outputs],
@@ -341,14 +424,17 @@ function MappingProfileEditor({
           mapping.target.id === option.id,
       ),
   );
-  const availablePin = firstAvailablePin(draft.mappings);
+  const availablePin = firstAvailablePin(
+    draft.mappings,
+    draft.hardwareProfileId,
+  );
   const saveMutation = useMutation({
     retry: false,
     mutationFn: () =>
       replaceMappingProfile(profileId, {
         expectedRevision: saveExpectedRevision,
         name: draft.name,
-        deviceNamePrefix: draft.deviceNamePrefix,
+        hardwareProfileId: draft.hardwareProfileId,
         outputGain: draft.outputGain,
         mappings: draft.mappings.map(toPinMapping),
       }),
@@ -462,23 +548,23 @@ function MappingProfileEditor({
           />
         </label>
         <label>
-          Device-name prefix
-          <input
-            value={draft.deviceNamePrefix}
-            maxLength={256}
-            required
-            aria-describedby="mapping-prefix-help"
+          Hardware
+          <select
+            value={draft.hardwareProfileId}
             onChange={(event) =>
               applyDraft({
                 ...draft,
-                deviceNamePrefix: event.currentTarget.value,
+                hardwareProfileId: event.currentTarget
+                  .value as HardwareProfileId,
               })
             }
-          />
-          <small id="mapping-prefix-help">
-            Case-sensitive. Devices whose configured names start with this text
-            use the profile.
-          </small>
+          >
+            {HARDWARE_PROFILES.map((hardwareProfile) => (
+              <option key={hardwareProfile.id} value={hardwareProfile.id}>
+                {hardwareProfile.label}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Output multiplier
@@ -555,6 +641,19 @@ function MappingProfileEditor({
           ))}
         </ul>
       )}
+      {assignedDevices.length === 0 || hardwareWarnings.length === 0 ? null : (
+        <ul
+          className="validation-list hardware-warning-list"
+          aria-label="Profile hardware warnings"
+        >
+          {hardwareWarnings.map((warning) => (
+            <li key={warning.pin}>
+              {warning.message} Assigned ESP32 devices:{" "}
+              {assignedDevices.map((device) => device.desired.name).join(", ")}.
+            </li>
+          ))}
+        </ul>
+      )}
       {saveMutation.error === null ? null : (
         <p className="field-error" role="alert">
           {configurationErrorMessage(saveMutation.error)}
@@ -592,7 +691,7 @@ function MappingProfileEditor({
           </button>
         ) : (
           <button
-            className="text-button danger-text"
+            className="danger-button compact-button"
             type="button"
             disabled={deleteMutation.isPending}
             onClick={() => setConfirmingDelete(true)}
@@ -945,15 +1044,9 @@ function mappingDraftSignature(draft: MappingDraft): string {
 function validateDraft(draft: MappingDraft): readonly string[] {
   const errors: string[] = [];
   const name = draft.name;
-  const prefix = draft.deviceNamePrefix;
   if (name.length === 0 || name.length > 256 || name.trim() !== name) {
     errors.push(
       "Profile name is required and cannot have leading or trailing spaces.",
-    );
-  }
-  if (prefix.length === 0 || prefix.length > 256 || prefix.trim() !== prefix) {
-    errors.push(
-      "Device-name prefix is required and cannot have leading or trailing spaces.",
     );
   }
   if (
@@ -970,6 +1063,13 @@ function validateDraft(draft: MappingDraft): readonly string[] {
     if (!Number.isInteger(mapping.pin) || mapping.pin < 0 || mapping.pin > 63) {
       errors.push(
         `Mapping ${index + 1} needs a whole-number pin from 0 to 63.`,
+      );
+    } else if (
+      mapping.enabled &&
+      !isAllowedPwmPin(draft.hardwareProfileId, mapping.pin)
+    ) {
+      errors.push(
+        `GPIO${mapping.pin} is not an allowed PWM output on ${hardwareProfileById(draft.hardwareProfileId).label}.`,
       );
     } else if (pins.has(mapping.pin)) {
       errors.push(`Pin ${mapping.pin} is used more than once.`);
@@ -993,9 +1093,10 @@ function validateDraft(draft: MappingDraft): readonly string[] {
 
 function firstAvailablePin(
   mappings: readonly EditableMapping[],
+  hardwareProfileId: HardwareProfileId,
 ): number | null {
   const usedPins = new Set(mappings.map((mapping) => mapping.pin));
-  for (let pin = 0; pin <= 63; pin += 1) {
+  for (const pin of hardwareProfileById(hardwareProfileId).pwmPins) {
     if (!usedPins.has(pin)) return pin;
   }
   return null;
@@ -1010,4 +1111,15 @@ function createHiddenIdentifier(
     id = `${prefix}-${globalThis.crypto.randomUUID()}`;
   } while (existingIds.has(id));
   return id;
+}
+
+function duplicateProfileName(
+  sourceName: string,
+  existingNames: ReadonlySet<string>,
+): string {
+  for (let copyNumber = 1; ; copyNumber += 1) {
+    const suffix = copyNumber === 1 ? " copy" : ` copy ${copyNumber}`;
+    const name = `${sourceName.slice(0, 256 - suffix.length)}${suffix}`;
+    if (!existingNames.has(name)) return name;
+  }
 }

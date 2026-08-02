@@ -18,6 +18,8 @@ const environmentSchema = z
       .max(10_000)
       .default(1_000),
     AQUARIUM_WEB_ROOT: z.string().min(1).optional(),
+    AQUARIUM_FIRMWARE_BASE_URL: z.string().url().optional(),
+    AQUARIUM_FIRMWARE_DIRECTORY: z.string().min(1).optional(),
     AQUARIUM_DATA_DIRECTORY: z.string().min(1).optional(),
     AQUARIUM_STATE_DB_PATH: z.string().min(1).optional(),
     AQUARIUM_EVENTS_DB_PATH: z.string().min(1).optional(),
@@ -157,6 +159,25 @@ const environmentSchema = z
           });
         }
       }
+      if (environment.AQUARIUM_FIRMWARE_BASE_URL === undefined) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "Production requires an ESP-reachable AQUARIUM_FIRMWARE_BASE_URL",
+          path: ["AQUARIUM_FIRMWARE_BASE_URL"],
+        });
+      }
+    }
+
+    if (environment.AQUARIUM_FIRMWARE_BASE_URL !== undefined) {
+      const firmwareUrl = new URL(environment.AQUARIUM_FIRMWARE_BASE_URL);
+      if (firmwareUrl.protocol !== "http:") {
+        context.addIssue({
+          code: "custom",
+          message: "ESP32 firmware delivery currently requires local HTTP",
+          path: ["AQUARIUM_FIRMWARE_BASE_URL"],
+        });
+      }
     }
 
     if (environment.AQUARIUM_MQTT_ENABLED === "false") {
@@ -287,6 +308,10 @@ export interface ControllerConfiguration {
   readonly realtime: {
     readonly maxReplayEvents: number;
   };
+  readonly firmware: {
+    readonly baseUrl: string;
+    readonly directory: string;
+  };
   readonly mqtt: DisabledMqttConfiguration | EnabledMqttConfiguration;
   readonly deviceRegistry: {
     readonly announcementPersistIntervalMs: number;
@@ -335,6 +360,15 @@ export function parseControllerConfiguration(
   const dataDirectory = resolve(parsed.AQUARIUM_DATA_DIRECTORY ?? ".data");
   const realtime = {
     maxReplayEvents: parsed.AQUARIUM_SSE_REPLAY_LIMIT,
+  };
+  const firmwareBaseUrl =
+    parsed.AQUARIUM_FIRMWARE_BASE_URL ??
+    `http://127.0.0.1:${parsed.AQUARIUM_PORT}`;
+  const firmware = {
+    baseUrl: firmwareBaseUrl.replace(/\/+$/u, ""),
+    directory: resolve(
+      parsed.AQUARIUM_FIRMWARE_DIRECTORY ?? "firmware/esp32/artifacts",
+    ),
   };
   const storage = {
     stateDatabaseFile: resolve(
@@ -418,6 +452,7 @@ export function parseControllerConfiguration(
       runtimeMode: parsed.AQUARIUM_RUNTIME_MODE,
       server,
       realtime,
+      firmware,
       storage,
       deviceRegistry,
       alerting,
@@ -436,6 +471,7 @@ export function parseControllerConfiguration(
     runtimeMode: parsed.AQUARIUM_RUNTIME_MODE,
     server,
     realtime,
+    firmware,
     storage,
     deviceRegistry,
     alerting,

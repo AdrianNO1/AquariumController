@@ -21,6 +21,7 @@ import {
   renameControlAreaRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
+  requestFirmwareUpdateSchema,
   setDeviceEnabledRequestSchema,
   throttleParamsSchema,
   updateChannelRequestSchema,
@@ -38,12 +39,14 @@ import {
   type ControllerConfigurationService,
   type DeviceConfigurationCommandPort,
 } from "./application/configuration/index.js";
+import type { FirmwareUpdateCommandService } from "./application/firmware/index.js";
 
 export interface ConfigurationRouteDependencies {
   readonly configurationService?: ControllerConfigurationService;
   readonly deviceConfigurationCommands?: DeviceConfigurationCommandPort;
   readonly alertAcknowledgementCommands?: AlertAcknowledgementCommandPort;
   readonly deviceDiscoveryCommands?: DeviceDiscoveryCommandPort;
+  readonly firmwareUpdateCommands?: FirmwareUpdateCommandService;
 }
 
 export interface DeviceDiscoveryCommandPort {
@@ -110,6 +113,15 @@ function alertCommands(
     );
   }
   return dependencies.alertAcknowledgementCommands;
+}
+
+function firmwareCommands(
+  dependencies: ConfigurationRouteDependencies,
+): FirmwareUpdateCommandService {
+  if (dependencies.firmwareUpdateCommands === undefined) {
+    throw new ConfigurationServiceUnavailableError("firmware update service");
+  }
+  return dependencies.firmwareUpdateCommands;
 }
 
 function safeRoute(
@@ -379,6 +391,29 @@ export function registerConfigurationRoutes(
       const result = await deviceCommands(
         dependencies,
       ).patchDeviceConfiguration(deviceId, body);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.post(
+    "/api/devices/:deviceId/firmware-update",
+    safeRoute(app, async (request, reply) => {
+      const { deviceId } = parseRequest(deviceParamsSchema, request.params);
+      const body = parseRequest(requestFirmwareUpdateSchema, request.body);
+      const result = await firmwareCommands(dependencies).requestDeviceUpdate(
+        deviceId,
+        body,
+      );
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.post(
+    "/api/firmware/esp32/update-all",
+    safeRoute(app, async (request, reply) => {
+      const body = parseRequest(requestFirmwareUpdateSchema, request.body);
+      const result =
+        await firmwareCommands(dependencies).requestFleetUpdate(body);
       return reply.code(200).send(mutationResultSchema.parse(result));
     }),
   );

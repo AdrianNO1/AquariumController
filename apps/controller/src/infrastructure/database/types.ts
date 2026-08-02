@@ -39,6 +39,19 @@ export type AlertNotificationTransition =
   "opened" | "acknowledged" | "recovered" | "reopened";
 export type NotificationDeliveryStatus =
   "pending" | "attempting" | "delivered" | "failed" | "outcome_unknown";
+export type FirmwareUpdateMode = "immediate" | "when_off";
+export type FirmwareUpdateStatus =
+  | "pending"
+  | "waiting_for_device"
+  | "waiting_for_off"
+  | "accepted"
+  | "downloading"
+  | "verifying"
+  | "rebooting"
+  | "probation"
+  | "succeeded"
+  | "failed"
+  | "usb_required";
 
 export interface DevicesTable {
   id: string;
@@ -51,7 +64,11 @@ export interface DevicesTable {
   reported_pwm_frequency_hz: OptionalNullable<number>;
   reported_pwm_resolution_bits: OptionalNullable<number>;
   firmware_version: OptionalNullable<string>;
+  reported_hardware_profile_id: OptionalNullable<string>;
+  reported_hardware_model: OptionalNullable<string>;
   reported_schedule_hash: OptionalNullable<string>;
+  output_state_json: OptionalNullable<JsonText>;
+  ota_status_json: OptionalNullable<JsonText>;
   status: InsertOptional<DeviceStatus>;
   last_seen_at_ms: OptionalNullable<number>;
   last_error_code: OptionalNullable<string>;
@@ -63,10 +80,33 @@ export interface DevicesTable {
   metadata_schema_version: OptionalNullable<number>;
 }
 
+export interface FirmwareUpdateRequestsTable {
+  device_id: string;
+  target_version: string;
+  mode: FirmwareUpdateMode;
+  status: FirmwareUpdateStatus;
+  progress: InsertOptional<number>;
+  operation_id: OptionalNullable<string>;
+  error_message: OptionalNullable<string>;
+  requested_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface FirmwareRolloutPolicyTable {
+  singleton_key: 1;
+  target_version: string;
+  mode: FirmwareUpdateMode;
+  enabled: SqliteBoolean;
+  requested_at_ms: number;
+  updated_at_ms: number;
+}
+
 export interface MappingProfilesTable {
   id: string;
   name: string;
+  /** Retained only so existing databases can migrate without rebuilding FK parents. */
   device_name_prefix: string;
+  hardware_profile_id: InsertOptional<string>;
   output_gain: InsertOptional<number>;
   created_at_ms: number;
   updated_at_ms: number;
@@ -396,6 +436,8 @@ export interface StateDatabaseSchema {
   control_areas: ControlAreasTable;
   mapping_profiles: MappingProfilesTable;
   devices: DevicesTable;
+  firmware_update_requests: FirmwareUpdateRequestsTable;
+  firmware_rollout_policy: FirmwareRolloutPolicyTable;
   outputs: OutputsTable;
   throttles: ThrottlesTable;
   channels: ChannelsTable;

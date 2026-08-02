@@ -10,7 +10,8 @@ export {
   type SqliteBackupManifest,
 } from "./sqlite-backup.js";
 export {
-  CONTROLLER_BACKUP_RETENTION_COUNT,
+  CONTROLLER_BACKUP_DAILY_RETENTION_DAYS,
+  CONTROLLER_BACKUP_WEEKLY_RETENTION_DAYS,
   ControllerBackupMaintenance,
   pruneVerifiedControllerBackups,
   type ControllerBackupMaintenanceOptions,

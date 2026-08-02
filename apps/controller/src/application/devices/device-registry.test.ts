@@ -3,6 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  NODEMCU_ESP32S_V1_1_HARDWARE_MODEL,
+  NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
+} from "@aquarium/contracts";
+import {
   CURRENT_ESP_FIRMWARE_VERSION,
   type EspAnnouncement,
 } from "@aquarium/esp-protocol";
@@ -39,7 +43,7 @@ describe("persistent device registry", () => {
     ).resolves.toEqual([]);
   });
 
-  it("assigns a unique case-sensitive name prefix and preserves explicit assignments", async () => {
+  it("never infers a profile from the device name and preserves explicit assignments", async () => {
     const database = await openTestDatabase();
     await database
       .insertInto("mapping_profiles")
@@ -77,7 +81,7 @@ describe("persistent device registry", () => {
       receivedAtMs: 10_000,
     });
     expect(await readDevice(database)).toMatchObject({
-      mapping_profile_id: "profile-main",
+      mapping_profile_id: null,
     });
 
     await database
@@ -94,7 +98,7 @@ describe("persistent device registry", () => {
     });
   });
 
-  it("assigns a later matching profile only while the device remains unassigned", async () => {
+  it("does not auto-assign a profile created after device discovery", async () => {
     const database = await openTestDatabase();
     const registry = createRegistry(database);
     await registry.handleAnnouncement({
@@ -122,48 +126,28 @@ describe("persistent device registry", () => {
         receivedAtMs: 10_500,
       }),
     ).resolves.toMatchObject({
-      changed: true,
-      reason: "reported_state_changed",
+      changed: false,
+      reason: "repeated_announcement",
     });
     expect(await readDevice(database)).toMatchObject({
-      mapping_profile_id: "profile-main",
+      mapping_profile_id: null,
     });
   });
 
-  it("fails loudly if persisted prefixes violate the unique-match invariant", async () => {
+  it("records the firmware hardware profile and model independently of its name", async () => {
     const database = await openTestDatabase();
-    await database
-      .insertInto("mapping_profiles")
-      .values([
-        {
-          id: "profile-short",
-          name: "Short profile",
-          device_name_prefix: "O",
-          output_gain: 1,
-          created_at_ms: 0,
-          updated_at_ms: 0,
-        },
-        {
-          id: "profile-long",
-          name: "Long profile",
-          device_name_prefix: "One",
-          output_gain: 1,
-          created_at_ms: 0,
-          updated_at_ms: 0,
-        },
-      ])
-      .execute();
     const registry = createRegistry(database);
 
-    await expect(
-      registry.handleAnnouncement({
-        announcement: announcement(),
-        receivedAtMs: 10_000,
-      }),
-    ).rejects.toThrow(/multiple mapping profile prefixes/u);
-    await expect(
-      database.selectFrom("devices").select("id").execute(),
-    ).resolves.toEqual([]);
+    await registry.handleAnnouncement({
+      announcement: announcement({ name: "Any-Name" }),
+      receivedAtMs: 10_000,
+    });
+
+    expect(await readDevice(database)).toMatchObject({
+      mapping_profile_id: null,
+      reported_hardware_profile_id: NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
+      reported_hardware_model: NODEMCU_ESP32S_V1_1_HARDWARE_MODEL,
+    });
   });
 
   it("upserts by hardware ID, preserves desired config, and coalesces identical announcements", async () => {
@@ -267,7 +251,23 @@ describe("persistent device registry", () => {
     expect(await revisionAndOutboxCounts(database)).toEqual([4, 4]);
   });
 
-  it("marks old firmware as an explicit error until version 4 announces", async () => {
+  it("accepts supported outdated firmware without turning the device into an error", async () => {
+    const database = await openTestDatabase();
+    const registry = createRegistry(database);
+
+    await registry.handleAnnouncement({
+      announcement: announcement({ version: "5.0.0" }),
+      receivedAtMs: 10_000,
+    });
+    expect(await readDevice(database)).toMatchObject({
+      status: "online",
+      firmware_version: "5.0.0",
+      last_error_code: null,
+      last_error_message: null,
+    });
+  });
+
+  it("marks firmware below 5.0.0 unsupported until supported firmware announces", async () => {
     const database = await openTestDatabase();
     const registry = createRegistry(database);
 
@@ -278,8 +278,9 @@ describe("persistent device registry", () => {
     expect(await readDevice(database)).toMatchObject({
       status: "error",
       firmware_version: "3.2w",
-      last_error_code: "firmware_outdated",
-      last_error_message: `Firmware 3.2w is outdated; install ${CURRENT_ESP_FIRMWARE_VERSION}`,
+      last_error_code: "firmware_unsupported",
+      last_error_message:
+        "Firmware 3.2w is unsupported; install 5.0.0 or newer",
     });
 
     await expect(
@@ -568,6 +569,8 @@ function announcement(
     res: 8,
     status: "online",
     version: CURRENT_ESP_FIRMWARE_VERSION,
+    hardwareProfile: NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID,
+    hardwareModel: NODEMCU_ESP32S_V1_1_HARDWARE_MODEL,
     scheduleHash: "0",
     ...overrides,
   };

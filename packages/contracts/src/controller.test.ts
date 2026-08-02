@@ -32,6 +32,12 @@ import {
 
 const now = "2026-07-13T08:00:00.000Z";
 const later = "2026-07-13T08:02:00.000Z";
+const firmware = {
+  currentVersion: "5.0.4",
+  sha256: "4f1f1684d6f2fe93c7668cce2b11a56c7cb86881db08b447244f6026be30eeb7",
+  sizeBytes: 1_172_144,
+  fleetPolicy: null,
+} as const;
 
 const controlAreas = [
   { slug: "lights", typeKey: "light", label: "Lights" },
@@ -138,6 +144,7 @@ describe("controller contracts", () => {
       outputs: [],
       mappingProfiles: [],
       devices: [],
+      firmware,
       operations: { items: [], limit: 100, truncated: false },
       unresolvedDeviceOperations: {
         items: [],
@@ -224,7 +231,7 @@ describe("controller contracts", () => {
     const profile = {
       id: "profile_main",
       name: "Main",
-      deviceNamePrefix: "Main",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       outputGain: 0.7,
       createdAt: now,
       updatedAt: now,
@@ -260,6 +267,18 @@ describe("controller contracts", () => {
             pin: 13,
           },
         ],
+      }).success,
+    ).toBe(false);
+    expect(
+      mappingProfileSchema.safeParse({
+        ...profile,
+        mappings: [{ ...profile.mappings[0], pin: 6, enabled: false }],
+      }).success,
+    ).toBe(true);
+    expect(
+      mappingProfileSchema.safeParse({
+        ...profile,
+        mappings: [{ ...profile.mappings[0], pin: 6, enabled: true }],
       }).success,
     ).toBe(false);
   });
@@ -329,7 +348,13 @@ describe("controller contracts", () => {
         pwmResolutionBits: 8,
         firmwareVersion: "4.0.0",
         scheduleHash: "4294967295",
+        outputsOff: false,
+        outputs: [{ pin: 16, valuePercentage: 40 }],
+        ota: null,
+        hardwareProfileId: "nodemcu-esp32s-v1.1",
+        hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
       },
+      firmwareUpdate: null,
       status: "online",
       lastSeenAt: now,
       lastError: null,
@@ -624,7 +649,13 @@ describe("controller contracts", () => {
         pwmResolutionBits: null,
         firmwareVersion: null,
         scheduleHash: null,
+        outputsOff: null,
+        outputs: [],
+        ota: null,
+        hardwareProfileId: null,
+        hardwareModel: null,
       },
+      firmwareUpdate: null,
       status: "unknown",
       lastSeenAt: null,
       lastError: null,
@@ -655,6 +686,7 @@ describe("controller contracts", () => {
       outputs: [],
       mappingProfiles: [],
       devices: [device],
+      firmware,
       operations: { items: [], limit: 100, truncated: false },
       unresolvedDeviceOperations: {
         items: [],
@@ -794,7 +826,13 @@ describe("controller contracts", () => {
         pwmResolutionBits: 10,
         firmwareVersion: "4.0.0",
         scheduleHash: "0",
+        outputsOff: true,
+        outputs: [],
+        ota: null,
+        hardwareProfileId: "nodemcu-esp32s-v1.1",
+        hardwareModel: "Ai-Thinker NodeMCU-32S V1.1",
       },
+      firmwareUpdate: null,
       status: "online",
       lastSeenAt: now,
       lastError: null,
@@ -844,19 +882,19 @@ describe("controller contracts", () => {
     const mappingRequest = {
       expectedRevision: 0,
       name: "Primary",
-      deviceNamePrefix: "Tank",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       outputGain: 1,
       mappings: [
         {
           id: "mapping_1",
-          pin: 1,
+          pin: 4,
           displayOrder: 0,
           enabled: true,
           target: { kind: "channel", id: "channel_1" },
         },
         {
           id: "mapping_2",
-          pin: 1,
+          pin: 4,
           displayOrder: 1,
           enabled: true,
           target: { kind: "channel", id: "channel_1" },

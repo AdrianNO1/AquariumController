@@ -1,9 +1,9 @@
 # Target architecture
 
-Status: implemented architecture, updated 2026-07-26. The protected evidence
+Status: implemented architecture, updated 2026-08-02. The protected evidence
 for source `886ed05be89a1abed8e076d91ce2802f5d5668dd` and its published digest is a
 historical pre-4.1 baseline recorded in the
-[readiness report](readiness-report.md). The current firmware 4.1 and
+[readiness report](readiness-report.md). The current firmware 5.0.5 and
 per-device-lane branch requires its own protected CI run, merge, and immutable
 image selection. Physical ESP flashing, Raspberry Pi deployment,
 production-data migration, and production configuration remain operator-run
@@ -21,7 +21,7 @@ The dashboard is local-network software with no SEO or server-rendering need,
 while the MQTT queue, five-second refresh, daily jobs, state revision, and
 shutdown sequence need one predictable owner. The controller must not be
 horizontally scaled: per-device command queues, schedules, and state revisions
-need one predictable owner. Firmware 4.1 request identifiers allow bounded
+need one predictable owner. Firmware 5.0.5 request identifiers allow bounded
 concurrency inside that owner without making multiple controller processes
 safe.
 
@@ -183,17 +183,20 @@ the application:
   `test/aquarium/*`.
 - Semicolon-separated batches use response indexes scoped to the batch and at
   most three commands per physical device.
-- Payloads over 256 UTF-8 bytes use
-  `chunk:index:total:isLast:data`, with at most 200 data bytes and 50 chunks.
+- Each command batch is one MQTT publication of at most 5,120 UTF-8 bytes. The
+  firmware's 6,144-byte PubSubClient buffer leaves room for MQTT framing and
+  topic overhead without an application-level chunk protocol.
 - The active firmware's 4096-byte C-string schedule buffer makes 4095 UTF-8
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `4.1.0` is the exact supported release. Every other announced
-  version remains visible but is marked `firmware_outdated`, excluded from
-  actuator work, and shown with an install-4.1.0 message in the frontend.
+- Firmware `5.0.5` is the current release, while firmware `5.0.0` and newer is
+  controller-compatible. A supported older release remains online with an
+  update available. Firmware below `5.0.0` remains visible but is marked
+  `firmware_unsupported`, excluded from actuator work, and shown with a
+  USB-bootstrap message in the frontend.
 
-Firmware 4.1 accepts
+Firmware 5.0 accepts
 `request:<requestId>|<semicolon-separated commands>` and echoes the request ID
 in its structured response. The transport therefore maintains one FIFO lane
 per ESP, permits one response-waiting operation per ESP, and runs at most sixteen
@@ -203,11 +206,19 @@ work. Responses are routed by request ID and then checked against the expected
 device and local command index, so delayed or out-of-order responses cannot
 settle a newer operation.
 
-Chunk frames still have no separate message identifier, and every subscribed
-ESP has one chunk-reassembly buffer. A short global publication mutex keeps all
-frames of one request contiguous; it is released after the final frame is
-published, not after the ESP response. Response waits for other devices can
-therefore overlap safely. The five-second output scheduler also keeps at most
+Firmware updates use the same discovery registry and correlated MQTT command
+lane. The controller sends an approved local HTTP URL, exact byte count, and
+SHA-256; the ESP streams the image into its inactive OTA partition and reports
+output/OTA state in announcements. `when_off` requests wait for every reported
+pin to reach 0%. Update-all persists its mode so an outdated ESP announcing
+later is enrolled. A new image is confirmed only after MQTT presence succeeds;
+five minutes without confirmation or three probation boots select the previous
+partition. ESP-reported OTA failures remain terminal until an operator retries.
+
+The transport uses a short publication mutex only around each complete MQTT
+publication; it is released before waiting for the ESP response. Response
+waits for other devices can therefore overlap safely. The five-second output
+scheduler also keeps at most
 one pending refresh batch per device: a newer tick replaces queued routine PWM
 work that has not started, while commands already attempted are never silently
 rewritten.
@@ -222,7 +233,7 @@ malformed, empty, or otherwise invalid response is attributable to that device
 and quarantines it as a protocol fault.
 
 The five-second host refresh and 120-second firmware overwrite are safety
-behavior. Firmware 4.1.0 uses rollover-safe elapsed-time expiry and invalidates
+behavior. Firmware 5.0.5 uses rollover-safe elapsed-time expiry and invalidates
 its scheduled-output cache after override expiry, PWM reattachment, and
 schedule replacement. The command wire continues to carry normalized 0-255 duty
 values. Firmware scales each value into the configured 1-16-bit LEDC range, and
@@ -241,23 +252,44 @@ commit per hour, and failed commits retry no more than hourly.
 Routine host refresh and manual PWM writes set `overwrite=true`. Each successful
 write renews a 120-second controller lease during which the ESP does not apply
 its own schedule to that pin; after Pi silence, local scheduling resumes using
-the ESP's current or persisted time estimate. Schedule activation is
+the ESP's current or persisted time estimate. The schedule artifact already
+contains the area multiplier and the selected mapping profile's output
+multiplier, so failover does not change intensity. Schedule activation is
 best-effort per pin. Attach/write/detach failures leave the affected pin safe,
 do not stop healthy pins, and queue a wear-limited diagnostic announcement.
 Diagnostic transitions are persisted in SPIFFS immediately for the first
 transition and then at most hourly, with failed MQTT announcements retried no
 more than once per minute.
 
-Independent fake tests pin these actuator semantics, and the real 4.1 sketch
-passes the pinned Arduino CLI 1.5.0, ESP32 core 3.3.8, ArduinoJson 7.4.3, and
-PubSubClient 2.8 compiler build. Flashing every deployed ESP remains an external
-release action. The exact 1,036,431-byte flash, 63,180-byte global-RAM, and
-264,500-byte remaining-capacity figures recorded for the focused 2026-07-19
-firmware 4.0 build are historical and are not claimed for 4.1.
+Firmware identifies the deployed hardware as `nodemcu-esp32s-v1.1` / Ai-Thinker
+NodeMCU-32S V1.1. Mapping profiles declare a hardware profile and devices select
+one explicitly; names have no mapping semantics. Both controller and firmware
+allow PWM only on GPIO 4, 12-14, 16-19, 21-23, 25-27, 32, and 33. GPIO12 is
+retained for the proven production wiring, with an operator warning because it
+controls flash voltage while the ESP32 resets. Analog reads are limited to
+ADC1 pins 32-36 and 39 so Wi-Fi does not contend with ADC2.
+
+During upgrade, persisted mappings outside that PWM allowlist are preserved
+but disabled before snapshots are exposed. They cannot reach schedule or
+manual-output command generation, and the profile editor requires the operator
+to remove or remap them before the profile can be saved again.
+
+SPIFFS first mounts without formatting. A failed mount permits at most two
+persisted repair attempts: firmware explicitly formats and remounts, reports
+that the saved schedule was lost, and lets the controller restore it. If the
+repair-attempt counter cannot be persisted, firmware refuses to format. The
+legacy unauthenticated bare MQTT `clear` command no longer erases fleet EEPROM.
+
+Independent fake tests pin these actuator semantics. Firmware 5.0.5 passes the
+pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and PubSubClient
+2.8 build at 1,167,865 bytes of flash and 53,112 bytes of global RAM. Its
+single-message transport was physically verified at the 5,120-byte limit over
+the configured Mosquitto broker. Flashing every deployed ESP remains an
+external release action.
 
 ## Unknown actuator outcomes and reconciliation
 
-Firmware 4.1 response IDs prevent stale-response misattribution, but a failure
+Firmware 5.0.5 response IDs prevent stale-response misattribution, but a failure
 after QoS 0 publication still cannot prove whether the addressed ESP applied
 the command. The controller therefore never retries that ambiguous operation
 as though it were safely unsent. It persists the operation as terminal
@@ -361,8 +393,9 @@ hard pruning watermark.
 
 The storage model is relational first, not a JSON-document database.
 
-`state.db` contains normalized tables for control areas, mapping profiles,
-devices, outputs, throttles, channels, pin mappings, schedules, schedule points, control
+`state.db` contains normalized tables for control areas, hardware-specific
+mapping profiles, devices and their reported hardware identity, outputs,
+throttles, channels, pin mappings, schedules, schedule points, control
 operations, overrides, timers, sensors, switches, calibrations, alert rules and
 lifecycle state, revisions/outbox, import audit, compiled device artifacts,
 scheduler guards, alert delay state, and notification delivery intent.
@@ -535,8 +568,9 @@ manifest, checksum, SQLite integrity/foreign-key, and replay-boundary
 verification. Startup runs one promptly when that verified artifact is missing,
 invalid, or older than the configured threshold. Storage health reads the same
 verified timestamp, preventing a deleted or corrupt artifact from appearing
-fresh. The newest three canonically named, fully verified backups are retained;
-unknown, malformed, damaged, or symlinked entries are never deleted
+fresh. Retention keeps the newest canonically named, fully verified backup from
+each UTC day for 14 days, then the newest verified backup from each UTC week for
+183 days. Unknown, malformed, damaged, or symlinked entries are never deleted
 automatically.
 
 Verification is serialized and deduplicated. A cached valid or invalid result is
@@ -583,8 +617,9 @@ copy, run `verify-archive-set` with the matching `events.db`, archive directory,
 and a new explicit manifest output, then compare/preserve the deterministic
 manifest. Archives are not automatically deleted because they may be the only
 remaining payload copy. Their bytes are included in storage projection and
-free-space alerts, but backup-directory copies are not; the three-backup cap and
-an operator-selected archive offload/lifecycle remain production requirements.
+free-space alerts, but backup-directory copies are not. Daily/weekly database
+backup retention and an operator-selected archive offload/lifecycle remain
+production requirements.
 
 ## Test and CI architecture
 
@@ -597,7 +632,7 @@ Executable CI separates failure domains into six validation jobs:
 - `browser`: pinned Chromium, production builds, Playwright/axe, and
   failure-only trace/screenshot/video artifacts;
 - `firmware`: cached pinned Arduino/ESP32 toolchain compilation of firmware
-  4.1.0;
+  5.0.5;
 - `container`: amd64 Compose health/restart/hardening plus an emulated ARM64
   HTTP/SQLite integrity smoke.
 

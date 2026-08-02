@@ -66,7 +66,7 @@ Abort the entire atomic import for:
 
 - invalid UTF-8/JSON, exact duplicate keys, wrong core shapes, or ambiguous core
   fields;
-- duplicate identities, unsafe mapping prefixes, invalid pins, or mappings to
+- duplicate identities, empty mapping keys, invalid pins, or mappings to
   missing channels;
 - unknown schedule types, malformed/nonfinite/out-of-range points, reversed or
   zero-duration segments, gaps, overlaps, discontinuities, or unsafe tails;

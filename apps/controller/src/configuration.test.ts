@@ -113,6 +113,7 @@ describe("controller configuration safety", () => {
     expect(() =>
       parseControllerConfiguration({
         AQUARIUM_RUNTIME_MODE: "production",
+        AQUARIUM_FIRMWARE_BASE_URL: "http://controller:3000",
         AQUARIUM_ALERT_WEBHOOK_URL: "http://webhook.example/alerts",
         AQUARIUM_STATE_DB_PATH: "runtime/state.db",
         AQUARIUM_EVENTS_DB_PATH: "runtime/events.db",
@@ -124,6 +125,7 @@ describe("controller configuration safety", () => {
     expect(
       parseControllerConfiguration({
         AQUARIUM_RUNTIME_MODE: "production",
+        AQUARIUM_FIRMWARE_BASE_URL: "http://controller:3000",
         AQUARIUM_ALERT_WEBHOOK_URL: "https://webhook.example/alerts",
         AQUARIUM_STATE_DB_PATH: "runtime/state.db",
         AQUARIUM_EVENTS_DB_PATH: "runtime/events.db",
@@ -230,6 +232,7 @@ describe("controller configuration safety", () => {
   it("accepts production MQTT only when every production interlock is explicit", () => {
     const configuration = parseControllerConfiguration({
       AQUARIUM_RUNTIME_MODE: "production",
+      AQUARIUM_FIRMWARE_BASE_URL: "http://controller:3000",
       AQUARIUM_MQTT_ENABLED: "true",
       AQUARIUM_MQTT_BROKER_URL: "mqtt://broker:1883",
       AQUARIUM_MQTT_TOPIC_NAMESPACE: "production",

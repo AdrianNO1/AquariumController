@@ -89,7 +89,7 @@ describe("control configuration API", () => {
     await replaceMappingProfile("profile-main", {
       expectedRevision: 8,
       name: "Main",
-      deviceNamePrefix: "main",
+      hardwareProfileId: "nodemcu-esp32s-v1.1",
       outputGain: 0.7,
       mappings: [],
     });
