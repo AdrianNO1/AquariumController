@@ -692,8 +692,44 @@ describe("MappingProfilesDialog", () => {
         screen.getByRole("textbox", {
           name: "Profile name",
         }) as HTMLInputElement
-      ).value,
+    ).value,
     ).toBe("Secondary rack");
+  });
+
+  it("can close after an accepted save before refreshed props arrive", async () => {
+    server.use(
+      http.put("http://localhost/api/mapping-profiles/:profileId", () =>
+        HttpResponse.json({
+          changed: false,
+          revision: 9,
+          event: null,
+        }),
+      ),
+    );
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderDialog({ onClose, refresh: vi.fn() });
+
+    const name = screen.getByRole("textbox", { name: "Profile name" });
+    await user.clear(name);
+    await user.type(name, "Saved rack");
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Save profile" }).textContent,
+      ).toBe("Save profile"),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "Close mapping profiles" }),
+    );
+
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(
+      screen.queryByRole("alertdialog", {
+        name: "Save changes before closing?",
+      }),
+    ).toBeNull();
   });
 });
 

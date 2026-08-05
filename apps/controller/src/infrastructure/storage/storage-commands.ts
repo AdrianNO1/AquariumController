@@ -336,6 +336,7 @@ export async function executeStorageCommand(
       const database = await openEventsDatabase({
         filename: command.eventsDatabaseFile,
         migrate: false,
+        readOnly: true,
       });
       try {
         const verified = await verifyCompleteEventArchive(
@@ -359,6 +360,7 @@ export async function executeStorageCommand(
       const database = await openEventsDatabase({
         filename: command.eventsDatabaseFile,
         migrate: false,
+        readOnly: true,
       });
       let manifest: EventArchiveSetManifest;
       try {

@@ -349,6 +349,32 @@ describe("storage command execution", () => {
       operation_id: null,
     });
     await loggedEvents.destroy();
+
+    const backedUpEventsFile = join(backup.details.directory, "events.db");
+    const backedUpEventsBeforeVerification = await readFile(
+      backedUpEventsFile,
+    );
+    await expect(
+      executeStorageCommand({
+        kind: "verify-archive-set",
+        eventsDatabaseFile: backedUpEventsFile,
+        archiveDirectory,
+        outputFile: join(directory, "backup-archive-set.json"),
+      }),
+    ).resolves.toMatchObject({ command: "verify-archive-set" });
+    expect(await readFile(backedUpEventsFile)).toEqual(
+      backedUpEventsBeforeVerification,
+    );
+    expect(await readdir(backup.details.directory)).not.toContain(
+      "events.db-wal",
+    );
+    expect(await readdir(backup.details.directory)).not.toContain(
+      "events.db-shm",
+    );
+    expect(await readdir(backup.details.directory)).not.toContain(
+      "events.db-journal",
+    );
+
     await expect(
       executeStorageCommand({
         kind: "verify-backup",

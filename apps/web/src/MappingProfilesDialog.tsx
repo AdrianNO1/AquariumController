@@ -64,6 +64,11 @@ interface MappingEditorState {
   readonly touched: boolean;
 }
 
+interface PendingSavedDraft {
+  readonly revision: number;
+  readonly signature: string;
+}
+
 interface TargetOption {
   readonly kind: TargetKind;
   readonly id: string;
@@ -390,9 +395,17 @@ function MappingProfileEditor({
   const [deleteConflictRevision, setDeleteConflictRevision] = useState<
     number | null
   >(null);
+  const [pendingSavedDraft, setPendingSavedDraft] =
+    useState<PendingSavedDraft | null>(null);
   const draftRevision = useDraftRevision(expectedRevision);
   const draft = editorState.draft;
-  const dirty = mappingDraftSignature(draft) !== originalSignature;
+  const draftSignature = mappingDraftSignature(draft);
+  const savedBaseline =
+    pendingSavedDraft !== null &&
+    expectedRevision < pendingSavedDraft.revision
+      ? pendingSavedDraft.signature
+      : originalSignature;
+  const dirty = draftSignature !== savedBaseline;
   const saveExpectedRevision =
     saveConflictRevision === null
       ? draftRevision.revision
@@ -430,15 +443,19 @@ function MappingProfileEditor({
   );
   const saveMutation = useMutation({
     retry: false,
-    mutationFn: () =>
+    mutationFn: (draftToSave: MappingDraft) =>
       replaceMappingProfile(profileId, {
         expectedRevision: saveExpectedRevision,
-        name: draft.name,
-        hardwareProfileId: draft.hardwareProfileId,
-        outputGain: draft.outputGain,
-        mappings: draft.mappings.map(toPinMapping),
+        name: draftToSave.name,
+        hardwareProfileId: draftToSave.hardwareProfileId,
+        outputGain: draftToSave.outputGain,
+        mappings: draftToSave.mappings.map(toPinMapping),
       }),
-    onSuccess: () => {
+    onSuccess: (result, savedDraft) => {
+      setPendingSavedDraft({
+        revision: result.revision,
+        signature: mappingDraftSignature(savedDraft),
+      });
       setSaveConflictRevision(null);
       draftRevision.reset();
       refresh();
@@ -668,7 +685,7 @@ function MappingProfileEditor({
             (!dirty && profile !== null) ||
             saveMutation.isPending
           }
-          onClick={() => saveMutation.mutate()}
+          onClick={() => saveMutation.mutate(draft)}
         >
           {saveMutation.isPending ? "Saving profile…" : "Save profile"}
         </button>
@@ -758,7 +775,7 @@ function MappingProfileEditor({
         open={closeRequested && dirty}
         saving={saveMutation.isPending}
         saveDisabled={validationErrors.length > 0}
-        onSave={() => saveMutation.mutate()}
+        onSave={() => saveMutation.mutate(draft)}
         onDiscard={resetDraft}
         onKeepEditing={onKeepEditing}
       />
