@@ -78,3 +78,16 @@ services:
     pids_limit: 256
     mem_limit: 768m
     cpus: 1.5
+    networks:
+      - controller-host
+
+networks:
+  controller-host:
+    name: aquarium-controller-host
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-aquarium
+    ipam:
+      config:
+        - subnet: 172.30.188.0/29
+          gateway: 172.30.188.1

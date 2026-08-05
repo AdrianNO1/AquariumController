@@ -70,7 +70,10 @@ jobs:
             .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_KEY == "ci-primary" and
             .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS == "10000" and
             .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME == "Authorization" and
-            .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE == "ci-placeholder-secret"
+            .services.controller.environment.AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE == "ci-placeholder-secret" and
+            .networks["controller-host"].name == "aquarium-controller-host" and
+            .networks["controller-host"].driver_opts["com.docker.network.bridge.name"] == "br-aquarium" and
+            .networks["controller-host"].ipam.config == [{"subnet":"172.30.188.0/29","gateway":"172.30.188.1"}]
           ' <<<"${rendered}" >/dev/null
 
           unset AQUARIUM_ALERT_WEBHOOK_URL AQUARIUM_ALERT_WEBHOOK_KEY

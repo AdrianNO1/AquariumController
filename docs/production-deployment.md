@@ -130,6 +130,38 @@ Keep the resulting Docker client credential outside the checkout and protected
 for that Pi account. The preflight deliberately fails when the exact digest
 cannot be pulled; do not replace it with an unauthenticated mutable image tag.
 
+### Broker running natively on the same Pi
+
+The production Compose file gives the controller a deterministic private bridge:
+
+- interface: `br-aquarium`;
+- subnet: `172.30.188.0/29`; and
+- host gateway: `172.30.188.1`.
+
+This avoids granting a changing Docker subnet access to a native Mosquitto
+listener. Configure Mosquitto to listen on the Pi's IPv4 interfaces, keep port
+1883 denied by default, and add separate narrow firewall rules for the aquarium
+LAN and controller bridge. For example, with UFW and a `192.168.1.0/24` aquarium
+LAN:
+
+```sh
+listener 1883 0.0.0.0
+```
+
+The line above belongs in the reviewed Mosquitto configuration, not the shell.
+After Compose has created `br-aquarium`, configure the firewall:
+
+```sh
+sudo ufw allow from 192.168.1.0/24 to any port 1883 proto tcp
+sudo ufw allow in on br-aquarium from 172.30.188.0/29 \
+  to 172.30.188.1 port 1883 proto tcp
+```
+
+Use `mqtt://172.30.188.1:1883` for
+`AQUARIUM_MQTT_BROKER_URL`. ESP firmware continues to use the Pi's LAN address;
+the private gateway is only for the controller container. Do not broadly allow
+port 1883 from other interfaces or subnets.
+
 Notifications are optional. If enabled, export the URL and any optional key or
 timeout. The authentication header name and value must either both be supplied
 or both be absent. Read the value without echoing it:
