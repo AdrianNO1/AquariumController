@@ -11,6 +11,7 @@ export interface DatabaseConnectionOptions {
   readonly filename: string;
   readonly busyTimeoutMs?: number;
   readonly migrate?: boolean;
+  readonly readOnly?: boolean;
 }
 
 export interface ControllerDatabases {
@@ -26,6 +27,9 @@ export interface ControllerDatabaseOptions {
 function assertConnectionOptions(options: DatabaseConnectionOptions): number {
   if (options.filename.trim().length === 0) {
     throw new TypeError("SQLite filename must not be empty");
+  }
+  if (options.readOnly === true && options.migrate !== false) {
+    throw new TypeError("Read-only SQLite connections must disable migrations");
   }
 
   const busyTimeoutMs = options.busyTimeoutMs ?? DEFAULT_SQLITE_BUSY_TIMEOUT_MS;
@@ -46,19 +50,24 @@ function openDatabase<DatabaseSchema>(
   synchronous: "FULL" | "NORMAL",
 ): Kysely<DatabaseSchema> {
   const busyTimeoutMs = assertConnectionOptions(options);
+  const readOnly = options.readOnly ?? false;
   const sqlite = new BetterSqlite3(options.filename, {
     timeout: busyTimeoutMs,
+    readonly: readOnly,
+    fileMustExist: readOnly,
   });
 
   try {
     sqlite.pragma("foreign_keys = ON");
     sqlite.pragma(`busy_timeout = ${busyTimeoutMs}`);
-    sqlite.pragma("journal_mode = WAL");
-    sqlite.pragma(`synchronous = ${synchronous}`);
-    sqlite.pragma("wal_autocheckpoint = 1000");
-    sqlite.pragma(
-      `journal_size_limit = ${DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES}`,
-    );
+    if (!readOnly) {
+      sqlite.pragma("journal_mode = WAL");
+      sqlite.pragma(`synchronous = ${synchronous}`);
+      sqlite.pragma("wal_autocheckpoint = 1000");
+      sqlite.pragma(
+        `journal_size_limit = ${DEFAULT_SQLITE_JOURNAL_SIZE_LIMIT_BYTES}`,
+      );
+    }
   } catch (error) {
     sqlite.close();
     throw error;
