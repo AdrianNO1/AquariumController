@@ -22,7 +22,10 @@ import {
 } from "@aquarium/esp-protocol";
 import { InteractionRepository } from "../../infrastructure/storage/interaction-repository.js";
 import { DeviceOperationService } from "./device-operation-service.js";
-import type { DeviceOperationExecutionOptions } from "./device-operation-types.js";
+import type {
+  DeviceOperationExecutionOptions,
+  DeviceOperationRequest,
+} from "./device-operation-types.js";
 
 const openDatabases: ControllerDatabases[] = [];
 
@@ -121,6 +124,46 @@ describe("persistent device operation service", () => {
     );
 
     expect(context.executor.options).toEqual([{ priority: "background" }]);
+  });
+
+  it("never publishes commands to unsupported firmware", async () => {
+    const context = await setup();
+    await context.databases.state
+      .updateTable("devices")
+      .set({ firmware_version: "3.9.2" })
+      .where("id", "=", "A1")
+      .executeTakeFirstOrThrow();
+    const requests: readonly DeviceOperationRequest[] = [
+      { kind: "set_pwm", pin: 4, value: 128, overwrite: true },
+      { kind: "schedule", scheduleJson: '{"c":[],"syncTime":1}' },
+      { kind: "sync_time", epochSeconds: 1_752_192_000 },
+      { kind: "ping" },
+      {
+        kind: "edit_configuration",
+        name: "One",
+        pwmFrequencyHz: 5_000,
+        pwmResolutionBits: 8,
+      },
+      { kind: "analog_read", pin: 34 },
+      {
+        kind: "firmware_update",
+        version: CURRENT_ESP_FIRMWARE_VERSION,
+        url: "http://controller.local/firmware.bin",
+        size: 1_000_000,
+        sha256: "0".repeat(64),
+      },
+    ];
+
+    for (const request of requests) {
+      await expect(
+        context.service.executeDeviceOperation("A1", request),
+      ).resolves.toMatchObject({
+        status: "cancelled",
+        result: { reason: "cancelled_by_owner" },
+      });
+    }
+
+    expect(context.executor.calls).toHaveLength(0);
   });
 
   it("cools only the timed-out device until availability is signalled", async () => {

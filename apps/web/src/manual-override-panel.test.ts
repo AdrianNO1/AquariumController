@@ -126,8 +126,16 @@ describe("ManualOverridePanel", () => {
       }),
     );
     const refresh = vi.fn();
+    const onAcceptedRevision = vi.fn();
+    const onBusyChange = vi.fn();
     const user = userEvent.setup();
-    const panel = renderPanel({ overrides: [], operations: [], refresh });
+    const panel = renderPanel({
+      overrides: [],
+      operations: [],
+      refresh,
+      onAcceptedRevision,
+      onBusyChange,
+    });
 
     const mainSlider = screen.getByRole("slider", {
       name: "Main light temporary override",
@@ -165,11 +173,14 @@ describe("ManualOverridePanel", () => {
     expect(
       await screen.findByText("Waiting for ESP confirmation…"),
     ).toBeTruthy();
+    expect(onAcceptedRevision).toHaveBeenCalledWith(10);
+    expect(onBusyChange).toHaveBeenCalledWith(true);
     panel.rerenderOperations([
       operation("operation-1"),
       operation("operation-2"),
     ]);
     expect(await screen.findByText("Success")).toBeTruthy();
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false));
     expect(refresh).toHaveBeenCalledOnce();
   });
 
@@ -452,11 +463,15 @@ function renderPanel({
   operations,
   refresh,
   commandableChannelIds = new Set(channels.map(({ channel }) => channel.id)),
+  onAcceptedRevision,
+  onBusyChange,
 }: {
   readonly overrides: readonly Override[];
   readonly operations: readonly OperationSummary[];
   readonly refresh: () => void;
   readonly commandableChannelIds?: ReadonlySet<string>;
+  readonly onAcceptedRevision?: (revision: number) => void;
+  readonly onBusyChange?: (busy: boolean) => void;
 }): {
   readonly rerenderOperations: (next: readonly OperationSummary[]) => void;
 } {
@@ -478,6 +493,8 @@ function renderPanel({
         operations: renderedOperations,
         expectedRevision: 8,
         refresh,
+        ...(onAcceptedRevision === undefined ? {} : { onAcceptedRevision }),
+        ...(onBusyChange === undefined ? {} : { onBusyChange }),
         nowMs: () => now,
       }),
     );

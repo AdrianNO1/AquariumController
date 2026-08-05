@@ -598,6 +598,10 @@ the latest live revision with old form data.
 Suggested endpoints (names may be adjusted once, then frozen):
 
 - `GET /api/snapshot`
+- `PUT /api/control-areas` (atomic area-manager save)
+- `PUT /api/control-areas/:areaSlug/channels` (atomic channel-manager save)
+- `PUT /api/control-areas/:areaSlug/schedule-configuration` (atomic schedules
+  and multiplier save)
 - `POST /api/channels`
 - `PATCH /api/channels/:channelId`
 - `DELETE /api/channels/:channelId`

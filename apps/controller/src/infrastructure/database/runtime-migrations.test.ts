@@ -15,6 +15,7 @@ import {
   openEventsDatabase,
   openStateDatabase,
   parseStoredStateOutboxEnvelope,
+  STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
   STATE_CHANNEL_COLOR_MIGRATION_NAME,
   STATE_CONTROL_AREA_MIGRATION_NAME,
   STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
@@ -97,6 +98,7 @@ describe("runtime migrations", () => {
       STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
       STATE_HARDWARE_PROFILE_MIGRATION_NAME,
       STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+      STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
     ]);
     expect(eventsResults.map((result) => result.migrationName)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -115,6 +117,7 @@ describe("runtime migrations", () => {
       STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME,
       STATE_HARDWARE_PROFILE_MIGRATION_NAME,
       STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+      STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
     ]);
     expect(await readMigrationNames(events)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -184,6 +187,92 @@ describe("runtime migrations", () => {
     await expect(migrateEventsDatabase(events)).resolves.toEqual([]);
   });
 
+  it("scopes channel-name uniqueness to an area without breaking channel references", async () => {
+    const state = await createStateDatabase();
+    await migrateStateDatabaseTo(
+      state,
+      STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+    );
+    await state
+      .insertInto("channels")
+      .values({
+        id: "channel-light-uv",
+        name: "Uv",
+        kind: "light",
+        throttle_id: "throttle-light",
+        display_order: 0,
+        enabled: 1,
+        created_at_ms: 10,
+        updated_at_ms: 10,
+        color: "#6f5bd5",
+      })
+      .executeTakeFirstOrThrow();
+    await state
+      .insertInto("schedules")
+      .values({
+        id: "schedule-light-uv",
+        channel_id: "channel-light-uv",
+        name: "Uv",
+        timezone: "UTC",
+        enabled: 1,
+        graph_revision: 0,
+        created_at_ms: 10,
+        updated_at_ms: 10,
+      })
+      .executeTakeFirstOrThrow();
+
+    await expect(migrateStateDatabase(state)).resolves.toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+    ]);
+    await state
+      .insertInto("channels")
+      .values({
+        id: "channel-qt3-uv",
+        name: "Uv",
+        kind: "qt3",
+        throttle_id: "throttle-qt3",
+        display_order: 0,
+        enabled: 1,
+        created_at_ms: 11,
+        updated_at_ms: 11,
+        color: "#a747a9",
+      })
+      .executeTakeFirstOrThrow();
+    await expect(
+      state
+        .insertInto("channels")
+        .values({
+          id: "channel-qt3-uv-duplicate",
+          name: "Uv",
+          kind: "qt3",
+          throttle_id: "throttle-qt3",
+          display_order: 1,
+          enabled: 1,
+          created_at_ms: 12,
+          updated_at_ms: 12,
+          color: "#3c66db",
+        })
+        .executeTakeFirstOrThrow(),
+    ).rejects.toThrow(/UNIQUE constraint failed: channels.kind, channels.name/iu);
+    await expect(
+      state
+        .selectFrom("schedules")
+        .select("channel_id")
+        .where("id", "=", "schedule-light-uv")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ channel_id: "channel-light-uv" });
+    await expect(sql`PRAGMA foreign_key_check`.execute(state)).resolves.toMatchObject(
+      { rows: [] },
+    );
+    await expect(sql`PRAGMA foreign_keys`.execute(state)).resolves.toMatchObject({
+      rows: [{ foreign_keys: 1 }],
+    });
+  });
+
   it("repairs missing control-area multipliers without replacing existing values", async () => {
     const state = await createStateDatabase();
     await migrateStateDatabaseTo(state, STATE_FIRMWARE_UPDATE_MIGRATION_NAME);
@@ -211,6 +300,11 @@ describe("runtime migrations", () => {
       },
       {
         migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -322,6 +416,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -393,6 +492,11 @@ describe("runtime migrations", () => {
       },
       {
         migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -485,6 +589,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -509,6 +618,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
         direction: "Down",
@@ -657,6 +771,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -678,6 +797,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_RUNTIME_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
         direction: "Down",
@@ -865,6 +989,11 @@ describe("runtime migrations", () => {
       EVENTS_INITIAL_MIGRATION_NAME,
     );
     expect(stateDown).toMatchObject([
+      {
+        migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
         direction: "Down",

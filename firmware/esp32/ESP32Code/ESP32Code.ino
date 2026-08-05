@@ -2097,6 +2097,7 @@ String handleScheduleCommand(const String& scheduleJson) {
         );
         return "E: Schedule storage failed";
     }
+    resolveLastError("schedule_restore_failed");
     resolveLastError("schedule_storage_failed");
     strlcpy(currentSchedule, scheduleJson.c_str(), sizeof(currentSchedule));
 

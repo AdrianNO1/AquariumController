@@ -2,11 +2,7 @@ import type { Channel, ControlArea, Output } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import {
-  createControlArea,
-  deleteControlArea,
-  renameControlArea,
-} from "./api.js";
+import { replaceControlAreas } from "./api.js";
 import {
   configurationErrorMessage,
   currentRevisionFromError,
@@ -51,47 +47,23 @@ export function AreaManagementDialog({
     [areas],
   );
   const [drafts, setDrafts] = useState<readonly AreaDraft[]>(initialDrafts);
-  const [deletedSlugs, setDeletedSlugs] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const [newName, setNewName] = useState("");
   const [closeRequested, setCloseRequested] = useState(false);
   const draftRevision = useDraftRevision(expectedRevision);
   const originalBySlug = new Map(areas.map((area) => [area.slug, area]));
   const dirty =
-    deletedSlugs.size > 0 ||
+    drafts.length !== areas.length ||
     drafts.some((draft) => {
       if (draft.slug === null) return true;
       return originalBySlug.get(draft.slug)?.label !== draft.label;
     });
   const save = useMutation({
     retry: false,
-    mutationFn: async (): Promise<number> => {
-      let revision = draftRevision.revision;
-      for (const slug of deletedSlugs) {
-        const result = await deleteControlArea(slug, revision);
-        revision = result.revision;
-      }
-      for (const draft of drafts) {
-        if (draft.slug === null) continue;
-        const original = originalBySlug.get(draft.slug);
-        if (original === undefined || original.label === draft.label) continue;
-        const result = await renameControlArea(draft.slug, {
-          expectedRevision: revision,
-          label: draft.label,
-        });
-        revision = result.revision;
-      }
-      for (const draft of drafts) {
-        if (draft.slug !== null) continue;
-        const result = await createControlArea({
-          expectedRevision: revision,
-          label: draft.label,
-        });
-        revision = result.revision;
-      }
-      return revision;
-    },
+    mutationFn: () =>
+      replaceControlAreas({
+        expectedRevision: draftRevision.revision,
+        areas: drafts.map(({ slug, label }) => ({ slug, label })),
+      }),
     onSuccess: () => {
       draftRevision.reset();
       refresh();
@@ -128,10 +100,6 @@ export function AreaManagementDialog({
   function removeArea(draft: AreaDraft): void {
     draftRevision.pin();
     setDrafts((current) => current.filter((area) => area.key !== draft.key));
-    const slug = draft.slug;
-    if (slug !== null) {
-      setDeletedSlugs((current) => new Set([...current, slug]));
-    }
   }
 
   function areaHasConfiguration(draft: AreaDraft): boolean {

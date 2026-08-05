@@ -4,7 +4,7 @@
 import {
   channelSchema,
   scheduleGraphSchema,
-  type ReplaceScheduleRequest,
+  type ReplaceControlAreaScheduleConfigurationRequest,
 } from "@aquarium/contracts";
 import {
   act,
@@ -39,7 +39,7 @@ describe("CombinedScheduleEditor", () => {
         expectedRevision: 8,
         currentMinuteOfDay: 600,
         timezoneOffsetMinutes: 0,
-        onSaveSchedule: async (): Promise<ScheduleMutationResult> => ({
+        onSaveConfiguration: async (): Promise<ScheduleMutationResult> => ({
           revision: 9,
         }),
         onDraftPointsChange: (drafts) => reportedDrafts.push(drafts),
@@ -74,7 +74,7 @@ describe("CombinedScheduleEditor", () => {
   });
 
   it("keeps edits made during an in-flight save dirty for the next save", async () => {
-    const requests: ReplaceScheduleRequest[] = [];
+    const requests: ReplaceControlAreaScheduleConfigurationRequest[] = [];
     const reportedDrafts: CombinedScheduleDraftPoints[] = [];
     const editorRef = createRef<CombinedScheduleEditorHandle>();
     let resolveFirstSave:
@@ -82,9 +82,8 @@ describe("CombinedScheduleEditor", () => {
     const firstResult = new Promise<ScheduleMutationResult>((resolve) => {
       resolveFirstSave = resolve;
     });
-    const onSaveSchedule = (
-      _channelId: string,
-      request: ReplaceScheduleRequest,
+    const onSaveConfiguration = (
+      request: ReplaceControlAreaScheduleConfigurationRequest,
     ): Promise<ScheduleMutationResult> => {
       requests.push(request);
       return requests.length === 1
@@ -99,7 +98,7 @@ describe("CombinedScheduleEditor", () => {
         expectedRevision: 8,
         currentMinuteOfDay: 600,
         timezoneOffsetMinutes: 0,
-        onSaveSchedule,
+        onSaveConfiguration,
         onDraftPointsChange: (drafts) => reportedDrafts.push(drafts),
       }),
     );
@@ -146,14 +145,16 @@ describe("CombinedScheduleEditor", () => {
     expect(requests).toHaveLength(2);
     expect(requests[1]?.expectedRevision).toBe(9);
     expect(
-      requests[1]?.points.find((point) => point.minuteOfDay === 720)
+      requests[1]?.schedules[0]?.points.find(
+        (point) => point.minuteOfDay === 720,
+      )
         ?.percentage,
     ).toBe(72);
     expect(editorRef.current?.dirty).toBe(false);
   });
 
   it("rebases a draft when unrelated controller changes leave its graph unchanged", async () => {
-    const requests: ReplaceScheduleRequest[] = [];
+    const requests: ReplaceControlAreaScheduleConfigurationRequest[] = [];
     const editorRef = createRef<CombinedScheduleEditorHandle>();
     const channel = combinedChannel();
     const renderEditor = (expectedRevision: number) =>
@@ -163,9 +164,8 @@ describe("CombinedScheduleEditor", () => {
         expectedRevision,
         currentMinuteOfDay: 600,
         timezoneOffsetMinutes: 0,
-        onSaveSchedule: async (
-          _channelId: string,
-          request: ReplaceScheduleRequest,
+        onSaveConfiguration: async (
+          request: ReplaceControlAreaScheduleConfigurationRequest,
         ): Promise<ScheduleMutationResult> => {
           requests.push(request);
           return { revision: request.expectedRevision + 1 };
@@ -192,17 +192,13 @@ describe("CombinedScheduleEditor", () => {
       combinedChannel(),
       combinedChannel("light-uv", "UV light", "#805ad5"),
     ];
-    const requests: Array<{
-      readonly channelId: string;
-      readonly request: ReplaceScheduleRequest;
-    }> = [];
+    const requests: ReplaceControlAreaScheduleConfigurationRequest[] = [];
     const editorRef = createRef<CombinedScheduleEditorHandle>();
     const acceptedConflict = vi.fn();
-    const onSaveSchedule = (
-      channelId: string,
-      request: ReplaceScheduleRequest,
+    const onSaveConfiguration = (
+      request: ReplaceControlAreaScheduleConfigurationRequest,
     ): Promise<ScheduleMutationResult> => {
-      requests.push({ channelId, request });
+      requests.push(request);
       if (requests.length === 1) {
         return Promise.reject(
           new AquariumApiError(409, {
@@ -223,7 +219,7 @@ describe("CombinedScheduleEditor", () => {
         expectedRevision: 8,
         currentMinuteOfDay: 600,
         timezoneOffsetMinutes: 0,
-        onSaveSchedule,
+        onSaveConfiguration,
         onAcceptRevisionConflict: acceptedConflict,
       }),
     );
@@ -246,11 +242,13 @@ describe("CombinedScheduleEditor", () => {
 
     await act(async () => {
       await expect(editorRef.current?.saveAll(8)).rejects.toThrow(
-        "No schedule changes were saved.",
+        "State revision changed",
       );
     });
-    expect(requests.map(({ request }) => request.expectedRevision)).toEqual([
-      8,
+    expect(requests.map((request) => request.expectedRevision)).toEqual([8]);
+    expect(requests[0]?.schedules.map(({ channelId }) => channelId)).toEqual([
+      "light-main",
+      "light-uv",
     ]);
 
     rendered.rerender(
@@ -260,7 +258,7 @@ describe("CombinedScheduleEditor", () => {
         expectedRevision: 9,
         currentMinuteOfDay: 600,
         timezoneOffsetMinutes: 0,
-        onSaveSchedule,
+        onSaveConfiguration,
         onAcceptRevisionConflict: acceptedConflict,
       }),
     );
@@ -272,15 +270,12 @@ describe("CombinedScheduleEditor", () => {
     expect(acceptedConflict).toHaveBeenCalledOnce();
 
     await act(async () => {
-      await expect(editorRef.current?.saveAll(9)).resolves.toBe(11);
+      await expect(editorRef.current?.saveAll(9)).resolves.toBe(10);
     });
-    expect(requests.map(({ channelId }) => channelId)).toEqual([
-      "light-main",
+    expect(requests.map((request) => request.expectedRevision)).toEqual([8, 9]);
+    expect(requests[1]?.schedules.map(({ channelId }) => channelId)).toEqual([
       "light-main",
       "light-uv",
-    ]);
-    expect(requests.map(({ request }) => request.expectedRevision)).toEqual([
-      8, 9, 10,
     ]);
     expect(editorRef.current?.dirty).toBe(false);
   });

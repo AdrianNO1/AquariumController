@@ -192,7 +192,7 @@ describe("control area routes", () => {
     ).toBeTruthy();
   });
 
-  it("saves an exact manually entered time and multiplier in revision order", async () => {
+  it("saves an exact manually entered time and multiplier atomically", async () => {
     const requests: RecordedRequest[] = [];
     installConfigurationSaveHandlers(requests);
     const refresh = vi.fn();
@@ -215,25 +215,26 @@ describe("control area routes", () => {
       screen.getByRole("button", { name: "Save configuration" }),
     );
 
-    await waitFor(() => expect(requests).toHaveLength(2));
-    expect(requests.map(({ path }) => path)).toEqual([
-      "/api/channels/light-main/schedule",
-      "/api/throttles/light",
-    ]);
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]?.path).toBe(
+      "/api/control-areas/lights/schedule-configuration",
+    );
     expect(requests[0]?.body).toMatchObject({
       expectedRevision: 8,
-      points: expect.arrayContaining([
+      schedules: [
         expect.objectContaining({
-          minuteOfDay: localMinuteToUtcMinute(
-            7,
-            new Date().getTimezoneOffset(),
-          ),
+          channelId: "light-main",
+          points: expect.arrayContaining([
+            expect.objectContaining({
+              minuteOfDay: localMinuteToUtcMinute(
+                7,
+                new Date().getTimezoneOffset(),
+              ),
+            }),
+          ]),
         }),
-      ]),
-    });
-    expect(requests[1]?.body).toMatchObject({
-      expectedRevision: 9,
-      percentage: 75,
+      ],
+      throttlePercentage: 75,
     });
     expect(refresh).toHaveBeenCalledOnce();
   });
@@ -354,10 +355,45 @@ describe("control area routes", () => {
     }
   });
 
+  it("rebases unsaved configuration after an unrelated snapshot revision", async () => {
+    const requests: RecordedRequest[] = [];
+    installConfigurationSaveHandlers(requests);
+    const snapshot = createTestControlSnapshot();
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(snapshot, vi.fn()),
+    );
+
+    fireEvent.change(
+      screen.getByLabelText("Main light selected point output"),
+      { target: { value: "65" } },
+    );
+    await user.click(screen.getByRole("button", { name: "Apply point" }));
+    fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
+      target: { value: "73" },
+    });
+
+    user.rerenderState(
+      controllerState({ ...snapshot, revision: snapshot.revision + 1 }, vi.fn()),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Save configuration" }),
+    );
+
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]?.body.expectedRevision).toBe(snapshot.revision + 1);
+    expect(
+      screen.queryByText(/Controller configuration advanced/u),
+    ).toBeNull();
+    expect(screen.queryByText(/This schedule changed/u)).toBeNull();
+  });
+
   it("preserves a multiplier draft and explicitly rebases after a revision conflict", async () => {
     const revisions: number[] = [];
     server.use(
-      http.put("http://localhost/api/throttles/light", async ({ request }) => {
+      http.put(
+        "http://localhost/api/control-areas/lights/schedule-configuration",
+        async ({ request }) => {
         const body = (await request.json()) as {
           readonly expectedRevision: number;
         };
@@ -378,7 +414,8 @@ describe("control area routes", () => {
           revision: 10,
           event: null,
         });
-      }),
+        },
+      ),
     );
     const snapshot = createTestControlSnapshot();
     const refresh = vi.fn();
@@ -418,10 +455,10 @@ describe("control area routes", () => {
 
   it("rebases a dirty multiplier with the accepted schedule conflict", async () => {
     const requests: RecordedRequest[] = [];
-    let scheduleAttempts = 0;
+    let saveAttempts = 0;
     server.use(
       http.put(
-        "http://localhost/api/channels/light-main/schedule",
+        "http://localhost/api/control-areas/lights/schedule-configuration",
         async ({ request }) => {
           const body = (await request.json()) as RecordedRequest["body"];
           requests.push({
@@ -432,8 +469,8 @@ describe("control area routes", () => {
           if (typeof expectedRevision !== "number") {
             throw new Error("Schedule request omitted expectedRevision");
           }
-          scheduleAttempts += 1;
-          if (scheduleAttempts === 1) {
+          saveAttempts += 1;
+          if (saveAttempts === 1) {
             return HttpResponse.json(
               {
                 code: "revision_conflict",
@@ -451,22 +488,6 @@ describe("control area routes", () => {
           });
         },
       ),
-      http.put("http://localhost/api/throttles/light", async ({ request }) => {
-        const body = (await request.json()) as RecordedRequest["body"];
-        requests.push({
-          path: new URL(request.url).pathname,
-          body,
-        });
-        const expectedRevision = body.expectedRevision;
-        if (typeof expectedRevision !== "number") {
-          throw new Error("Multiplier request omitted expectedRevision");
-        }
-        return HttpResponse.json({
-          changed: false,
-          revision: expectedRevision + 1,
-          event: null,
-        });
-      }),
     );
     const snapshot = createTestControlSnapshot();
     const refresh = vi.fn();
@@ -502,15 +523,15 @@ describe("control area routes", () => {
       screen.getByRole("button", { name: "Save configuration" }),
     );
 
-    await waitFor(() => expect(requests).toHaveLength(3));
+    await waitFor(() => expect(requests).toHaveLength(2));
     expect(requests.map(({ path }) => path)).toEqual([
-      "/api/channels/light-main/schedule",
-      "/api/channels/light-main/schedule",
-      "/api/throttles/light",
+      "/api/control-areas/lights/schedule-configuration",
+      "/api/control-areas/lights/schedule-configuration",
     ]);
     expect(requests.map(({ body }) => body.expectedRevision)).toEqual([
-      8, 9, 10,
+      8, 9,
     ]);
+    expect(requests[1]?.body.throttlePercentage).toBe(73);
   });
 
   it("preserves a dirty schedule when a newer graph arrives until explicit acceptance", async () => {
@@ -678,8 +699,10 @@ function installConfigurationSaveHandlers(requests: RecordedRequest[]): void {
     });
   };
   server.use(
-    http.put("http://localhost/api/channels/light-main/schedule", handler),
-    http.put("http://localhost/api/throttles/light", handler),
+    http.put(
+      "http://localhost/api/control-areas/lights/schedule-configuration",
+      handler,
+    ),
   );
 }
 

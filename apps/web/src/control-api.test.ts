@@ -17,6 +17,9 @@ import {
   patchDeviceConfiguration,
   reconcileDeviceOperation,
   renameChannel,
+  replaceControlAreaChannels,
+  replaceControlAreaScheduleConfiguration,
+  replaceControlAreas,
   replaceMappingProfile,
   replaceSchedule,
   updateThrottle,
@@ -72,6 +75,26 @@ describe("control configuration API", () => {
       displayOrder: 0,
       enabled: true,
     });
+    await replaceControlAreas({
+      expectedRevision: 8,
+      areas: [{ slug: "lights", label: "Lights" }],
+    });
+    await replaceControlAreaChannels("lights", {
+      expectedRevision: 8,
+      channels: [
+        { id: "light-main", name: "Main light", color: "#13a4c7" },
+      ],
+    });
+    await replaceControlAreaScheduleConfiguration("lights", {
+      expectedRevision: 8,
+      schedules: [
+        {
+          channelId: "light-main",
+          points: [point("start", 0, 0, 0), point("end", 1, 1_439, 0)],
+        },
+      ],
+      throttlePercentage: 70,
+    });
     await renameChannel("light-main", {
       expectedRevision: 8,
       name: "Main reef light",
@@ -102,6 +125,9 @@ describe("control configuration API", () => {
 
     expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
       "POST /api/channels",
+      "PUT /api/control-areas",
+      "PUT /api/control-areas/lights/channels",
+      "PUT /api/control-areas/lights/schedule-configuration",
       "PATCH /api/channels/light-main",
       "PATCH /api/channels/light-main",
       "PUT /api/channels/light-main/schedule",

@@ -1,6 +1,6 @@
 import type {
   Channel,
-  ReplaceScheduleRequest,
+  ReplaceControlAreaScheduleConfigurationRequest,
   ScheduleGraph,
   SchedulePoint,
 } from "@aquarium/contracts";
@@ -40,7 +40,6 @@ import {
   type CombinedScheduleSource,
   type PlotCoordinate,
 } from "./combined-schedule-state.js";
-import { CombinedScheduleSaveError } from "./combined-schedule-save.js";
 import { currentRevisionFromError } from "./configuration-ui.js";
 import {
   localMinuteToUtcMinute,
@@ -65,9 +64,8 @@ export type CombinedScheduleDraftPoints = Readonly<
 export interface CombinedScheduleEditorProps {
   readonly channels: readonly CombinedScheduleChannel[];
   readonly expectedRevision: number;
-  readonly onSaveSchedule: (
-    channelId: string,
-    request: ReplaceScheduleRequest,
+  readonly onSaveConfiguration: (
+    request: ReplaceControlAreaScheduleConfigurationRequest,
   ) => Promise<ScheduleMutationResult>;
   readonly onDirtyChange?: (dirty: boolean) => void;
   readonly onDraftPointsChange?: (
@@ -84,7 +82,10 @@ export interface CombinedScheduleEditorProps {
 export interface CombinedScheduleEditorHandle {
   readonly dirty: boolean;
   readonly isSaving: boolean;
-  readonly saveAll: (expectedRevision: number) => Promise<number>;
+  readonly saveAll: (
+    expectedRevision: number,
+    throttlePercentage?: number,
+  ) => Promise<number>;
   readonly discardAll: () => void;
 }
 
@@ -95,7 +96,7 @@ export const CombinedScheduleEditor = forwardRef<
   {
     channels,
     expectedRevision,
-    onSaveSchedule,
+    onSaveConfiguration,
     onDirtyChange,
     onDraftPointsChange,
     onSavingChange,
@@ -176,7 +177,10 @@ export const CombinedScheduleEditor = forwardRef<
   }, [isSaving, onSavingChange]);
 
   const saveAll = useCallback(
-    async (currentRevision: number): Promise<number> => {
+    async (
+      currentRevision: number,
+      throttlePercentage?: number,
+    ): Promise<number> => {
       if (savingRef.current) {
         throw new Error("Schedule changes are already being saved.");
       }
@@ -186,7 +190,9 @@ export const CombinedScheduleEditor = forwardRef<
           ? [draft]
           : [];
       });
-      if (dirtyDrafts.length === 0) return currentRevision;
+      if (dirtyDrafts.length === 0 && throttlePercentage === undefined) {
+        return currentRevision;
+      }
       const conflict = dirtyDrafts.find(
         (draft) => draft.conflictRevision !== null,
       );
@@ -204,17 +210,20 @@ export const CombinedScheduleEditor = forwardRef<
 
       savingRef.current = true;
       setIsSaving(true);
-      let completedCount = 0;
       const pinnedRevisions = dirtyDrafts.flatMap((draft) =>
         draft.pinnedRevision === null ? [] : [draft.pinnedRevision],
       );
-      let revision = Math.min(currentRevision, ...pinnedRevisions);
+      const revision = Math.min(currentRevision, ...pinnedRevisions);
       try {
+        const result = await onSaveConfiguration({
+          expectedRevision: revision,
+          schedules: dirtyDrafts.map((draft) => ({
+            channelId: draft.channelId,
+            points: toCombinedReplaceScheduleRequest(draft, revision).points,
+          })),
+          ...(throttlePercentage === undefined ? {} : { throttlePercentage }),
+        });
         for (const draft of dirtyDrafts) {
-          const request = toCombinedReplaceScheduleRequest(draft, revision);
-          const result = await onSaveSchedule(draft.channelId, request);
-          revision = result.revision;
-          completedCount += 1;
           dispatch({
             type: "saved",
             channelId: draft.channelId,
@@ -222,40 +231,29 @@ export const CombinedScheduleEditor = forwardRef<
             savedRevision: result.revision,
           });
         }
-        return revision;
+        return result.revision;
       } catch (caught) {
         const error =
           caught instanceof Error
             ? caught
             : new Error("The schedule save failed.");
-        const failedDraft = dirtyDrafts[completedCount];
         const serverRevision = currentRevisionFromError(error);
-        if (failedDraft !== undefined && serverRevision !== null) {
-          dispatch({
-            type: "revision_conflict",
-            channelId: failedDraft.channelId,
-            currentRevision: serverRevision,
-          });
-        } else {
-          dispatch({
-            type: "rebase_save_chain",
-            channelIds: dirtyDrafts
-              .slice(completedCount)
-              .map((draft) => draft.channelId),
-            currentRevision: revision,
-          });
+        if (serverRevision !== null) {
+          for (const draft of dirtyDrafts) {
+            dispatch({
+              type: "revision_conflict",
+              channelId: draft.channelId,
+              currentRevision: serverRevision,
+            });
+          }
         }
-        throw new CombinedScheduleSaveError(
-          completedCount,
-          dirtyDrafts.length,
-          error,
-        );
+        throw error;
       } finally {
         savingRef.current = false;
         setIsSaving(false);
       }
     },
-    [channels, onSaveSchedule, state.drafts],
+    [channels, onSaveConfiguration, state.drafts],
   );
 
   useImperativeHandle(
@@ -461,6 +459,7 @@ export const CombinedScheduleEditor = forwardRef<
             onPointerLeave={() => {
               if (dragRef.current === null) setAddPointHover(null);
             }}
+            onContextMenu={(event) => event.preventDefault()}
             onClick={addPointFromGraph}
           >
             <rect

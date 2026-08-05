@@ -10,6 +10,9 @@ import type {
   PatchDeviceConfigurationRequest,
   RenameChannelRequest,
   RenameControlAreaRequest,
+  ReplaceControlAreaChannelsRequest,
+  ReplaceControlAreaScheduleConfigurationRequest,
+  ReplaceControlAreasRequest,
   ReplaceMappingProfileRequest,
   ReplaceScheduleRequest,
   SetDeviceEnabledRequest,
@@ -80,6 +83,9 @@ export interface ControllerConfigurationService {
     areaSlug: string,
     expectedRevision: number,
   ): Promise<MutationResult>;
+  replaceControlAreas(
+    request: ReplaceControlAreasRequest,
+  ): Promise<MutationResult>;
   createChannel(request: CreateChannelRequest): Promise<MutationResult>;
   renameChannel(
     channelId: string,
@@ -92,6 +98,14 @@ export interface ControllerConfigurationService {
   deleteChannel(
     channelId: string,
     expectedRevision: number,
+  ): Promise<MutationResult>;
+  replaceControlAreaChannels(
+    areaSlug: string,
+    request: ReplaceControlAreaChannelsRequest,
+  ): Promise<MutationResult>;
+  replaceControlAreaScheduleConfiguration(
+    areaSlug: string,
+    request: ReplaceControlAreaScheduleConfigurationRequest,
   ): Promise<MutationResult>;
   replaceSchedule(
     channelId: string,

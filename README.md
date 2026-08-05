@@ -152,9 +152,13 @@ npm ci
 npm run dev
 ```
 
-The Vite development UI runs at `http://127.0.0.1:5173` and proxies `/api` to
-the controller at `http://127.0.0.1:3001`. The complete variable/default/
-interlock reference is in
+The Vite development UI listens on all interfaces at port `5173` and proxies
+`/api` to the controller at `http://127.0.0.1:3001`. Open it locally at
+`http://127.0.0.1:5173` or from another device on the trusted LAN using the
+development computer's LAN address. This development UI has no authentication;
+do not expose port `5173` beyond the trusted LAN. The controller remains bound
+to loopback unless `AQUARIUM_HOST` is explicitly changed. The complete
+variable/default/interlock reference is in
 [the architecture](docs/architecture.md#configuration-reference).
 
 The production-built single-origin UI/controller, pinned Mosquitto, and two

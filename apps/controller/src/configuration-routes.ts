@@ -17,8 +17,10 @@ import {
   operationParamsSchema,
   patchAlertRuleRequestSchema,
   patchDeviceConfigurationRequestSchema,
-  renameChannelRequestSchema,
   renameControlAreaRequestSchema,
+  replaceControlAreaChannelsRequestSchema,
+  replaceControlAreaScheduleConfigurationRequestSchema,
+  replaceControlAreasRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   requestFirmwareUpdateSchema,
@@ -223,6 +225,16 @@ export function registerConfigurationRoutes(
     }),
   );
 
+  app.put(
+    "/api/control-areas",
+    safeRoute(app, async (request, reply) => {
+      const body = parseRequest(replaceControlAreasRequestSchema, request.body);
+      const result =
+        await configurationService(dependencies).replaceControlAreas(body);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
   app.patch(
     "/api/control-areas/:areaSlug",
     safeRoute(app, async (request, reply) => {
@@ -258,6 +270,42 @@ export function registerConfigurationRoutes(
     }),
   );
 
+  app.put(
+    "/api/control-areas/:areaSlug/channels",
+    safeRoute(app, async (request, reply) => {
+      const { areaSlug } = parseRequest(
+        controlAreaParamsSchema,
+        request.params,
+      );
+      const body = parseRequest(
+        replaceControlAreaChannelsRequestSchema,
+        request.body,
+      );
+      const result = await configurationService(
+        dependencies,
+      ).replaceControlAreaChannels(areaSlug, body);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
+  app.put(
+    "/api/control-areas/:areaSlug/schedule-configuration",
+    safeRoute(app, async (request, reply) => {
+      const { areaSlug } = parseRequest(
+        controlAreaParamsSchema,
+        request.params,
+      );
+      const body = parseRequest(
+        replaceControlAreaScheduleConfigurationRequestSchema,
+        request.body,
+      );
+      const result = await configurationService(
+        dependencies,
+      ).replaceControlAreaScheduleConfiguration(areaSlug, body);
+      return reply.code(200).send(mutationResultSchema.parse(result));
+    }),
+  );
+
   app.post(
     "/api/channels",
     safeRoute(app, async (request, reply) => {
@@ -272,16 +320,11 @@ export function registerConfigurationRoutes(
     "/api/channels/:channelId",
     safeRoute(app, async (request, reply) => {
       const { channelId } = parseRequest(channelParamsSchema, request.params);
-      const update = updateChannelRequestSchema.safeParse(request.body);
-      const result = update.success
-        ? await configurationService(dependencies).updateChannel(
-            channelId,
-            update.data,
-          )
-        : await configurationService(dependencies).renameChannel(
-            channelId,
-            parseRequest(renameChannelRequestSchema, request.body),
-          );
+      const body = parseRequest(updateChannelRequestSchema, request.body);
+      const result = await configurationService(dependencies).updateChannel(
+        channelId,
+        body,
+      );
       return reply.code(200).send(mutationResultSchema.parse(result));
     }),
   );

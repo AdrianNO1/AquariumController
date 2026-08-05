@@ -7,7 +7,12 @@ import {
   type MutationResult,
   type PatchDeviceConfigurationRequest,
 } from "@aquarium/contracts";
-import { parseEspErrorResponse, utf8ByteLength } from "@aquarium/esp-protocol";
+import {
+  isSupportedEspFirmwareVersion,
+  parseEspErrorResponse,
+  supportsPullOta,
+  utf8ByteLength,
+} from "@aquarium/esp-protocol";
 
 import {
   ConfigurationNotFoundError,
@@ -160,10 +165,11 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       },
       lifecycleOptions,
     );
-    if (
-      !isCommandEligibleDevice(device) &&
-      !(parsedRequest.kind === "firmware_update" && device.enabled === 1)
-    ) {
+    const commandEligible =
+      parsedRequest.kind === "firmware_update"
+        ? isFirmwareUpdateEligibleDevice(device)
+        : isCommandEligibleDevice(device);
+    if (!commandEligible) {
       return this.#repository.completePendingWithoutAttempt(
         operation.id,
         this.#now(),
@@ -851,10 +857,24 @@ function describeProtocolFault(
 function isCommandEligibleDevice(device: {
   readonly enabled: number;
   readonly status: string;
+  readonly firmware_version: string | null;
 }): boolean {
   return (
     device.enabled === 1 &&
-    ["online", "stale", "offline"].includes(device.status)
+    ["online", "stale", "offline"].includes(device.status) &&
+    device.firmware_version !== null &&
+    isSupportedEspFirmwareVersion(device.firmware_version)
+  );
+}
+
+function isFirmwareUpdateEligibleDevice(device: {
+  readonly enabled: number;
+  readonly firmware_version: string | null;
+}): boolean {
+  return (
+    device.enabled === 1 &&
+    device.firmware_version !== null &&
+    supportsPullOta(device.firmware_version)
   );
 }
 

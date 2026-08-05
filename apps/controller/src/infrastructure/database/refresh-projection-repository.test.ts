@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { CURRENT_ESP_FIRMWARE_VERSION } from "@aquarium/esp-protocol";
 
 import { openControllerDatabases, type ControllerDatabases } from "./index.js";
 import { RefreshProjectionRepository } from "./refresh-projection-repository.js";
@@ -229,6 +230,19 @@ async function seedProjection(context: ControllerDatabases): Promise<void> {
         8,
         now,
       ),
+      {
+        ...device(
+          "device-unsupported",
+          "hardware-unsupported",
+          "profile-a",
+          "online",
+          1,
+          8,
+          8,
+          now,
+        ),
+        firmware_version: "3.9.2",
+      },
     ])
     .execute();
 }
@@ -344,7 +358,7 @@ function device(
     desired_pwm_resolution_bits: desiredResolution,
     reported_pwm_frequency_hz: 5_000,
     reported_pwm_resolution_bits: reportedResolution,
-    firmware_version: "4.0.0",
+    firmware_version: CURRENT_ESP_FIRMWARE_VERSION,
     reported_schedule_hash: "0",
     status,
     last_seen_at_ms: now,

@@ -61,45 +61,21 @@ afterAll(() => {
 });
 
 describe("ChannelManagementDialog", () => {
-  it("keeps identifiers hidden and saves name, color, and a distinct new channel in revision order", async () => {
-    const patches: Array<{
-      readonly id: string;
-      readonly body: {
-        readonly expectedRevision: number;
+  it("keeps identifiers hidden and saves the complete channel edit atomically", async () => {
+    const requests: Array<{
+      readonly expectedRevision: number;
+      readonly channels: readonly {
+        readonly id: string;
         readonly name: string;
         readonly color: string;
-      };
-    }> = [];
-    const creates: Array<{
-      readonly expectedRevision: number;
-      readonly id: string;
-      readonly name: string;
-      readonly color: string;
-      readonly typeKey: string;
-      readonly throttleId: string;
-      readonly displayOrder: number;
-      readonly enabled: boolean;
+      }[];
     }> = [];
     server.use(
-      http.patch(
-        "http://localhost/api/channels/:channelId",
-        async ({ params, request }) => {
-          patches.push({
-            id: String(params.channelId),
-            body: (await request.json()) as (typeof patches)[number]["body"],
-          });
-          return HttpResponse.json({
-            changed: false,
-            revision: 9,
-            event: null,
-          });
-        },
-      ),
-      http.post("http://localhost/api/channels", async ({ request }) => {
-        creates.push((await request.json()) as (typeof creates)[number]);
+      http.put("http://localhost/api/control-areas/lights/channels", async ({ request }) => {
+        requests.push((await request.json()) as (typeof requests)[number]);
         return HttpResponse.json({
           changed: false,
-          revision: 10,
+          revision: 9,
           event: null,
         });
       }),
@@ -136,27 +112,20 @@ describe("ChannelManagementDialog", () => {
     expect(screen.queryByText(/^channel-/u)).toBeNull();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
-    await waitFor(() => expect(creates).toHaveLength(1));
-    expect(patches).toEqual([
-      {
-        id: "channel-white",
-        body: {
-          expectedRevision: 8,
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({
+      expectedRevision: 8,
+      channels: [
+        {
+          id: "channel-white",
           name: "Warm white",
           color: "#db5451",
         },
-      },
-    ]);
-    expect(creates[0]).toMatchObject({
-      expectedRevision: 9,
-      name: "Moonlight",
-      color: distinctNewColor,
-      typeKey: "light",
-      throttleId: "throttle-light",
-      displayOrder: 2,
-      enabled: true,
+        { id: "channel-blue", name: "Blue", color: "#0aa0c0" },
+        { name: "Moonlight", color: distinctNewColor },
+      ],
     });
-    expect(creates[0]?.id).toMatch(/^channel-/u);
+    expect(requests[0]?.channels[2]?.id).toMatch(/^channel-/u);
     expect(refresh).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledOnce();
   });

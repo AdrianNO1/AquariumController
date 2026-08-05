@@ -2,7 +2,7 @@ import type { Channel, ControlArea } from "@aquarium/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
-import { createChannel, deleteChannel, updateChannel } from "./api.js";
+import { replaceControlAreaChannels } from "./api.js";
 import {
   configurationErrorMessage,
   currentRevisionFromError,
@@ -29,11 +29,6 @@ interface ChannelDraft {
   readonly isNew: boolean;
 }
 
-interface SaveResult {
-  readonly revision: number;
-  readonly savedCount: number;
-}
-
 export function ChannelManagementDialog({
   area,
   channels,
@@ -53,9 +48,6 @@ export function ChannelManagementDialog({
     [channels],
   );
   const [drafts, setDrafts] = useState<readonly ChannelDraft[]>(initialDrafts);
-  const [deletedIds, setDeletedIds] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(() =>
     chooseDistinctChannelColor(channels.map((channel) => channel.color)),
@@ -66,7 +58,7 @@ export function ChannelManagementDialog({
     channels.map((channel) => [channel.id, channel]),
   );
   const dirty =
-    deletedIds.size > 0 ||
+    drafts.length !== channels.length ||
     drafts.some((draft) => {
       if (draft.isNew) return true;
       const original = originalById.get(draft.id);
@@ -78,59 +70,11 @@ export function ChannelManagementDialog({
     });
   const save = useMutation({
     retry: false,
-    mutationFn: async (): Promise<SaveResult> => {
-      let revision = draftRevision.revision;
-      let savedCount = 0;
-      for (const draft of drafts) {
-        if (draft.isNew) continue;
-        const original = originalById.get(draft.id);
-        if (
-          original === undefined ||
-          (original.name === draft.name && original.color === draft.color)
-        ) {
-          continue;
-        }
-        const result = await updateChannel(draft.id, {
-          expectedRevision: revision,
-          name: draft.name,
-          color: draft.color,
-        });
-        revision = result.revision;
-        savedCount += 1;
-      }
-      let displayOrder =
-        channels.reduce(
-          (maximum, channel) => Math.max(maximum, channel.displayOrder),
-          -1,
-        ) + 1;
-      for (const draft of drafts) {
-        if (!draft.isNew) continue;
-        if (throttleId === null) {
-          throw new Error(
-            `${area.label} has no schedule multiplier record, so a channel cannot be created.`,
-          );
-        }
-        const result = await createChannel({
-          expectedRevision: revision,
-          id: draft.id,
-          name: draft.name,
-          color: draft.color,
-          typeKey: area.typeKey,
-          throttleId,
-          displayOrder,
-          enabled: true,
-        });
-        revision = result.revision;
-        displayOrder += 1;
-        savedCount += 1;
-      }
-      for (const channelId of deletedIds) {
-        const result = await deleteChannel(channelId, revision);
-        revision = result.revision;
-        savedCount += 1;
-      }
-      return { revision, savedCount };
-    },
+    mutationFn: () =>
+      replaceControlAreaChannels(area.slug, {
+        expectedRevision: draftRevision.revision,
+        channels: drafts.map(({ id, name, color }) => ({ id, name, color })),
+      }),
     onSuccess: () => {
       draftRevision.reset();
       refresh();
@@ -174,9 +118,6 @@ export function ChannelManagementDialog({
     setDrafts((current) =>
       current.filter((channel) => channel.id !== draft.id),
     );
-    if (!draft.isNew) {
-      setDeletedIds((current) => new Set([...current, draft.id]));
-    }
   }
 
   function requestClose(): void {
@@ -303,9 +244,7 @@ export function ChannelManagementDialog({
           ) : null}
           {save.error === null ? null : (
             <p className="field-error" role="alert">
-              {configurationErrorMessage(save.error)} Earlier changes in this
-              save may already have been accepted; close and reopen the dialog
-              to review authoritative state.
+              {configurationErrorMessage(save.error)}
             </p>
           )}
         </div>

@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import { afterEach, describe, expect, it } from "vitest";
+import { CURRENT_ESP_FIRMWARE_VERSION } from "@aquarium/esp-protocol";
 
 import { ManualOverrideConflictError } from "../../application/overrides/manual-override-errors.js";
 import type { ManualOverrideRevisionConflictError } from "../../application/overrides/manual-override-errors.js";
@@ -118,6 +119,34 @@ describe("manual override repository", () => {
     ]);
     await expect(
       repository.readActiveManualOverrideOutputs(130_000),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not target pin mappings on unsupported firmware", async () => {
+    const repository = await createRepository();
+    await requireDatabase()
+      .updateTable("devices")
+      .set({ firmware_version: "3.9.2" })
+      .where("id", "=", "device-a")
+      .executeTakeFirstOrThrow();
+
+    await expect(
+      repository.createStart({
+        overrideId: "override-unsupported",
+        operationId: "operation-unsupported",
+        expectedRevision: 0,
+        target: { targetType: "channel", targetId: "channel-blue" },
+        valuePercentage: 50,
+        requestedAtMs: 10_000,
+        expiresAtMs: 10_000 + MANUAL_OVERRIDE_DURATION_MS,
+        deadlineAtMs: 40_000,
+      }),
+    ).rejects.toBeInstanceOf(ManualOverrideConflictError);
+    await expect(
+      requireDatabase()
+        .selectFrom("control_operations")
+        .select("id")
+        .execute(),
     ).resolves.toEqual([]);
   });
 
@@ -664,7 +693,7 @@ async function seed(state: Kysely<StateDatabaseSchema>): Promise<void> {
       desired_pwm_resolution_bits: 8,
       reported_pwm_frequency_hz: 5_000,
       reported_pwm_resolution_bits: 8,
-      firmware_version: "4.0.0",
+      firmware_version: CURRENT_ESP_FIRMWARE_VERSION,
       reported_schedule_hash: "0",
       status: "online",
       last_seen_at_ms: now,

@@ -1,4 +1,4 @@
-import type { Kysely } from "kysely";
+import { sql, type Kysely } from "kysely";
 import {
   Migrator,
   type Migration,
@@ -7,6 +7,7 @@ import {
 } from "kysely/migration";
 
 import { channelColorMigration } from "./channel-color-migration.js";
+import { channelNameScopeMigration } from "./channel-name-scope-migration.js";
 import { controlAreaMigration } from "./control-area-migration.js";
 import { controlAreaThrottleMigration } from "./control-area-throttle-migration.js";
 import { eventsQueryMigration } from "./events-query-migration.js";
@@ -36,6 +37,8 @@ export const STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME =
 export const STATE_HARDWARE_PROFILE_MIGRATION_NAME = "009_hardware_profiles";
 export const STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME =
   "010_hardware_pin_safety";
+export const STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME =
+  "011_channel_name_scope";
 export const EVENTS_INITIAL_MIGRATION_NAME = "001_initial_events";
 export const EVENTS_QUERY_MIGRATION_NAME = "002_log_query_indexes";
 export const EVENTS_RETENTION_MIGRATION_NAME =
@@ -53,7 +56,8 @@ export type StateMigrationTarget =
   | typeof STATE_FIRMWARE_UPDATE_MIGRATION_NAME
   | typeof STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME
   | typeof STATE_HARDWARE_PROFILE_MIGRATION_NAME
-  | typeof STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME;
+  | typeof STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME
+  | typeof STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME;
 export type EventsMigrationTarget =
   | typeof EVENTS_INITIAL_MIGRATION_NAME
   | typeof EVENTS_QUERY_MIGRATION_NAME
@@ -84,6 +88,7 @@ const stateMigrationProvider = new EmbeddedMigrationProvider({
   [STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME]: controlAreaThrottleMigration,
   [STATE_HARDWARE_PROFILE_MIGRATION_NAME]: hardwareProfileMigration,
   [STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME]: hardwarePinSafetyMigration,
+  [STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME]: channelNameScopeMigration,
 });
 
 const eventsMigrationProvider = new EmbeddedMigrationProvider({
@@ -121,7 +126,7 @@ async function migrate<DatabaseSchema>(
 export function migrateStateDatabase(
   database: Kysely<StateDatabaseSchema>,
 ): Promise<readonly MigrationResult[]> {
-  return migrate(database, stateMigrationProvider);
+  return migrateStateSchema(database);
 }
 
 export function migrateEventsDatabase(
@@ -139,7 +144,26 @@ export function migrateStateDatabaseTo(
   database: Kysely<StateDatabaseSchema>,
   target: StateMigrationTarget,
 ): Promise<readonly MigrationResult[]> {
-  return migrate(database, stateMigrationProvider, target);
+  return migrateStateSchema(database, target);
+}
+
+async function migrateStateSchema(
+  database: Kysely<StateDatabaseSchema>,
+  target?: StateMigrationTarget,
+): Promise<readonly MigrationResult[]> {
+  await sql.raw("PRAGMA foreign_keys = OFF").execute(database);
+  try {
+    const results = await migrate(database, stateMigrationProvider, target);
+    const violations = await sql`PRAGMA foreign_key_check`.execute(database);
+    if (violations.rows.length > 0) {
+      throw new Error(
+        `State database migration left ${violations.rows.length} foreign-key violation(s)`,
+      );
+    }
+    return results;
+  } finally {
+    await sql.raw("PRAGMA foreign_keys = ON").execute(database);
+  }
 }
 
 /**

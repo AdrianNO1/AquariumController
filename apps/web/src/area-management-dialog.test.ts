@@ -45,25 +45,19 @@ describe("area management dialog", () => {
   it("confirms unsaved closes and saves deletes, renames, and additions", async () => {
     const requests: Array<{ readonly method: string; readonly body: object }> =
       [];
-    for (const [method, route] of [
-      ["delete", "http://localhost/api/control-areas/bad"],
-      ["patch", "http://localhost/api/control-areas/lights"],
-      ["post", "http://localhost/api/control-areas"],
-    ] as const) {
-      server.use(
-        http[method](route, async ({ request }) => {
-          requests.push({
-            method: request.method,
-            body: (await request.json()) as object,
-          });
-          return HttpResponse.json({
-            changed: false,
-            revision: 8,
-            event: null,
-          });
-        }),
-      );
-    }
+    server.use(
+      http.put("http://localhost/api/control-areas", async ({ request }) => {
+        requests.push({
+          method: request.method,
+          body: (await request.json()) as object,
+        });
+        return HttpResponse.json({
+          changed: false,
+          revision: 8,
+          event: null,
+        });
+      }),
+    );
     const refresh = vi.fn();
     const onClose = vi.fn();
     const user = userEvent.setup();
@@ -93,14 +87,15 @@ describe("area management dialog", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(requests).toEqual([
-      { method: "DELETE", body: { expectedRevision: 8 } },
       {
-        method: "PATCH",
-        body: { expectedRevision: 8, label: "Main lights" },
-      },
-      {
-        method: "POST",
-        body: { expectedRevision: 8, label: "Anemone tank" },
+        method: "PUT",
+        body: {
+          expectedRevision: 8,
+          areas: [
+            { slug: "lights", label: "Main lights" },
+            { slug: null, label: "Anemone tank" },
+          ],
+        },
       },
     ]);
     expect(refresh).toHaveBeenCalledOnce();
