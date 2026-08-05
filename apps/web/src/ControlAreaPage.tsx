@@ -3,7 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useBeforeUnload, useBlocker } from "react-router";
 
-import { replaceSchedule, updateThrottle } from "./api.js";
+import { replaceControlAreaScheduleConfiguration } from "./api.js";
 import { ChannelManagementDialog } from "./ChannelManagementDialog.js";
 import {
   CombinedScheduleEditor,
@@ -161,6 +161,14 @@ function LoadedControlArea({
   );
   const [draftPointsByChannel, setDraftPointsByChannel] =
     useState<CombinedScheduleDraftPoints>({});
+  const [overrideBusy, setOverrideBusy] = useState(false);
+  const [pendingOverrideRevision, setPendingOverrideRevision] = useState<
+    number | null
+  >(null);
+  const previousConfigurationSnapshotRef = useRef({
+    revision: model.revision,
+    multiplier: authoritativeMultiplier,
+  });
   const multiplier = synchronizeMultiplierDraft(
     multiplierState,
     authoritativeMultiplier,
@@ -174,6 +182,9 @@ function LoadedControlArea({
   const multiplierDirty =
     multiplier.acceptedValue === null &&
     multiplier.value !== authoritativeMultiplier;
+  const waitingForOverrideSnapshot =
+    pendingOverrideRevision !== null &&
+    model.revision < pendingOverrideRevision;
   const missingSchedules = model.channels.filter(
     ({ schedule }) => schedule === null,
   );
@@ -229,39 +240,56 @@ function LoadedControlArea({
     }
   }, [multiplierDirty, pinSaveRevision, resetSaveRevision, scheduleSaving]);
 
+  useEffect(() => {
+    const previous = previousConfigurationSnapshotRef.current;
+    if (previous.revision === model.revision) return;
+
+    if (multiplierDirty && multiplierConflictRevision === null) {
+      if (previous.multiplier === authoritativeMultiplier) {
+        rebaseSaveRevision();
+      } else {
+        setMultiplierConflictRevision(model.revision);
+      }
+    }
+    previousConfigurationSnapshotRef.current = {
+      revision: model.revision,
+      multiplier: authoritativeMultiplier,
+    };
+  }, [
+    authoritativeMultiplier,
+    model.revision,
+    multiplierConflictRevision,
+    multiplierDirty,
+    rebaseSaveRevision,
+    setMultiplierConflictRevision,
+  ]);
+
   const save = useMutation({
     retry: false,
     mutationFn: async (): Promise<ConfigurationSaveResult> => {
-      const hadScheduleChanges = editorRef.current?.dirty ?? false;
       let revision = multiplierDirty ? pinnedSaveRevision : model.revision;
-      if (editorRef.current !== null) {
-        revision = await editorRef.current.saveAll(revision);
-      }
       if (multiplierDirty) {
         if (model.throttle === null) {
           throw new Error(
             `${model.area.label} has no schedule multiplier record.`,
           );
         }
-        try {
-          const result = await updateThrottle(model.area.typeKey, {
+      }
+      if (editorRef.current !== null) {
+        revision = await editorRef.current.saveAll(
+          revision,
+          multiplierDirty ? multiplier.value : undefined,
+        );
+      } else if (multiplierDirty) {
+        const result = await replaceControlAreaScheduleConfiguration(
+          model.area.slug,
+          {
             expectedRevision: revision,
-            percentage: multiplier.value,
-          });
-          revision = result.revision;
-        } catch (caught) {
-          const error =
-            caught instanceof Error
-              ? caught
-              : new Error("The schedule multiplier save failed.");
-          throw new MultiplierSaveError(
-            hadScheduleChanges
-              ? `Schedule changes were saved, but the schedule multiplier was not. ${configurationErrorMessage(error)}`
-              : configurationErrorMessage(error),
-            currentRevisionFromError(error),
-            caught,
-          );
-        }
+            schedules: [],
+            throttlePercentage: multiplier.value,
+          },
+        );
+        revision = result.revision;
       }
       return {
         revision,
@@ -280,17 +308,16 @@ function LoadedControlArea({
       refresh();
     },
     onError: (error) => {
-      if (
-        error instanceof MultiplierSaveError &&
-        error.currentRevision !== null
-      ) {
-        setMultiplierConflictRevision(error.currentRevision);
+      const currentRevision = currentRevisionFromError(error);
+      if (multiplierDirty && currentRevision !== null) {
+        setMultiplierConflictRevision(currentRevision);
       }
       refresh();
     },
   });
   const configurationDirty = scheduleDirty || multiplierDirty;
   const saving = save.isPending || scheduleSaving;
+  const configurationSaveBlocked = overrideBusy || waitingForOverrideSnapshot;
   const multiplierConflictUnresolved =
     multiplierConflictRevision !== null &&
     model.revision < multiplierConflictRevision;
@@ -355,6 +382,7 @@ function LoadedControlArea({
             disabled={
               !configurationDirty ||
               saving ||
+              configurationSaveBlocked ||
               multiplierConflictRevision !== null
             }
             onClick={() => save.mutate()}
@@ -397,12 +425,17 @@ function LoadedControlArea({
           ref={editorRef}
           channels={scheduleChannels}
           expectedRevision={model.revision}
-          onSaveSchedule={replaceSchedule}
+          onSaveConfiguration={(request) =>
+            replaceControlAreaScheduleConfiguration(model.area.slug, request)
+          }
           onDirtyChange={setScheduleDirty}
           onDraftPointsChange={setDraftPointsByChannel}
           onSavingChange={setScheduleSaving}
           onAcceptRevisionConflict={() => {
-            if (multiplierDirty) rebaseSaveRevision();
+            if (multiplierDirty) {
+              rebaseSaveRevision();
+              setMultiplierConflictRevision(null);
+            }
           }}
         />
       </section>
@@ -447,6 +480,8 @@ function LoadedControlArea({
           expectedRevision={model.revision}
           disabled={liveStateUnavailable || saving}
           refresh={refresh}
+          onAcceptedRevision={setPendingOverrideRevision}
+          onBusyChange={setOverrideBusy}
         />
       </section>
 
@@ -484,7 +519,9 @@ function LoadedControlArea({
       <UnsavedChangesDialog
         open={navigationBlocker.state === "blocked"}
         saving={saving}
-        saveDisabled={multiplierConflictRevision !== null}
+        saveDisabled={
+          configurationSaveBlocked || multiplierConflictRevision !== null
+        }
         heading="Save changes before leaving?"
         onSave={saveBeforeLeaving}
         onDiscard={() => {
@@ -521,16 +558,4 @@ function synchronizeMultiplierDraft(
     value: hasUnsavedDraft ? current.value : authoritativeValue,
     acceptedValue: null,
   };
-}
-
-class MultiplierSaveError extends Error {
-  override readonly name = "MultiplierSaveError";
-
-  public constructor(
-    message: string,
-    readonly currentRevision: number | null,
-    cause: ErrorOptions["cause"],
-  ) {
-    super(message, { cause });
-  }
 }

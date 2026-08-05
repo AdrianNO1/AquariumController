@@ -327,6 +327,48 @@ describe("ControllerStateCoordinator", () => {
     coordinator.stop();
   });
 
+  it("accepts an authoritative revision rollback after a database restore", async () => {
+    const snapshots = [
+      createTestControllerSnapshot(58_895),
+      createTestControllerSnapshot(2),
+    ];
+    const streams: FakeEventStream[] = [];
+    const urls: string[] = [];
+    const fetchSnapshot = vi.fn(async () => {
+      const snapshot = snapshots.shift();
+      if (snapshot === undefined) {
+        throw new Error("Unexpected snapshot request");
+      }
+      return snapshot;
+    });
+    const coordinator = new ControllerStateCoordinator({
+      fetchSnapshot,
+      createEventStream: (url) => {
+        urls.push(url);
+        const stream = new FakeEventStream();
+        streams.push(stream);
+        return stream;
+      },
+    });
+
+    coordinator.start();
+    await vi.waitFor(() => expect(streams).toHaveLength(1));
+    streams[0]?.emit(streamReady(58_895));
+    streams[0]?.emit(resyncRequired(2));
+
+    await vi.waitFor(() => expect(streams).toHaveLength(2));
+    expect(fetchSnapshot).toHaveBeenCalledTimes(2);
+    expect(urls).toEqual([
+      "/api/events?afterRevision=58895",
+      "/api/events?afterRevision=2",
+    ]);
+    expect(coordinator.getState()).toMatchObject({
+      revision: 2,
+      dataStale: false,
+    });
+    coordinator.stop();
+  });
+
   it("reports reconnecting and stale states, then recovers on a current heartbeat", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(occurredAt));

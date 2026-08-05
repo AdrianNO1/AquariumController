@@ -89,11 +89,6 @@ export type CombinedScheduleAction =
       readonly currentRevision: number;
     }
   | {
-      readonly type: "rebase_save_chain";
-      readonly channelIds: readonly string[];
-      readonly currentRevision: number;
-    }
-  | {
       readonly type: "snapshot";
       readonly sources: readonly CombinedScheduleSource[];
       readonly currentRevision: number;
@@ -260,10 +255,7 @@ export function combinedScheduleReducer(
             ? {
                 ...candidate,
                 pinnedRevision: action.currentRevision,
-                conflictRevision:
-                  channelId === action.channelId
-                    ? null
-                    : candidate.conflictRevision,
+                conflictRevision: null,
               }
             : candidate,
         ]),
@@ -287,18 +279,6 @@ export function combinedScheduleReducer(
           },
         },
       };
-    }
-    case "rebase_save_chain": {
-      const channelIds = new Set(action.channelIds);
-      const drafts = Object.fromEntries(
-        Object.entries(state.drafts).map(([channelId, draft]) => [
-          channelId,
-          channelIds.has(channelId) && isCombinedScheduleDraftDirty(draft)
-            ? { ...draft, pinnedRevision: action.currentRevision }
-            : draft,
-        ]),
-      );
-      return { ...state, drafts };
     }
     case "snapshot":
       return synchronizeCombinedScheduleState(

@@ -8,6 +8,7 @@ import {
   validateScheduleGraph,
   type SchedulePoint,
 } from "@aquarium/domain";
+import { isSupportedEspFirmwareVersion } from "@aquarium/esp-protocol";
 import { sql, type Kysely } from "kysely";
 import { z } from "zod";
 
@@ -26,6 +27,7 @@ const projectionRowSchema = z.strictObject({
   pin: z.number().int().min(0).max(63),
   throttlePercent: percentageSchema,
   outputGain: gainSchema,
+  firmwareVersion: z.string().min(1).nullable(),
   scheduleId: identifierSchema.nullable(),
   pointPosition: z.number().int().nonnegative().nullable(),
   pointMinute: z.number().int().min(0).max(1_439).nullable(),
@@ -70,6 +72,7 @@ export class RefreshProjectionRepository implements ActiveOutputProjectionReader
         "mapping.pin as pin",
         "throttle.percentage as throttlePercent",
         "profile.output_gain as outputGain",
+        "device.firmware_version as firmwareVersion",
         "schedule.id as scheduleId",
         "point.position as pointPosition",
         "point.minute_of_day as pointMinute",
@@ -102,6 +105,12 @@ export class RefreshProjectionRepository implements ActiveOutputProjectionReader
     const grouped = new Map<string, MutableScheduledOutput>();
     for (const rawRow of rows) {
       const row = projectionRowSchema.parse(rawRow);
+      if (
+        row.firmwareVersion === null ||
+        !isSupportedEspFirmwareVersion(row.firmwareVersion)
+      ) {
+        continue;
+      }
       const key = `${row.deviceId}\0${row.mappingId}`;
       let output = grouped.get(key);
       if (output === undefined) {

@@ -667,6 +667,337 @@ describe("ControllerConfigurationRepository", () => {
     ).resolves.toEqual({ changed: false, revision: 2, event: null });
   });
 
+  it("allows the same channel name in different control areas only", async () => {
+    const database = await openDatabase();
+    await database
+      .insertInto("throttles")
+      .values([
+        {
+          id: "throttle-light",
+          type_key: "light",
+          percentage: 100,
+          created_at_ms: 0,
+          updated_at_ms: 0,
+        },
+        {
+          id: "throttle-qt3",
+          type_key: "qt3",
+          percentage: 100,
+          created_at_ms: 0,
+          updated_at_ms: 0,
+        },
+      ])
+      .execute();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+
+    await repository.createChannel({
+      expectedRevision: 0,
+      id: "channel-lights-uv",
+      name: "Uv",
+      color: "#6f5bd5",
+      typeKey: "light",
+      throttleId: "throttle-light",
+      displayOrder: 0,
+      enabled: true,
+    });
+    await expect(
+      repository.createChannel({
+        expectedRevision: 1,
+        id: "channel-qt3-uv",
+        name: "Uv",
+        color: "#a747a9",
+        typeKey: "qt3",
+        throttleId: "throttle-qt3",
+        displayOrder: 0,
+        enabled: true,
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 2 });
+
+    await expect(
+      repository.createChannel({
+        expectedRevision: 2,
+        id: "channel-qt3-uv-duplicate",
+        name: "Uv",
+        color: "#3c66db",
+        typeKey: "qt3",
+        throttleId: "throttle-qt3",
+        displayOrder: 1,
+        enabled: true,
+      }),
+    ).rejects.toMatchObject({
+      conflicts: [
+        expect.objectContaining({
+          resource: "channel",
+          relation: "name",
+          message: "Channel name is already in use in this control area",
+        }),
+      ],
+    });
+  });
+
+  it("validates a complete channel edit before atomically applying it", async () => {
+    const database = await openDatabase();
+    await database.deleteFrom("control_areas").execute();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+    await repository.createControlArea({
+      expectedRevision: 0,
+      label: "Lights",
+    });
+    await repository.createChannel({
+      expectedRevision: 1,
+      id: "channel-blue",
+      name: "Blue",
+      color: "#13a4c7",
+      typeKey: "lights",
+      throttleId: "throttle-lights",
+      displayOrder: 0,
+      enabled: true,
+    });
+    await repository.createChannel({
+      expectedRevision: 2,
+      id: "channel-white",
+      name: "White",
+      color: "#87959e",
+      typeKey: "lights",
+      throttleId: "throttle-lights",
+      displayOrder: 1,
+      enabled: true,
+    });
+    await database
+      .insertInto("mapping_profiles")
+      .values({
+        id: "profile-main",
+        name: "Main",
+        device_name_prefix: "Main",
+        output_gain: 1,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+    await database
+      .insertInto("pin_mappings")
+      .values({
+        id: "mapping-white",
+        mapping_profile_id: "profile-main",
+        output_id: null,
+        channel_id: "channel-white",
+        pin: 4,
+        display_order: 0,
+        enabled: 1,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+      })
+      .executeTakeFirstOrThrow();
+
+    await expect(
+      repository.replaceControlAreaChannels("lights", {
+        expectedRevision: 3,
+        channels: [
+          { id: "channel-blue", name: "Ocean", color: "#3c66db" },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      conflicts: [
+        expect.objectContaining({
+          resource: "pin_mapping",
+          relation: "channel",
+        }),
+      ],
+    });
+    expect(await readCurrentStateRevision(database)).toBe(3);
+    await expect(
+      database
+        .selectFrom("channels")
+        .select(["id", "name"])
+        .where("kind", "=", "lights")
+        .orderBy("display_order")
+        .execute(),
+    ).resolves.toEqual([
+      { id: "channel-blue", name: "Blue" },
+      { id: "channel-white", name: "White" },
+    ]);
+
+    await expect(
+      repository.replaceControlAreaChannels("lights", {
+        expectedRevision: 3,
+        channels: [
+          { id: "channel-blue", name: "White", color: "#3c66db" },
+          { id: "channel-white", name: "Blue", color: "#87959e" },
+          { id: "channel-uv", name: "UV", color: "#6f5bd5" },
+        ],
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 4 });
+    expect(await readCurrentStateRevision(database)).toBe(4);
+    await expect(
+      database
+        .selectFrom("channels")
+        .select(["id", "name", "display_order"])
+        .where("kind", "=", "lights")
+        .orderBy("display_order")
+        .execute(),
+    ).resolves.toEqual([
+      { id: "channel-blue", name: "White", display_order: 0 },
+      { id: "channel-white", name: "Blue", display_order: 1 },
+      { id: "channel-uv", name: "UV", display_order: 2 },
+    ]);
+  });
+
+  it("saves every changed schedule and its multiplier in one revision", async () => {
+    const database = await openDatabase();
+    await database.deleteFrom("control_areas").execute();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+    await repository.createControlArea({
+      expectedRevision: 0,
+      label: "Lights",
+    });
+    for (const [index, id] of ["channel-blue", "channel-white"].entries()) {
+      await repository.createChannel({
+        expectedRevision: index + 1,
+        id,
+        name: id === "channel-blue" ? "Blue" : "White",
+        color: id === "channel-blue" ? "#13a4c7" : "#87959e",
+        typeKey: "lights",
+        throttleId: "throttle-lights",
+        displayOrder: index,
+        enabled: true,
+      });
+    }
+    await repository.createControlArea({
+      expectedRevision: 3,
+      label: "Pumps",
+    });
+    await repository.createChannel({
+      expectedRevision: 4,
+      id: "channel-return",
+      name: "Return",
+      color: "#db5451",
+      typeKey: "pumps",
+      throttleId: "throttle-pumps",
+      displayOrder: 0,
+      enabled: true,
+    });
+    const bluePoints = [
+      schedulePoint("blue-start", 0, 0, 25),
+      schedulePoint("blue-end", 1, 1_439, 25),
+    ];
+    await expect(
+      repository.replaceControlAreaScheduleConfiguration("lights", {
+        expectedRevision: 5,
+        schedules: [
+          { channelId: "channel-blue", points: bluePoints },
+          {
+            channelId: "channel-return",
+            points: [
+              schedulePoint("return-start", 0, 0, 50),
+              schedulePoint("return-end", 1, 1_439, 50),
+            ],
+          },
+        ],
+        throttlePercentage: 70,
+      }),
+    ).rejects.toBeInstanceOf(ConfigurationRelationalConflictError);
+    expect(await readCurrentStateRevision(database)).toBe(5);
+    await expect(
+      database
+        .selectFrom("throttles")
+        .select("percentage")
+        .where("id", "=", "throttle-lights")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ percentage: 100 });
+    await expect(
+      database
+        .selectFrom("schedules")
+        .select("graph_revision")
+        .where("id", "=", "channel-blue")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ graph_revision: 0 });
+
+    await expect(
+      repository.replaceControlAreaScheduleConfiguration("lights", {
+        expectedRevision: 5,
+        schedules: [
+          { channelId: "channel-blue", points: bluePoints },
+          {
+            channelId: "channel-white",
+            points: [
+              schedulePoint("white-start", 0, 0, 40),
+              schedulePoint("white-end", 1, 1_439, 40),
+            ],
+          },
+        ],
+        throttlePercentage: 70,
+      }),
+    ).resolves.toMatchObject({ changed: true, revision: 6 });
+    await expect(
+      database
+        .selectFrom("schedules")
+        .select(["id", "graph_revision"])
+        .where("id", "in", ["channel-blue", "channel-white"])
+        .orderBy("id")
+        .execute(),
+    ).resolves.toEqual([
+      { id: "channel-blue", graph_revision: 1 },
+      { id: "channel-white", graph_revision: 1 },
+    ]);
+    await expect(
+      database
+        .selectFrom("throttles")
+        .select("percentage")
+        .where("id", "=", "throttle-lights")
+        .executeTakeFirstOrThrow(),
+    ).resolves.toEqual({ percentage: 70 });
+  });
+
+  it("rolls back the whole area collection when one deletion is invalid", async () => {
+    const database = await openDatabase();
+    await database.deleteFrom("control_areas").execute();
+    const repository = new ControllerConfigurationRepository(database, {
+      nowMs: () => 100,
+    });
+    await repository.createControlArea({
+      expectedRevision: 0,
+      label: "Lights",
+    });
+    await repository.createControlArea({
+      expectedRevision: 1,
+      label: "Pumps",
+    });
+    await repository.createChannel({
+      expectedRevision: 2,
+      id: "channel-return",
+      name: "Return",
+      color: "#13a4c7",
+      typeKey: "pumps",
+      throttleId: "throttle-pumps",
+      displayOrder: 0,
+      enabled: true,
+    });
+
+    await expect(
+      repository.replaceControlAreas({
+        expectedRevision: 3,
+        areas: [{ slug: "lights", label: "Main lights" }],
+      }),
+    ).rejects.toBeInstanceOf(ConfigurationRelationalConflictError);
+    expect(await readCurrentStateRevision(database)).toBe(3);
+    await expect(
+      database
+        .selectFrom("control_areas")
+        .select(["slug", "label"])
+        .orderBy("display_order")
+        .execute(),
+    ).resolves.toEqual([
+      { slug: "lights", label: "Lights" },
+      { slug: "pumps", label: "Pumps" },
+    ]);
+  });
+
   it("reports every schedule graph problem before writing state", async () => {
     const database = await openDatabase();
     const repository = new ControllerConfigurationRepository(database, {
@@ -1146,3 +1477,19 @@ describe("ControllerConfigurationRepository", () => {
     expect(await readCurrentStateRevision(database)).toBe(0);
   });
 });
+
+function schedulePoint(
+  id: string,
+  position: number,
+  minuteOfDay: number,
+  percentage: number,
+) {
+  return {
+    id,
+    position,
+    minuteOfDay,
+    percentage,
+    editorX: null,
+    editorY: null,
+  };
+}

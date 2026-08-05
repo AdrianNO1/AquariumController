@@ -369,6 +369,7 @@ describe("controller MQTT runtime composition", () => {
         desired_pwm_frequency_hz: 5_000,
         desired_pwm_resolution_bits: 8,
         status: "offline",
+        firmware_version: CURRENT_ESP_FIRMWARE_VERSION,
         created_at_ms: 0,
         updated_at_ms: 0,
       })

@@ -1,5 +1,6 @@
 import type { Kysely } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { CURRENT_ESP_FIRMWARE_VERSION } from "@aquarium/esp-protocol";
 
 import { ManualSchedulingTime } from "../scheduling/test-scheduling-time.js";
 import { openStateDatabase } from "../../infrastructure/database/connection.js";
@@ -755,7 +756,7 @@ async function seed(state: Kysely<StateDatabaseSchema>): Promise<void> {
       desired_pwm_resolution_bits: 8,
       reported_pwm_frequency_hz: 5_000,
       reported_pwm_resolution_bits: 8,
-      firmware_version: "4.0.0",
+      firmware_version: CURRENT_ESP_FIRMWARE_VERSION,
       reported_schedule_hash: "0",
       status: "online",
       last_seen_at_ms: now,

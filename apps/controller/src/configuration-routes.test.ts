@@ -89,6 +89,79 @@ describe("configuration HTTP routes", () => {
     expect(deleted.json()).toMatchObject({ changed: true, revision: 3 });
   });
 
+  it("applies editor batches through one revision-checked request", async () => {
+    const { database, repository } = await createRepository();
+    const app = trackApp(buildApp({ configurationService: repository }));
+    await app.inject({
+      method: "POST",
+      url: "/api/control-areas",
+      payload: { expectedRevision: 0, label: "Anemone tank" },
+    });
+
+    const channels = await app.inject({
+      method: "PUT",
+      url: "/api/control-areas/anemone-tank/channels",
+      payload: {
+        expectedRevision: 1,
+        channels: [
+          { id: "channel-blue", name: "Blue", color: "#13a4c7" },
+          { id: "channel-white", name: "White", color: "#87959e" },
+        ],
+      },
+    });
+    expect(channels.statusCode).toBe(200);
+    expect(channels.json()).toMatchObject({ changed: true, revision: 2 });
+
+    const scheduleConfiguration = await app.inject({
+      method: "PUT",
+      url: "/api/control-areas/anemone-tank/schedule-configuration",
+      payload: {
+        expectedRevision: 2,
+        schedules: [
+          {
+            channelId: "channel-blue",
+            points: [
+              schedulePoint("blue-start", 0, 0, 25),
+              schedulePoint("blue-end", 1, 1_439, 25),
+            ],
+          },
+          {
+            channelId: "channel-white",
+            points: [
+              schedulePoint("white-start", 0, 0, 40),
+              schedulePoint("white-end", 1, 1_439, 40),
+            ],
+          },
+        ],
+        throttlePercentage: 75,
+      },
+    });
+    expect(scheduleConfiguration.statusCode).toBe(200);
+    expect(scheduleConfiguration.json()).toMatchObject({
+      changed: true,
+      revision: 3,
+    });
+
+    const storedAreas = await database
+      .selectFrom("control_areas")
+      .select(["slug", "label"])
+      .orderBy("display_order")
+      .execute();
+    const areas = await app.inject({
+      method: "PUT",
+      url: "/api/control-areas",
+      payload: {
+        expectedRevision: 3,
+        areas: storedAreas.map((area) => ({
+          slug: area.slug,
+          label: area.slug === "anemone-tank" ? "Anemones" : area.label,
+        })),
+      },
+    });
+    expect(areas.statusCode).toBe(200);
+    expect(areas.json()).toMatchObject({ changed: true, revision: 4 });
+  });
+
   it("validates requests before returning typed unavailable-service errors", async () => {
     const app = trackApp(buildApp());
     const invalid = await app.inject({
@@ -666,3 +739,19 @@ describe("configuration HTTP routes", () => {
     );
   });
 });
+
+function schedulePoint(
+  id: string,
+  position: number,
+  minuteOfDay: number,
+  percentage: number,
+) {
+  return {
+    id,
+    position,
+    minuteOfDay,
+    percentage,
+    editorX: null,
+    editorY: null,
+  };
+}

@@ -15,6 +15,7 @@ import {
   validateScheduleGraph,
   type SchedulePoint,
 } from "@aquarium/domain";
+import { isSupportedEspFirmwareVersion } from "@aquarium/esp-protocol";
 import { sql, type Kysely, type Selectable } from "kysely";
 import { z } from "zod";
 
@@ -64,6 +65,7 @@ const startMappingRowSchema = z.strictObject({
   pin: z.number().int().min(0).max(63),
   profileGain: gainSchema,
   outputGain: gainSchema.nullable(),
+  firmwareVersion: z.string().min(1).nullable(),
 });
 
 const releaseMappingRowSchema = z.strictObject({
@@ -75,6 +77,7 @@ const releaseMappingRowSchema = z.strictObject({
   throttlePercent: percentageSchema.nullable(),
   profileGain: gainSchema,
   scheduleId: identifierSchema.nullable(),
+  firmwareVersion: z.string().min(1).nullable(),
 });
 
 const releasePointRowSchema = z.strictObject({
@@ -1342,6 +1345,7 @@ async function resolveStartCommands(
       "mapping.pin as pin",
       "profile.output_gain as profileGain",
       "output.output_gain as outputGain",
+      "device.firmware_version as firmwareVersion",
     ])
     .where("device.enabled", "=", 1)
     .where("device.status", "in", ["online", "stale", "offline"])
@@ -1365,7 +1369,14 @@ async function resolveStartCommands(
       : await baseQuery
           .where("mapping.output_id", "=", target.targetId)
           .execute();
-  if (rows.length === 0) {
+  const eligibleRows = rows
+    .map((row) => startMappingRowSchema.parse(row))
+    .filter(
+      (row) =>
+        row.firmwareVersion !== null &&
+        isSupportedEspFirmwareVersion(row.firmwareVersion),
+    );
+  if (eligibleRows.length === 0) {
     throw new ManualOverrideConflictError(
       target.targetType,
       target.targetId,
@@ -1373,8 +1384,7 @@ async function resolveStartCommands(
       `This ${target.targetType} has no enabled online device pin mappings`,
     );
   }
-  return rows.map((rawRow) => {
-    const row = startMappingRowSchema.parse(rawRow);
+  return eligibleRows.map((row) => {
     const outputGain =
       target.targetType === "output"
         ? (row.outputGain ?? failMissingOutputGain(row.mappingId))
@@ -1420,6 +1430,7 @@ async function resolveReleaseCommands(
         "throttle.percentage as throttlePercent",
         "profile.output_gain as profileGain",
         "schedule.id as scheduleId",
+        "device.firmware_version as firmwareVersion",
       ])
       .where("mapping.id", "=", startCommand.mappingId)
       .where("device.id", "=", startCommand.deviceId)
@@ -1429,6 +1440,12 @@ async function resolveReleaseCommands(
     let value = 0;
     if (rawMapping !== undefined) {
       const mapping = releaseMappingRowSchema.parse(rawMapping);
+      if (
+        mapping.firmwareVersion === null ||
+        !isSupportedEspFirmwareVersion(mapping.firmwareVersion)
+      ) {
+        continue;
+      }
       const stillSamePin = mapping.pin === startCommand.pin;
       const hasScheduledChannel =
         stillSamePin &&

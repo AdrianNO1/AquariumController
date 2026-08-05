@@ -34,6 +34,8 @@ export interface ManualOverridePanelProps {
   readonly operations: readonly OperationSummary[];
   readonly expectedRevision: number;
   readonly refresh: () => void;
+  readonly onAcceptedRevision?: (revision: number) => void;
+  readonly onBusyChange?: (busy: boolean) => void;
   readonly nowMs?: () => number;
   readonly disabled?: boolean;
 }
@@ -77,6 +79,8 @@ export function ManualOverridePanel({
   operations,
   expectedRevision,
   refresh,
+  onAcceptedRevision,
+  onBusyChange,
   nowMs = Date.now,
   disabled = false,
 }: ManualOverridePanelProps): React.JSX.Element {
@@ -207,6 +211,7 @@ export function ManualOverridePanel({
     },
     onSuccess: (result) => {
       draftRevision.reset();
+      onAcceptedRevision?.(result.revision);
       if (result.kind === "release") {
         setDraftValues(new Map());
         setReleasedOverrideIds(
@@ -228,6 +233,9 @@ export function ManualOverridePanel({
   const batchKind = batchData?.kind ?? batch.variables?.kind;
   const confirmationPending = batchConfirmation === "pending";
   const busy = batch.isPending || confirmationPending;
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [busy, onBusyChange]);
   useEffect(() => {
     if (
       batchData === undefined ||

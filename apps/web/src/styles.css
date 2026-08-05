@@ -2164,6 +2164,8 @@ button:disabled {
 .combined-schedule-point {
   cursor: grab;
   touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
 }
 
 .combined-schedule-point:active {
@@ -3252,6 +3254,14 @@ button:disabled {
     width: 760px;
     height: 274px;
     max-width: none;
+  }
+
+  .combined-schedule-channel.selected .combined-schedule-point {
+    r: 11.25px;
+  }
+
+  .combined-schedule-channel.selected .combined-schedule-point.selected {
+    r: 16.5px;
   }
 
   .combined-schedule-channel-list {

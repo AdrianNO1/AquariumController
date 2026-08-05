@@ -27,6 +27,9 @@ import {
   requestFirmwareUpdateSchema,
   renameChannelRequestSchema,
   renameControlAreaRequestSchema,
+  replaceControlAreaChannelsRequestSchema,
+  replaceControlAreaScheduleConfigurationRequestSchema,
+  replaceControlAreasRequestSchema,
   replaceMappingProfileRequestSchema,
   replaceScheduleRequestSchema,
   setDeviceEnabledRequestSchema,
@@ -55,6 +58,9 @@ import {
   type PatchDeviceConfigurationRequest,
   type RenameChannelRequest,
   type RenameControlAreaRequest,
+  type ReplaceControlAreaChannelsRequest,
+  type ReplaceControlAreaScheduleConfigurationRequest,
+  type ReplaceControlAreasRequest,
   type ReplaceMappingProfileRequest,
   type ReplaceScheduleRequest,
   type SetDeviceEnabledRequest,
@@ -211,6 +217,40 @@ export function deleteControlArea(
     `/api/control-areas/${encodeURIComponent(params.areaSlug)}`,
     "DELETE",
     body,
+  );
+}
+
+export function replaceControlAreas(
+  request: ReplaceControlAreasRequest,
+): Promise<MutationResult> {
+  return requestConfigurationMutation(
+    "/api/control-areas",
+    "PUT",
+    replaceControlAreasRequestSchema.parse(request),
+  );
+}
+
+export function replaceControlAreaChannels(
+  areaSlug: string,
+  request: ReplaceControlAreaChannelsRequest,
+): Promise<MutationResult> {
+  const params = controlAreaParamsSchema.parse({ areaSlug });
+  return requestConfigurationMutation(
+    `/api/control-areas/${encodeURIComponent(params.areaSlug)}/channels`,
+    "PUT",
+    replaceControlAreaChannelsRequestSchema.parse(request),
+  );
+}
+
+export function replaceControlAreaScheduleConfiguration(
+  areaSlug: string,
+  request: ReplaceControlAreaScheduleConfigurationRequest,
+): Promise<MutationResult> {
+  const params = controlAreaParamsSchema.parse({ areaSlug });
+  return requestConfigurationMutation(
+    `/api/control-areas/${encodeURIComponent(params.areaSlug)}/schedule-configuration`,
+    "PUT",
+    replaceControlAreaScheduleConfigurationRequestSchema.parse(request),
   );
 }
 

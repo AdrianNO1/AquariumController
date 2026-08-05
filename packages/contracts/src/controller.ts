@@ -1285,6 +1285,31 @@ export const renameControlAreaRequestSchema = z.strictObject({
   label: boundedTextSchema,
 });
 
+const controlAreaDraftSchema = z.strictObject({
+  slug: controlAreaSlugSchema.nullable(),
+  label: boundedTextSchema,
+});
+
+export const replaceControlAreasRequestSchema = z
+  .strictObject({
+    expectedRevision: nonnegativeSafeIntegerSchema,
+    areas: z.array(controlAreaDraftSchema).max(64),
+  })
+  .superRefine((request, context) => {
+    const slugs = new Set<string>();
+    for (const [index, area] of request.areas.entries()) {
+      if (area.slug === null) continue;
+      if (slugs.has(area.slug)) {
+        context.addIssue({
+          code: "custom",
+          path: ["areas", index, "slug"],
+          message: "Control area identifiers must be unique",
+        });
+      }
+      slugs.add(area.slug);
+    }
+  });
+
 export const channelParamsSchema = z.strictObject({
   channelId: identifierSchema,
 });
@@ -1332,13 +1357,83 @@ export const renameChannelRequestSchema = z.strictObject({
 export const updateChannelRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
   name: boundedTextSchema,
+  color: canonicalHexColorSchema.optional(),
+});
+
+const controlAreaChannelDraftSchema = z.strictObject({
+  id: identifierSchema,
+  name: boundedTextSchema,
   color: canonicalHexColorSchema,
 });
+
+export const replaceControlAreaChannelsRequestSchema = z
+  .strictObject({
+    expectedRevision: nonnegativeSafeIntegerSchema,
+    channels: z.array(controlAreaChannelDraftSchema).max(64),
+  })
+  .superRefine((request, context) => {
+    const identifiers = new Set<string>();
+    const names = new Set<string>();
+    for (const [index, channel] of request.channels.entries()) {
+      if (identifiers.has(channel.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["channels", index, "id"],
+          message: "Channel identifiers must be unique",
+        });
+      }
+      identifiers.add(channel.id);
+      if (names.has(channel.name)) {
+        context.addIssue({
+          code: "custom",
+          path: ["channels", index, "name"],
+          message: "Channel names must be unique within a control area",
+        });
+      }
+      names.add(channel.name);
+    }
+  });
 
 export const replaceScheduleRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
   points: z.array(schedulePointSchema).min(2).max(1_440),
 });
+
+const controlAreaScheduleDraftSchema = z.strictObject({
+  channelId: identifierSchema,
+  points: z.array(schedulePointSchema).min(2).max(1_440),
+});
+
+export const replaceControlAreaScheduleConfigurationRequestSchema = z
+  .strictObject({
+    expectedRevision: nonnegativeSafeIntegerSchema,
+    schedules: z.array(controlAreaScheduleDraftSchema).max(64),
+    throttlePercentage: percentageSchema.optional(),
+  })
+  .superRefine((request, context) => {
+    const channelIds = new Set<string>();
+    const pointIds = new Set<string>();
+    for (const [scheduleIndex, schedule] of request.schedules.entries()) {
+      if (channelIds.has(schedule.channelId)) {
+        context.addIssue({
+          code: "custom",
+          path: ["schedules", scheduleIndex, "channelId"],
+          message: "Each channel schedule may appear only once",
+        });
+      }
+      channelIds.add(schedule.channelId);
+      for (const [pointIndex, point] of schedule.points.entries()) {
+        if (pointIds.has(point.id)) {
+          context.addIssue({
+            code: "custom",
+            path: ["schedules", scheduleIndex, "points", pointIndex, "id"],
+            message: "Schedule point identifiers must be unique",
+          });
+        }
+        pointIds.add(point.id);
+      }
+    }
+  });
 
 export const updateThrottleRequestSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
@@ -1764,11 +1859,20 @@ export type CreateControlAreaRequest = z.infer<
 export type RenameControlAreaRequest = z.infer<
   typeof renameControlAreaRequestSchema
 >;
+export type ReplaceControlAreasRequest = z.infer<
+  typeof replaceControlAreasRequestSchema
+>;
 export type CreateChannelRequest = z.infer<typeof createChannelRequestSchema>;
 export type RenameChannelRequest = z.infer<typeof renameChannelRequestSchema>;
 export type UpdateChannelRequest = z.infer<typeof updateChannelRequestSchema>;
+export type ReplaceControlAreaChannelsRequest = z.infer<
+  typeof replaceControlAreaChannelsRequestSchema
+>;
 export type ReplaceScheduleRequest = z.infer<
   typeof replaceScheduleRequestSchema
+>;
+export type ReplaceControlAreaScheduleConfigurationRequest = z.infer<
+  typeof replaceControlAreaScheduleConfigurationRequestSchema
 >;
 export type UpdateThrottleRequest = z.infer<typeof updateThrottleRequestSchema>;
 export type ReplaceMappingProfileRequest = z.infer<

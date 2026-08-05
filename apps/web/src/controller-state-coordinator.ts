@@ -312,7 +312,7 @@ export class ControllerStateCoordinator {
       return;
     }
     if (event.type === "system.resync-required") {
-      this.#resynchronize(event.data.currentRevision);
+      this.#resynchronize(event.data.currentRevision, true);
       return;
     }
     if (event.type === "device.contact") {
@@ -393,12 +393,14 @@ export class ControllerStateCoordinator {
     }
   }
 
-  #resynchronize(requiredRevision: number): void {
+  #resynchronize(
+    requiredRevision: number,
+    authoritativeRevision = false,
+  ): void {
     this.#closeStream();
-    this.#requiredSnapshotRevision = Math.max(
-      this.#state.revision,
-      requiredRevision,
-    );
+    this.#requiredSnapshotRevision = authoritativeRevision
+      ? requiredRevision
+      : Math.max(this.#state.revision, requiredRevision);
     this.#reconnectAfterSnapshot = true;
     this.#setState({
       ...this.#state,

@@ -11,6 +11,8 @@ export function configurationErrorMessage(error: Error): string {
       return error.details.conflicts
         .map((conflict) => conflict.message)
         .join(" ");
+    case "not_found":
+      return "A related configuration item no longer exists. Refresh and try again.";
     default:
       return error.details.message;
   }
