@@ -15,8 +15,8 @@ hosted validation jobs. That historical release source is
 exact digest passed health and both SQLite integrity checks as UID/GID 1000 on
 both platforms. It predates firmware 4.1 and the per-device command-lane work,
 so it must not be deployed as the current release. Select and record a new
-source commit and exact image digest after this branch passes protected CI and
-is published from `master`.
+source commit and exact image digest from a successful protected `master`
+publication; the supervised deployment command performs that selection.
 
 Firmware 5.0 adds controller-managed pull OTA, output-state telemetry, persistent
 update-all policy, SHA-256 verification, and probation rollback. Run the
@@ -27,8 +27,10 @@ All reachable hosted branches contain only redacted credential sentinels and
 retain the original commit topology. One unreachable historical GitHub object
 remains directly addressable; credential revocation, GitHub Support cleanup,
 and resolution of its open secret-scanning alert remain external gates. The
-rewrite has not been deployed to or tested on the aquarium Pi. The canonical
-evidence and remaining operator gates are in the
+rewrite is deployed on the aquarium Pi, and a supported ESP has completed a
+multi-day live schedule test. Firmware 3.x devices remain visible but are
+command-gated while they continue using their local schedules. The canonical
+evidence and remaining fleet/operator gates are in the
 [readiness report](docs/readiness-report.md).
 
 ## Frameworks and technology stack
@@ -203,6 +205,10 @@ limited to pushes on the repository's default branch. The configured
 uses a run-unique tag, reports the resulting manifest digest, and smoke-tests
 that exact digest on amd64 and ARM64.
 Pull-request code never runs on a Pi, and no deploy job exists.
+After a successful protected `master` publication, a maintainer can run the
+approval-gated `npm run production:deploy` command from a trusted workstation.
+It selects the exact CI digest, copies a verified recovery bundle off the Pi,
+and verifies or rolls back the supervised update.
 
 The historical pre-4.1
 [pull-request run](https://github.com/AdrianNO1/AquariumController/actions/runs/30158546118)
@@ -327,22 +333,23 @@ separate verified database/archive backup procedure.
   support `mqtts://`; enabling
   TLS would require another firmware change and physical validation.
 - Set `AQUARIUM_FIRMWARE_BASE_URL` to the controller's ESP-reachable local HTTP
-  origin, such as `http://192.168.1.73:3000`. OTA has no separate password; the
+  origin, such as `http://192.168.1.73:3001`. OTA has no separate password; the
   controller and ESP validate the bundled image by exact size and SHA-256, so
   the HTTP endpoint and MQTT broker must remain restricted to the trusted LAN.
-- After this branch is merged and published, set the production Compose
-  `AQUARIUM_CONTROLLER_IMAGE_REPOSITORY` and
-  `AQUARIUM_CONTROLLER_IMAGE_SHA256` to that newly selected public package and
-  exact digest. Do not use the historical pre-4.1 digest recorded above.
-  Configure the Pi bind/storage/broker paths, production MQTT confirmation, and
-  backup/rollback locations. No Pi deploy workflow is enabled. Follow the
-  supervised
+- For subsequent releases, merge through protected CI and run
+  `npm run production:deploy` from an up-to-date, clean local `master`. No Pi
+  deploy workflow is enabled. The local command selects the exact successful
+  GHCR publication, creates and copies a verified recovery set off-host, and
+  performs a supervised verified update with automatic image rollback. Follow
+  the
   [Raspberry Pi deployment and rollback runbook](docs/production-deployment.md),
-  including its storage preflight and exact-digest checks.
+  including its database-restore procedure for a migration-incompatible
+  rollback.
 - Use the concise
   [Pi production handoff checklist](docs/pi-production-handoff.md) to collect
   the remaining external inputs and choose the correct first-migration or
-  subsequent-upgrade rollback branch. Repository work does not contact the Pi.
+  subsequent-upgrade rollback branch. Ordinary repository work and GitHub CI do
+  not contact the Pi.
 - Configure and test a separate backup/offsite lifecycle for the archive
   directory using `verify-archive-set`; database backups alone do not contain
   archived event payloads.

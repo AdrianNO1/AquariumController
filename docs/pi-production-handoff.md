@@ -1,19 +1,21 @@
 # Raspberry Pi production handoff
 
-Updated: 2026-08-02
+Updated: 2026-08-06
 
-This is the concise external-operator checklist for putting AquariumController
-into production. Repository implementation and validation did **not** contact,
-inspect, or change the Pi. Run the commands and detailed safety checks from
-[the full production deployment and rollback runbook](production-deployment.md);
-this checklist does not replace it.
+This is the concise external-operator checklist retained for first cutover,
+fleet upgrades, and incident recovery. The initial controller deployment on the
+Pi is complete; use `npm run production:deploy` for subsequent supervised
+upgrades. Its exact-CI-artifact, off-host-backup, typed-confirmation,
+verification, and automatic image-rollback behavior is documented in
+[the full production deployment and rollback runbook](production-deployment.md).
+This checklist does not replace that runbook.
 
 ## Current handoff state
 
-The repository contains firmware 5.0.6, correlated-request, per-device-lane,
-latest-only scheduler, and device-local failure implementation. Before this
-checklist becomes a deployment handoff, the branch must pass protected CI,
-merge, publish a new image, and record that image's exact digest.
+The deployed repository contains firmware 5.0.6, correlated-request,
+per-device-lane, latest-only scheduler, and device-local failure
+implementation. Every subsequent release must pass protected CI, merge,
+publish a new image, and use that image's exact digest.
 
 Current firmware 5.0.6/per-device-lane local evidence:
 
@@ -71,7 +73,9 @@ actuators are not claimed verified.
       returned multi-platform `sha256` manifest digest. Do not deploy a mutable
       tag or the historical pre-4.1 digest.
 
-There is deliberately no CI job that deploys to the Pi.
+There is deliberately no CI job that deploys to the Pi. A maintainer must run
+`npm run production:deploy` locally after the exact `master` CI publication
+succeeds.
 
 ## 2. Pi platform gaps
 

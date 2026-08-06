@@ -60,7 +60,11 @@ jobs:
           AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME: Authorization
           AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE: ci-placeholder-secret
         run: |
-          bash -n deployment/pi-preflight.sh
+          bash -n \
+            deployment/pi-preflight.sh \
+            deployment/pi-backup-production.sh \
+            deployment/pi-deploy-production.sh \
+            deployment/pi-verify-production.sh
           docker compose --file compose.production.yaml config --quiet
           rendered="$(docker compose --file compose.production.yaml config --format json)"
           jq --exit-status '

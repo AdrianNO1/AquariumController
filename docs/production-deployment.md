@@ -1,18 +1,72 @@
 # Raspberry Pi production deployment
 
-Updated: 2026-08-02
+Updated: 2026-08-06
 
-This is a supervised deployment and rollback runbook. No repository workflow
-contacts the Pi or deploys the controller. Commands in this document must be
-run by an operator on the intended Pi from a reviewed checkout.
+This is a supervised deployment and rollback runbook. No GitHub workflow
+contacts the Pi or deploys the controller. Routine upgrades are initiated by
+an operator from a trusted workstation; first migration and manual recovery
+commands are run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
 [Pi production handoff checklist](pi-production-handoff.md). The current
-firmware 5.0.6 and per-device-lane branch must pass protected CI, merge, publish,
-and receive a newly selected immutable digest before any command in this
-runbook is used. Historical pre-4.1 validation is recorded in the
+firmware 5.0.6 and per-device command-lane implementation are deployed. Every
+future candidate must still pass protected CI, merge, publish, and receive a
+newly selected immutable digest before its deployment. Historical pre-4.1
+validation is recorded in the
 [readiness report](readiness-report.md); it is not the current deployment
-identity. This runbook does not claim Pi or production hardware validation.
+identity.
+
+## Routine upgrade from a trusted workstation
+
+After the initial Pi setup and migration are complete, use the repository's
+single supervised deployment command:
+
+```powershell
+npm run production:deploy -- --dry-run
+npm run production:deploy
+```
+
+The command is deliberately not continuous deployment. It requires a clean
+local `master` equal to `origin/master`, a successful `master` push run of the
+`CI` workflow for that exact commit, and a successful multi-architecture image
+publisher job. It reads the publisher's exact immutable GHCR digest rather than
+using a mutable image tag. GHCR is GitHub Container Registry: GitHub's Docker
+image store at `ghcr.io`; this repository publishes controller images at
+`ghcr.io/adrianno1/aquarium-controller`.
+
+Create the ignored workstation file `.data/pi-login.json`:
+
+```json
+{
+  "host": "<Pi LAN address>",
+  "username": "<Pi deployment account>"
+}
+```
+
+SSH key authentication is preferred. On Windows, the same ignored JSON object
+may also contain a `password` field; the tracked askpass wrapper passes it to
+OpenSSH without putting it on the command line. The file is excluded by
+`.gitignore`; never commit or paste its contents into logs. Other platforms use
+the operator's normal SSH authentication.
+
+Before restarting anything, the command asks for a commit-specific typed
+confirmation. It then:
+
+1. verifies the currently running release and both SQLite databases;
+2. creates a schema-v2 database backup plus a matching archive-set manifest;
+3. copies the complete database/archive recovery bundle into the workstation's
+   ignored `.data/pi-backups` directory and verifies its SHA-256;
+4. checks out the exact reviewed commit on the Pi and updates only the pinned
+   image digest in the root-owned production configuration;
+5. runs production preflight, starts the exact image, and verifies the source
+   label, container hardening, readiness, and database integrity; and
+6. restores the prior checkout, configuration, and image if any deployment or
+   verification step fails.
+
+An automatic image rollback does not rewrite a migrated database. The verified
+off-host recovery set is the fallback if a future release introduces a
+database change that the previous image cannot read. Use the manual subsequent
+SQLite rollback procedure below in that case.
 
 ## 0. Verify the repository release-source gate
 
