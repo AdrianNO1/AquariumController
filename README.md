@@ -3,7 +3,7 @@
 This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
 controller. The previous Python and Flask application remains under `.old/` as
 migration evidence. The supported ESP32 source is
-`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 5.0.6 is compiled and bundled
+`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 6.0.0 is compiled and bundled
 with the controller release.
 
 Historical pre-4.1 release evidence dated 2026-07-25 includes 97 files/638 unit
@@ -18,18 +18,19 @@ so it must not be deployed as the current release. Select and record a new
 source commit and exact image digest from a successful protected `master`
 publication; the supervised deployment command performs that selection.
 
-Firmware 5.0 adds controller-managed pull OTA, output-state telemetry, persistent
-update-all policy, SHA-256 verification, and probation rollback. Run the
-repository verification lanes against the final source before selecting a new
-published image digest.
+Firmware 6.0 adds the versioned structured MQTT protocol and per-device topics
+to the existing pull OTA, output telemetry, persistent update-all policy,
+SHA-256 verification, and probation rollback. Run the repository verification
+lanes against the final source before selecting a new published image digest.
 
 All reachable hosted branches contain only redacted credential sentinels and
 retain the original commit topology. One unreachable historical GitHub object
 remains directly addressable; credential revocation, GitHub Support cleanup,
 and resolution of its open secret-scanning alert remain external gates. The
 rewrite is deployed on the aquarium Pi, and a supported ESP has completed a
-multi-day live schedule test. Firmware 3.x devices remain visible but are
-command-gated while they continue using their local schedules. The canonical
+multi-day live schedule test. Firmware 3.x devices are command-gated and
+continue using their local schedules; the new controller does not promise UI
+discovery compatibility for them. The canonical
 evidence and remaining fleet/operator gates are in the
 [readiness report](docs/readiness-report.md).
 
@@ -42,16 +43,19 @@ evidence and remaining fleet/operator gates are in the
 | Browser       | React 19, Vite 8, React Router 8, TanStack Query 5                                                         |
 | Contracts     | Zod 4 schemas shared by controller and browser                                                             |
 | Persistence   | Two SQLite WAL databases through Kysely and `better-sqlite3`                                               |
-| ESP transport | MQTT.js 5 using the deployed MQTT 3.1.1/QoS 0 protocol                                                     |
+| ESP transport | MQTT.js 5 using MQTT 3.1.1/QoS 0 with versioned JSON and per-device topics                                 |
 | Tests         | Vitest, Testing Library, Testcontainers with pinned Mosquitto, Playwright/axe, and an independent fake ESP |
 
 One controller process owns HTTP, SSE, scheduling, persistence, alerts, and the
 MQTT adapter. Mosquitto remains a separate process. The controller is
 deliberately not horizontally scalable because device queues, schedules, and
-state revisions need one owner. Within that process, firmware 4.1 request IDs
-support bounded per-device MQTT command lanes rather than one global
-response-waiting lane. Firmware 5.0.6 retains those request IDs and adds
-controller-managed pull OTA plus single-publication command delivery.
+state revisions need one owner. Firmware 6.0 uses correlated JSON requests and
+responses on isolated per-device MQTT topics. The controller runs bounded
+per-device command lanes, so an unresponsive ESP cannot block healthy devices.
+Legacy broadcast topics remain passive discovery inputs plus one narrowly
+scoped operator-initiated OTA bridge for firmware 5.x. The controller never
+sends actuator, configuration, schedule, or time commands through them, and
+fleet update-all does not enroll v5 devices automatically.
 
 ESP pin mappings use explicit hardware profiles and explicit per-device profile
 selection; device names no longer choose mappings. The bundled NodeMCU ESP-32S
@@ -189,7 +193,7 @@ npm run test:integration
 npm run test:e2e
 npm run build
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.0 .
 ```
 
 For a new OTA release, use `npm run firmware:release -- <version>` rather than
@@ -306,13 +310,18 @@ separate verified database/archive backup procedure.
   to purge the directly addressable unreachable object/cached view, resolve the
   remaining secret-scanning alert as `revoked`, and keep secret scanning and
   push protection enabled.
-- Flash firmware 5.0.6 to every deployed ESP32 (USB is required for devices
-  older than 5.0.0) and persist its device-specific network configuration in NVS.
-  Versions older than 5.0.0 remain visible but are marked
-  `firmware_unsupported`, excluded from schedule/override commands, and
-  identified on the frontend. Supported 5.0.0+ firmware remains online when an
-  update is available. Firmware 5.0.0 adds correlated response IDs, wear-limited
-  persisted diagnostics, best-effort per-pin schedule activation, and
+- Flash firmware 6.0.0 to every deployed ESP32 and persist its device-specific
+  network configuration in NVS. Firmware 5.x can be upgraded individually from
+  the website through a bounded legacy OTA bridge; it is never enrolled by
+  update-all and receives no other legacy command. Firmware below 5.0.0 requires
+  USB bootstrap. If a firmware-5 device already persisted anonymous MQTT
+  settings, use the documented one-time USB network-reprovision switch
+  before disabling anonymous broker access. Older firmware remains visible
+  through passive discovery, is
+  marked `firmware_unsupported`, and receives no schedule, output,
+  configuration, or time-sync commands. Firmware 6.0.0 retains
+  wear-limited persisted diagnostics, best-effort per-pin schedule activation,
+  correlated outcomes, and
   rollover-safe override expiry. Routine controller and manual PWM writes use
   `overwrite=true`, so the ESP suppresses its local schedule while the Pi is
   refreshing it and resumes local scheduling after 120 seconds of Pi silence.
@@ -322,11 +331,12 @@ separate verified database/archive backup procedure.
   so DNS/NTP failure does not delay MQTT or manual-control startup. If neither
   the Pi nor NTP is reachable after reboot, a valid persisted EEPROM timestamp
   intentionally authorizes the local schedule from that boundedly stale
-  estimate. Firmware 5.0.6 additionally reports the board hardware profile,
+  estimate. Firmware 6.0.0 additionally reports the board hardware profile,
   enforces the safe output-pin set, bounds SPIFFS repair attempts, preserves
   local scheduling when network configuration is unavailable, verifies MQTT
   subscription and OTA probation transitions, and removes remote fleet-wide
-  EEPROM clearing.
+  EEPROM clearing. It publishes commands, responses, and announcements as
+  strict versioned JSON on per-device topics.
 - Configure the ESP32's ignored local firmware header with both an MQTT username
   and password plus the intended NTP host, and restrict that plaintext broker
   listener to the trusted aquarium LAN. The current ESP firmware does not

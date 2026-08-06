@@ -138,6 +138,20 @@ const safeConfigurationValues = [
 for (const value of safeConfigurationValues) {
   assertContains(safeConfiguration, value, `safe configuration value ${value}`);
 }
+assertContains(
+  safeConfiguration,
+  "#define AQUARIUM_REPROVISION_NETWORK_CONFIG false",
+  "disabled generic network reprovisioning",
+);
+if (
+  safeConfiguration.includes(
+    "#define AQUARIUM_REPROVISION_NETWORK_CONFIG true",
+  )
+) {
+  throw new Error(
+    "Refusing to release generic firmware with network reprovisioning enabled",
+  );
+}
 
 const artifactFileName = `ESP32Code-${version}.bin`;
 const artifactPath = join(artifactDirectory, artifactFileName);
@@ -201,9 +215,13 @@ try {
 function validateCompiledBinary(binary, targetVersion, expectedSafeValues) {
   const requiredValues = [
     targetVersion,
-    "aquarium/command",
-    "aquarium/announce",
-    "aquarium/response",
+    "aquarium",
+    "/v1",
+    "/discovery/request",
+    "/devices/",
+    "/command",
+    "/announce",
+    "/response",
     ...expectedSafeValues,
   ];
   for (const value of requiredValues) {
@@ -212,9 +230,7 @@ function validateCompiledBinary(binary, targetVersion, expectedSafeValues) {
     }
   }
   for (const topic of [
-    "test/aquarium/command",
-    "test/aquarium/announce",
-    "test/aquarium/response",
+    "test/aquarium",
   ]) {
     if (binary.includes(Buffer.from(topic, "ascii"))) {
       throw new Error(`Compiled release firmware contains test topic: ${topic}`);

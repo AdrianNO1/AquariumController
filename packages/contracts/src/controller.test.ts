@@ -768,10 +768,10 @@ describe("controller contracts", () => {
     expect(
       patchDeviceConfigurationRequestSchema.parse({
         expectedRevision: 2,
-        name: "Tank-A:1",
+        name: "Tank;A:1",
       }),
-    ).toEqual({ expectedRevision: 2, name: "Tank-A:1" });
-    for (const name of ["Tank A", "Tank;A", "Blå", "a".repeat(32)]) {
+    ).toEqual({ expectedRevision: 2, name: "Tank;A:1" });
+    for (const name of ["Tank A", "Blå", "a".repeat(32)]) {
       expect(
         patchDeviceConfigurationRequestSchema.safeParse({
           expectedRevision: 2,

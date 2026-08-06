@@ -1,3 +1,11 @@
+import {
+  FAKE_ESP_MQTT_PROTOCOL_VERSION,
+  parseFakeEspCommandRequest,
+  parseFakeEspDiscoveryRequest,
+  type FakeEspCommand,
+  type FakeEspCommandResult,
+} from "./structured-protocol.js";
+
 import type { FakeEspClock } from "./clock.js";
 import { SystemFakeEspClock } from "./clock.js";
 import type {
@@ -15,7 +23,7 @@ import {
 } from "./transport.js";
 
 export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
-export const FAKE_ESP_FIRMWARE_VERSION = "5.0.6";
+export const FAKE_ESP_FIRMWARE_VERSION = "6.0.0";
 export const FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES = 5_120;
 export const FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS = 120_000;
 
@@ -116,16 +124,6 @@ interface PendingPublication {
   readonly payload: string;
 }
 
-interface CommandResponse {
-  readonly index: number;
-  readonly response: string;
-}
-
-interface RequestEnvelope {
-  readonly commands: string;
-  readonly requestId?: string;
-}
-
 export class FakeEspActor {
   public readonly topics: FakeEspTopics;
 
@@ -142,7 +140,7 @@ export class FakeEspActor {
   private readonly analogValues = new Map<number, number>();
   private readonly pinAttachmentFailures = new Set<number>();
   private readonly pendingResponses: PendingPublication[] = [];
-  private unsubscribe: (() => void) | undefined;
+  private readonly unsubscribeCallbacks: Array<() => void> = [];
   private connected = false;
   private deviceName = DEFAULT_DEVICE_NAME;
   private deviceId = "";
@@ -200,11 +198,10 @@ export class FakeEspActor {
       this.pinAttachmentFailures.add(pin);
     }
 
+    this.bootFromPersistence();
     this.topics = createFakeEspTopics(
       options.namespace ?? FAKE_ESP_DEFAULT_NAMESPACE,
     );
-
-    this.bootFromPersistence();
   }
 
   public connect(): void {
@@ -212,18 +209,20 @@ export class FakeEspActor {
       return;
     }
     this.connected = true;
-    this.unsubscribe = this.transport.subscribe(
-      this.topics.command,
-      (topic, payload) => {
-        this.receive(topic, payload);
-      },
+    const receive = (topic: string, payload: string): void => {
+      this.receive(topic, payload);
+    };
+    this.unsubscribeCallbacks.push(
+      this.transport.subscribe(this.topics.discoveryRequest, receive),
+      this.transport.subscribe(this.topics.command(this.deviceId), receive),
     );
     this.announcePresence();
   }
 
   public disconnect(): void {
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
+    for (const unsubscribe of this.unsubscribeCallbacks.splice(0)) {
+      unsubscribe();
+    }
     this.connected = false;
   }
 
@@ -521,22 +520,37 @@ export class FakeEspActor {
   }
 
   private receive(topic: string, message: string): void {
-    if (!this.connected || topic !== this.topics.command) {
+    if (!this.connected) {
       return;
     }
     if (
       new TextEncoder().encode(message).length >
       FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES
     ) {
+      this.recordLastError(
+        "mqtt_request_too_large",
+        "warning",
+        "MQTT command request exceeded the payload limit",
+      );
       return;
     }
 
     this.flushPendingResponses(this.clock.nowMilliseconds());
-    if (message === "discover") {
-      this.announcePresence();
+    if (topic === this.topics.discoveryRequest) {
+      if (parseFakeEspDiscoveryRequest(message)) {
+        this.announcePresence();
+      } else {
+        this.recordLastError(
+          "invalid_mqtt_request",
+          "warning",
+          "Invalid MQTT discovery request",
+        );
+      }
       return;
     }
-    this.processCompleteMessage(message);
+    if (topic === this.topics.command(this.deviceId)) {
+      this.processCompleteMessage(message);
+    }
   }
 
   private announcePresence(): void {
@@ -544,8 +558,9 @@ export class FakeEspActor {
       return;
     }
     this.transport.publish(
-      this.topics.announce,
+      this.topics.announcement(this.deviceId),
       JSON.stringify({
+        protocolVersion: FAKE_ESP_MQTT_PROTOCOL_VERSION,
         name: this.deviceName,
         freq: this.frequency,
         res: this.resolution,
@@ -557,6 +572,7 @@ export class FakeEspActor {
         ...(this.lastError === undefined
           ? {}
           : { lastError: { ...this.lastError } }),
+        diagnosticStorageHealthy: !this.diagnosticPersistenceFailed,
         scheduleHash: this.scheduleHash(),
       }),
     );
@@ -573,63 +589,116 @@ export class FakeEspActor {
   }
 
   private processCompleteMessage(message: string): void {
-    const envelope = parseRequestEnvelope(message);
-    if (envelope === undefined) {
+    const parsed = parseFakeEspCommandRequest(message);
+    if (parsed === undefined || parsed.deviceId !== this.deviceId) {
+      this.recordLastError(
+        "invalid_mqtt_request",
+        "warning",
+        "Invalid or misaddressed MQTT command request",
+      );
       return;
     }
     const responseId = this.deviceId;
     const responseName = this.deviceName;
-    const responses: CommandResponse[] = [];
-    const commands = envelope.commands.split(";");
-    if (envelope.commands.endsWith(";")) {
-      commands.pop();
-    }
-    const commandNames = commands.map((command) =>
-      this.commandName(command, responseId, responseName),
+    const results = parsed.commands.map((command) =>
+      this.processCommand(command),
     );
-
-    commands.forEach((command, index) => {
-      const response = this.processCommand(command);
-      if (response.length > 0) {
-        responses.push({ index, response });
-      }
-    });
-
-    if (responses.length > 0) {
-      this.publishResponse(
-        JSON.stringify({
-          id: responseId,
-          name: responseName,
-          ...(envelope.requestId === undefined
-            ? {}
-            : { requestId: envelope.requestId }),
-          responses,
-        }),
-        commandNames,
-      );
-    }
+    const response = {
+      protocolVersion: FAKE_ESP_MQTT_PROTOCOL_VERSION,
+      deviceId: responseId,
+      name: responseName,
+      requestId: parsed.requestId,
+      results,
+    };
+    this.publishResponse(
+      JSON.stringify(response),
+      parsed.commands.map(({ kind }) => kind),
+    );
   }
 
-  private processCommand(message: string): string {
-    const firstSpace = message.indexOf(" ");
-    if (firstSpace === -1) {
-      return "";
+  private processCommand(command: FakeEspCommand): FakeEspCommandResult {
+    let legacyResponse: string;
+    switch (command.kind) {
+      case "set_pwm":
+        legacyResponse = this.handleSetCommand(
+          `${command.pin} ${command.value} ${command.overwrite ? 1 : 0}`,
+        );
+        if (!legacyResponse.startsWith("E:")) {
+          return {
+            index: command.index,
+            kind: command.kind,
+            ok: true,
+            pin: command.pin,
+            value: command.value,
+            overwrite: command.overwrite,
+          };
+        }
+        break;
+      case "ping":
+        return { index: command.index, kind: command.kind, ok: true };
+      case "edit_configuration":
+        legacyResponse = this.handleEditCommand(
+          `${command.name} ${command.pwmFrequencyHz} ${command.pwmResolutionBits}`,
+        );
+        if (!legacyResponse.startsWith("E:")) {
+          return {
+            index: command.index,
+            kind: command.kind,
+            ok: true,
+            name: command.name,
+            pwmFrequencyHz: command.pwmFrequencyHz,
+            pwmResolutionBits: command.pwmResolutionBits,
+          };
+        }
+        break;
+      case "schedule":
+        legacyResponse = this.handleScheduleCommand(
+          JSON.stringify(command.schedule),
+        );
+        if (!legacyResponse.startsWith("E:")) {
+          return { index: command.index, kind: command.kind, ok: true };
+        }
+        break;
+      case "sync_time":
+        this.timeInitialized = true;
+        this.timeBaseEpochSeconds = command.epochSeconds;
+        this.timeBaseMilliseconds = this.clock.nowMilliseconds();
+        this.queueTimeCheckpoint(true);
+        return {
+          index: command.index,
+          kind: command.kind,
+          ok: true,
+          epochSeconds: command.epochSeconds,
+        };
+      case "analog_read":
+        legacyResponse = this.handleReadCommand(String(command.pin));
+        if (!legacyResponse.startsWith("E:")) {
+          return {
+            index: command.index,
+            kind: command.kind,
+            ok: true,
+            pin: command.pin,
+            value: this.analogValues.get(command.pin) ?? 0,
+          };
+        }
+        break;
+      case "firmware_update":
+        return {
+          index: command.index,
+          kind: command.kind,
+          ok: true,
+          status: "accepted",
+        };
     }
-    const targetDevice = message.slice(0, firstSpace);
-    if (targetDevice !== this.deviceName && targetDevice !== this.deviceId) {
-      return "";
-    }
-
-    const remainder = message.slice(firstSpace + 1);
-    if (remainder.startsWith("sc ")) {
-      return this.handleScheduleCommand(remainder.slice(3));
-    }
-
-    const secondSpace = remainder.indexOf(" ");
-    const command =
-      secondSpace === -1 ? remainder : remainder.slice(0, secondSpace);
-    const args = secondSpace === -1 ? "" : remainder.slice(secondSpace + 1);
-    return this.handleCommand(command, args);
+    return {
+      index: command.index,
+      kind: command.kind,
+      ok: false,
+      error: {
+        code: errorCodeForLegacyResponse(legacyResponse),
+        message: legacyResponse.slice(3).trim().slice(0, 160),
+      },
+    };
   }
 
   private handleScheduleCommand(scheduleJson: string): string {
@@ -648,33 +717,6 @@ export class FakeEspActor {
     }
     this.processSchedule(scheduleJson, true);
     return "schedule_ok";
-  }
-
-  private handleCommand(command: string, args: string): string {
-    if (command === "s") {
-      return this.handleSetCommand(args);
-    }
-    if (command === "p") {
-      return "o";
-    }
-    if (command === "e") {
-      return this.handleEditCommand(args);
-    }
-    if (command === "sync") {
-      const serverTime = parseSyncTime(args);
-      if (serverTime !== undefined) {
-        this.timeInitialized = true;
-        this.timeBaseEpochSeconds = serverTime;
-        this.timeBaseMilliseconds = this.clock.nowMilliseconds();
-        this.queueTimeCheckpoint(true);
-        return String(serverTime);
-      }
-      return "E: Invalid time value";
-    }
-    if (command === "r") {
-      return this.handleReadCommand(args);
-    }
-    return "E: Invalid command";
   }
 
   private handleSetCommand(args: string): string {
@@ -1020,7 +1062,10 @@ export class FakeEspActor {
     for (let index = 0; index < publicationCount; index += 1) {
       if (this.responseFaults.delayMilliseconds === 0) {
         if (this.connected) {
-          this.transport.publish(this.topics.response, publishedPayload);
+          this.transport.publish(
+            this.topics.response(this.deviceId),
+            publishedPayload,
+          );
         }
       } else {
         this.pendingResponses.push({
@@ -1031,24 +1076,6 @@ export class FakeEspActor {
     }
   }
 
-  private commandName(
-    message: string,
-    deviceId: string,
-    deviceName: string,
-  ): string | null {
-    const firstSpace = message.indexOf(" ");
-    if (firstSpace === -1) {
-      return null;
-    }
-    const targetDevice = message.slice(0, firstSpace);
-    if (targetDevice !== deviceName && targetDevice !== deviceId) {
-      return null;
-    }
-    const remainder = message.slice(firstSpace + 1);
-    const secondSpace = remainder.indexOf(" ");
-    return secondSpace === -1 ? remainder : remainder.slice(0, secondSpace);
-  }
-
   private flushPendingResponses(now: number): void {
     if (!this.connected) {
       return;
@@ -1056,7 +1083,10 @@ export class FakeEspActor {
     const remaining: PendingPublication[] = [];
     for (const publication of this.pendingResponses) {
       if (publication.dueAtMilliseconds <= now) {
-        this.transport.publish(this.topics.response, publication.payload);
+        this.transport.publish(
+          this.topics.response(this.deviceId),
+          publication.payload,
+        );
       } else {
         remaining.push(publication);
       }
@@ -1100,7 +1130,7 @@ export function normalizeFakeEspResponseFaults(
   }
   if (
     dropNextResponseForCommand !== null &&
-    !/^[a-z]{1,16}$/u.test(dropNextResponseForCommand)
+    !/^[a-z_]{1,32}$/u.test(dropNextResponseForCommand)
   ) {
     throw new RangeError(
       "One-shot response fault command must contain 1-16 lowercase letters",
@@ -1222,36 +1252,15 @@ function scaleNormalizedPwmValue(
   return rescalePwmValue(value, 8, targetResolution);
 }
 
-function parseSyncTime(value: string): number | undefined {
-  if (!/^\d+$/.test(value)) {
-    return undefined;
-  }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) &&
-    parsed >= MINIMUM_RESTORED_TIME &&
-    parsed <= MAXIMUM_SYNC_TIME
-    ? parsed
-    : undefined;
-}
-
-function parseRequestEnvelope(message: string): RequestEnvelope | undefined {
-  if (!message.startsWith("request:")) {
-    return { commands: message };
-  }
-  const separator = message.indexOf("|", 8);
-  if (separator === -1) {
-    return undefined;
-  }
-  const requestId = message.slice(8, separator);
-  const commands = message.slice(separator + 1);
-  if (
-    requestId.length > 64 ||
-    !/^[A-Za-z0-9_-]+$/u.test(requestId) ||
-    commands.length === 0
-  ) {
-    return undefined;
-  }
-  return { commands, requestId };
+function errorCodeForLegacyResponse(response: string): string {
+  const code = response
+    .slice(3)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "_")
+    .replace(/^_+|_+$/gu, "")
+    .slice(0, 48);
+  return code.length === 0 ? "command_failed" : code;
 }
 
 function validScheduleDocument(schedule: unknown): boolean {

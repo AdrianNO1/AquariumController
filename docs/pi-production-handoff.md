@@ -12,19 +12,19 @@ This checklist does not replace that runbook.
 
 ## Current handoff state
 
-The deployed repository contains firmware 5.0.6, correlated-request,
-per-device-lane, latest-only scheduler, and device-local failure
+The repository contains firmware 6.0.0, structured per-device MQTT,
+per-device lanes, latest-only scheduler, and device-local failure
 implementation. Every subsequent release must pass protected CI, merge,
 publish a new image, and use that image's exact digest.
 
-Current firmware 5.0.6/per-device-lane local evidence:
+Current firmware 6.0.0/structured-protocol local evidence is:
 
 - lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 111 files/775 tests;
-- critical: 88 files/656 tests;
+- unit: 111 files/761 tests;
+- critical: 88 files/639 tests;
 - real Mosquitto integration: 5/5;
 - production Playwright: 21/21 with zero retries; and
-- pinned firmware compile: 89% flash and 16% global RAM.
+- pinned firmware compile: 90% flash and 16% global RAM.
 
 These results have not yet been confirmed by the protected pull-request or
 default-branch workflows.
@@ -96,8 +96,10 @@ succeeds.
 
 ## 3. Network, MQTT, and notifications
 
-- [ ] Provision a production MQTT account for the controller and a credential
-      for firmware 5.0.6.
+- [ ] Provision separate production MQTT accounts for the controller and
+      firmware 6.0.0 and install the reviewed password-file/ACL configuration
+      from the full runbook. Enable `allow_anonymous false` only after every
+      ESP that must stay connected has persisted credentials.
 - [ ] Restrict the plaintext MQTT listener to the trusted aquarium LAN.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
       interlock.
@@ -130,12 +132,19 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 5.0.6 with an ignored local configuration containing the
+- [ ] Build firmware 6.0.0 with an ignored local configuration containing the
       intended Wi-Fi, MQTT username/password, and NTP host.
+- [ ] For a firmware-5 device with old settings already in NVS, set
+      `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` only in its one-time USB
+      build. Confirm authenticated reconnect, then use generic OTA images whose
+      release configuration keeps the switch `false`.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports firmware 5.0.6 and hardware profile
-      `nodemcu-esp32s-v1.1`; firmware older than 5.0.0 is intentionally marked
-      `firmware_unsupported` and receives no actuator work.
+- [ ] Confirm every device reports firmware 6.0.0 and hardware profile
+      `nodemcu-esp32s-v1.1`; other protocol majors are intentionally marked
+      `firmware_unsupported` and receive no actuator, configuration, schedule,
+      or time-sync work. Firmware 5.x can be upgraded individually through the
+      website's legacy OTA bridge; update-all excludes it. Older versions need
+      USB.
 - [ ] Review each device's explicit mapping-profile selection after import.
       Names no longer select profiles. Investigate every GPIO12 warning and
       confirm the existing driver still does not pull that strapping pin high
@@ -176,8 +185,11 @@ delete and reuse a failed first-import target.
 - [ ] Load values from an operator-managed secret store outside the checkout;
       do not use or commit a repository `.env`.
 - [ ] Set the exact newly selected GHCR repository and 64-character digest, Pi
-      bind address, port, broker URL/interlock, and four storage paths.
+      bind address, port, ESP-reachable firmware base URL, broker
+      URL/username/password/interlock, and four storage paths.
 - [ ] Run `bash deployment/pi-preflight.sh compose.production.yaml` on the Pi.
+- [ ] Persist the exact validated values in root-owned mode-`0600`
+      `/etc/aquarium-controller/production.conf` using the full runbook.
 - [ ] Stop on any architecture, digest-pull, configuration, ownership, mode,
       nesting, free-space, or Compose-rendering failure.
 - [ ] Start only the immutable digest using the full runbook.

@@ -7,6 +7,7 @@ import {
   ManualFakeEspClock,
   MqttFakeEspSession,
 } from "@aquarium/fake-esp";
+import type { EspCommandInput, EspCommandRequest } from "@aquarium/esp-protocol";
 import type { Kysely } from "kysely";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -163,8 +164,12 @@ describe.sequential(
       );
       await waitUntil(
         () =>
-          commandPayloads().some(
-            (payload) => payload === `${DEVICE_ID} s 4 ${SCHEDULED_PWM} 1`,
+          commandOperations().some(
+            (command) =>
+              command.kind === "set_pwm" &&
+              command.pin === 4 &&
+              command.value === SCHEDULED_PWM &&
+              command.overwrite,
           ),
         "scheduled refresh wire command",
       );
@@ -198,8 +203,12 @@ describe.sequential(
       await schedulingTime.advanceBy(5_000);
       await waitUntil(
         () =>
-          commandPayloads().some(
-            (payload) => payload === `${DEVICE_ID} s 4 ${OVERRIDE_PWM} 1`,
+          commandOperations().some(
+            (command) =>
+              command.kind === "set_pwm" &&
+              command.pin === 4 &&
+              command.value === OVERRIDE_PWM &&
+              command.overwrite,
           ),
         "five-second override refresh",
       );
@@ -424,25 +433,17 @@ async function latestRevision(
   return Number(row.revision ?? 0);
 }
 
-function commandPayloads(): readonly string[] {
+function commandOperations(): readonly EspCommandInput[] {
   return broker
     .publications()
-    .filter(({ topic }) => topic === "test/aquarium/command")
-    .filter(({ payload }) => payload !== "discover")
-    .map(({ payload }) => correlatedCommandPayload(payload));
-}
-
-function correlatedCommandPayload(envelope: string): string {
-  const prefix = "request:";
-  const separator = envelope.indexOf("|");
-  if (!envelope.startsWith(prefix) || separator <= prefix.length) {
-    throw new Error("Expected a correlated MQTT command envelope");
-  }
-  const payload = envelope.slice(separator + 1);
-  if (payload.length === 0) {
-    throw new Error("Correlated MQTT command envelope had an empty payload");
-  }
-  return payload;
+    .filter(({ topic }) => topic.endsWith(`/${DEVICE_ID}/command`))
+    .flatMap(({ payload }) => {
+      const request = JSON.parse(payload) as EspCommandRequest;
+      return request.commands.map(({ index, ...command }) => {
+        void index;
+        return command;
+      });
+    });
 }
 
 function createTemporaryDirectory(): string {

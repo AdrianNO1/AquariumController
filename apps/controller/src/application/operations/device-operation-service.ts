@@ -9,7 +9,7 @@ import {
 } from "@aquarium/contracts";
 import {
   isSupportedEspFirmwareVersion,
-  parseEspErrorResponse,
+  requiresLegacyOtaBridge,
   supportsPullOta,
   utf8ByteLength,
 } from "@aquarium/esp-protocol";
@@ -37,7 +37,6 @@ import {
 import {
   LegacyMqttUnavailableError,
   type LegacyCommandOutcome,
-  type LegacyExpectedResponse,
   type LegacyWireCommand,
   type LegacyWireOperationResult,
 } from "../../infrastructure/mqtt/index.js";
@@ -182,6 +181,11 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     const command = buildLegacyWireCommand(
       { id: device.hardware_id },
       parsedRequest,
+      parsedRequest.kind === "firmware_update" &&
+        device.firmware_version !== null &&
+        requiresLegacyOtaBridge(device.firmware_version)
+        ? "legacy_v5_ota"
+        : "structured_v1",
     );
     const gateReason = this.#reserveDeviceAttempt(device.id, this.#now());
     if (gateReason !== null) {
@@ -603,11 +607,11 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
         ),
       },
     ];
-    const deviceReportedError =
-      outcome.status === "failed"
-        ? parseEspErrorResponse(outcome.response)
-        : null;
-    if (outcome.status === "succeeded" || deviceReportedError !== null) {
+    const deviceRespondedValidly =
+      outcome.status === "succeeded" ||
+      (outcome.status === "failed" &&
+        outcome.failure.kind === "device_error");
+    if (deviceRespondedValidly) {
       this.#responseCooldownUntilByDevice.delete(operation.deviceId);
       postCompletionTasks.push({
         description: "live device contact publication",
@@ -624,14 +628,17 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
           .recordResponseContact(outcome.targetId, wireResult.completedAtMs)
           .then(() => undefined),
       });
-    } else if (outcome.status === "failed") {
+    } else if (
+      outcome.status === "failed" &&
+      outcome.failure.kind === "protocol_error"
+    ) {
       postCompletionTasks.push({
         description: "device protocol fault persistence",
         promise: this.#deviceRegistry
           .recordProtocolFault(
             outcome.targetId,
             wireResult.completedAtMs,
-            describeProtocolFault(outcome.expectedResponse, outcome.response),
+            describeProtocolFault(outcome.failure.detail),
           )
           .then(() => undefined),
       });
@@ -721,7 +728,7 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
       request: operation.request,
       outcome,
       durationMs: completedAtMs - operation.requestedAtMs,
-      commandBytes: utf8ByteLength(command.command),
+      commandBytes: utf8ByteLength(JSON.stringify(command.operation)),
       priority: options.priority ?? "interactive",
     });
   }
@@ -804,20 +811,19 @@ function operationResultFromOutcome(
         analogValue: outcome.analogValue,
       };
     case "failed": {
-      const reportedError = parseEspErrorResponse(outcome.response);
-      if (reportedError !== null) {
+      if (outcome.failure.kind === "device_error") {
         return {
           status: "failed",
           wireOperationId,
           code: "device_reported_error",
-          message: `Device reported: ${reportedError}`,
+          message: `Device reported ${outcome.failure.code}: ${outcome.failure.message}`,
         };
       }
       return {
         status: "failed",
         wireOperationId,
         code: "unexpected_response",
-        message: "Device response did not match the expected response",
+        message: describeProtocolFault(outcome.failure.detail),
       };
     }
     case "outcome_unknown":
@@ -837,17 +843,7 @@ function operationResultFromOutcome(
   }
 }
 
-function describeExpectedResponse(expected: LegacyExpectedResponse): string {
-  return expected.kind === "exact"
-    ? JSON.stringify(expected.value)
-    : `an analog-read value for pin ${expected.pin}`;
-}
-
-function describeProtocolFault(
-  expected: LegacyExpectedResponse,
-  response: string,
-): string {
-  const detail = `Expected ${describeExpectedResponse(expected)}, received ${JSON.stringify(response)}`;
+function describeProtocolFault(detail: string): string {
   if (detail.length <= MAX_PROTOCOL_FAULT_MESSAGE_CHARACTERS) {
     return detail;
   }

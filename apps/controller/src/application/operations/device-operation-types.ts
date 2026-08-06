@@ -32,7 +32,7 @@ const editConfigurationRequestSchema = z
       .min(1)
       .max(31)
       .regex(/^[\x21-\x7e]+$/u)
-      .refine((value) => !/[;\s]/u.test(value), {
+      .refine((value) => !/\s/u.test(value), {
         message: "Device name must be one printable wire token",
       }),
     pwmFrequencyHz: z.number().int().min(1).max(40_000),

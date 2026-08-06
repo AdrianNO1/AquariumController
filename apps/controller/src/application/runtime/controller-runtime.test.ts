@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CURRENT_ESP_FIRMWARE_VERSION } from "@aquarium/esp-protocol";
+import {
+  CURRENT_ESP_FIRMWARE_VERSION,
+  type EspCommandRequest,
+  type EspCommandResult,
+} from "@aquarium/esp-protocol";
 
 import { parseControllerConfiguration } from "../../configuration.js";
 import {
@@ -97,8 +101,9 @@ describe("controller MQTT runtime composition", () => {
     await vi.waitFor(() => expect(composition.runtime.isReady()).toBe(true));
 
     client.emitText(
-      "test/aquarium/announce",
+      "test/aquarium/v1/devices/A1/announce",
       JSON.stringify({
+        protocolVersion: 1,
         id: "A1",
         name: "One",
         freq: 5_000,
@@ -130,7 +135,7 @@ describe("controller MQTT runtime composition", () => {
     expect(errors).toEqual([]);
   });
 
-  it("uses guarded test topics, survives callback failures, logs truthful bytes, and skips busy discovery without catch-up", async () => {
+  it("uses guarded test topics, rejects malformed traffic, logs truthful bytes, and skips busy discovery without catch-up", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const databases = await openDatabasesForTest();
@@ -165,11 +170,21 @@ describe("controller MQTT runtime composition", () => {
     expect(client.starts).toBe(1);
     client.emitConnected();
     await vi.waitFor(() => expect(composition.runtime.isReady()).toBe(true));
-    expect(client.publishes).toHaveLength(1);
+    expect(client.publishes).toHaveLength(2);
     expect(client.subscriptions).toEqual([
-      ["test/aquarium/announce", "test/aquarium/response"],
+      [
+        "test/aquarium/v1/devices/+/announce",
+        "test/aquarium/v1/devices/+/response",
+        "test/aquarium/announce",
+        "test/aquarium/response",
+      ],
     ]);
-    expect(client.publishes[0]).toMatchObject({
+    expect(client.publishes).toContainEqual({
+      topic: "test/aquarium/v1/discovery/request",
+      payload: '{"protocolVersion":1,"kind":"discover"}',
+      options: { qos: 0, retain: false },
+    });
+    expect(client.publishes).toContainEqual({
       topic: "test/aquarium/command",
       payload: "discover",
       options: { qos: 0, retain: false },
@@ -188,6 +203,7 @@ describe("controller MQTT runtime composition", () => {
       }),
     );
     const validPayload = JSON.stringify({
+      protocolVersion: 1,
       id: "A1",
       name: "One",
       freq: 5_000,
@@ -196,7 +212,7 @@ describe("controller MQTT runtime composition", () => {
       version: CURRENT_ESP_FIRMWARE_VERSION,
       scheduleHash: "0",
     });
-    client.emitText("test/aquarium/announce", validPayload);
+    client.emitText("test/aquarium/v1/devices/A1/announce", validPayload);
     await vi.waitFor(async () => {
       const device = await databases.state
         .selectFrom("devices")
@@ -207,7 +223,15 @@ describe("controller MQTT runtime composition", () => {
         id: "A1",
       });
     });
-    expect(errors.length).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
+    await vi.waitFor(async () => {
+      const malformed = await databases.events
+        .selectFrom("interactions")
+        .select(({ fn }) => fn.countAll<number>().as("count"))
+        .where("kind", "=", "mqtt.malformed-message")
+        .executeTakeFirstOrThrow();
+      expect(Number(malformed.count)).toBeGreaterThan(0);
+    });
     expect(alertEvaluationTimes).toContain(10_000);
 
     await vi.waitFor(() =>
@@ -249,7 +273,7 @@ describe("controller MQTT runtime composition", () => {
     });
     expect(client.stops).toBe(1);
     expect(
-      client.publishes.every(({ topic }) => topic === "test/aquarium/command"),
+      client.publishes.every(({ topic }) => topic.startsWith("test/aquarium/")),
     ).toBe(true);
 
     const announcementLogs = await databases.events
@@ -493,9 +517,22 @@ function publishedCommand(
   client: InMemoryMqttClient,
   command: string,
 ): PublishRecord | undefined {
-  return client.publishes.find(({ payload }) =>
-    payload.endsWith(`|${command}`),
-  );
+  const [deviceId, operation, argument] = command.split(" ");
+  const expectedKind = operation === "p" ? "ping" : "sync_time";
+  return client.publishes.find(({ topic, payload }) => {
+    if (topic !== `test/aquarium/v1/devices/${deviceId}/command`) return false;
+    try {
+      const request = JSON.parse(payload) as EspCommandRequest;
+      return request.commands.some(
+        (candidate) =>
+          candidate.kind === expectedKind &&
+          (candidate.kind !== "sync_time" ||
+            candidate.epochSeconds === Number(argument)),
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 function emitCommandResponse(
@@ -508,17 +545,28 @@ function emitCommandResponse(
   if (publication === undefined) {
     throw new Error(`Command ${command} was not published`);
   }
-  const match = /^request:([^|]+)\|/u.exec(publication.payload);
-  if (match?.[1] === undefined) {
+  const request = JSON.parse(publication.payload) as EspCommandRequest;
+  const requestCommand = request.commands[0];
+  if (requestCommand === undefined) {
     throw new Error(`Command ${command} has no request correlation`);
   }
+  const result: EspCommandResult =
+    requestCommand.kind === "sync_time"
+      ? {
+          index: requestCommand.index,
+          kind: "sync_time",
+          ok: true,
+          epochSeconds: Number(response),
+        }
+      : { index: requestCommand.index, kind: "ping", ok: true };
   client.emitText(
-    "test/aquarium/response",
+    `test/aquarium/v1/devices/${deviceId}/response`,
     JSON.stringify({
-      id: deviceId,
+      protocolVersion: 1,
+      deviceId,
       name: deviceId,
-      requestId: match[1],
-      responses: [{ index: 0, response }],
+      requestId: request.requestId,
+      results: [result],
     }),
   );
 }

@@ -1486,9 +1486,8 @@ export const patchDeviceConfigurationRequestSchema = z
       .string()
       .min(1)
       .max(31)
-      .regex(/^[!-:<-~]+$/u, {
-        message:
-          "Device name must be one printable ASCII wire token without semicolons",
+      .regex(/^[!-~]+$/u, {
+        message: "Device name must be one printable ASCII token",
       })
       .optional(),
     pwmFrequencyHz: pwmFrequencyHzSchema.optional(),

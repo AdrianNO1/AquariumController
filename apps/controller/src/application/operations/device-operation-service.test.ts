@@ -49,7 +49,7 @@ describe("persistent device operation service", () => {
       command: "A1 e Reef 6000 10",
       targetId: "A1",
       status: "succeeded",
-      response: "Reef 6000 10",
+      responseBytes: 12,
       analogValue: null,
     });
 
@@ -96,12 +96,19 @@ describe("persistent device operation service", () => {
       .execute();
     expect(logs).toHaveLength(1);
     expect(logs[0]).toMatchObject({
-      topic: "test/aquarium/command",
+      topic: "test/aquarium/v1/devices/A1/command",
       device_id: "A1",
       correlation_id: "wire-1",
       operation_id: "operation-1",
       outcome: "succeeded",
-      byte_count: 17,
+      byte_count: new TextEncoder().encode(
+        JSON.stringify({
+          kind: "edit_configuration",
+          name: "Reef",
+          pwmFrequencyHz: 6_000,
+          pwmResolutionBits: 10,
+        }),
+      ).byteLength,
     });
     expect(logs[0]?.payload_json).not.toContain("Reef 6000 10");
   });
@@ -113,7 +120,7 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "succeeded",
-      response: "o",
+      responseBytes: 1,
       analogValue: null,
     });
 
@@ -166,6 +173,43 @@ describe("persistent device operation service", () => {
     expect(context.executor.calls).toHaveLength(0);
   });
 
+  it("permits firmware 5 only through the manual OTA bridge", async () => {
+    const context = await setup();
+    await context.databases.state
+      .updateTable("devices")
+      .set({ firmware_version: "5.0.6" })
+      .where("id", "=", "A1")
+      .executeTakeFirstOrThrow();
+
+    await expect(
+      context.service.executeDeviceOperation("A1", { kind: "ping" }),
+    ).resolves.toMatchObject({ status: "cancelled" });
+    context.executor.outcomes.push({
+      index: 0,
+      command: "A1 ota 6.0.0 1000000 " + "0".repeat(64) +
+        " http://controller.local/firmware.bin",
+      targetId: "A1",
+      status: "succeeded",
+      responseBytes: 12,
+      analogValue: null,
+    });
+    await expect(
+      context.service.executeDeviceOperation("A1", {
+        kind: "firmware_update",
+        version: CURRENT_ESP_FIRMWARE_VERSION,
+        url: "http://controller.local/firmware.bin",
+        size: 1_000_000,
+        sha256: "0".repeat(64),
+      }),
+    ).resolves.toMatchObject({ status: "succeeded" });
+
+    expect(context.executor.calls).toHaveLength(1);
+    expect(context.executor.calls[0]?.[0]).toMatchObject({
+      operation: { kind: "firmware_update" },
+      wireProtocol: "legacy_v5_ota",
+    });
+  });
+
   it("cools only the timed-out device until availability is signalled", async () => {
     const context = await setup();
     context.executor.outcomes.push({
@@ -215,7 +259,7 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "succeeded",
-      response: "o",
+      responseBytes: 1,
       analogValue: null,
     });
     await expect(
@@ -228,6 +272,7 @@ describe("persistent device operation service", () => {
     const context = await setup();
     await context.registry.handleAnnouncement({
       announcement: {
+        protocolVersion: 1,
         id: "A2",
         name: "Two",
         freq: 5_000,
@@ -252,7 +297,7 @@ describe("persistent device operation service", () => {
       command: "A2 p",
       targetId: "A2",
       status: "succeeded",
-      response: "o",
+      responseBytes: 1,
       analogValue: null,
     });
     await expect(
@@ -277,7 +322,7 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "succeeded",
-      response: "o",
+      responseBytes: 1,
       analogValue: null,
     });
     const probe = context.service.executeDeviceOperation("A1", {
@@ -378,7 +423,7 @@ describe("persistent device operation service", () => {
       command: "A1 e Desired 5000 8",
       targetId: "A1",
       status: "succeeded",
-      response: "Desired 5000 8",
+      responseBytes: 14,
       analogValue: null,
     });
 
@@ -394,7 +439,7 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "succeeded",
-      response: "o",
+      responseBytes: 1,
       analogValue: null,
     });
     await expect(
@@ -644,7 +689,7 @@ describe("persistent device operation service", () => {
       command: "A1 r 4",
       targetId: "A1",
       status: "succeeded",
-      response: "r 4 2048",
+      responseBytes: 8,
       analogValue: 2_048,
     });
     await expect(
@@ -667,8 +712,12 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "failed",
-      response: "E: Invalid command",
-      expectedResponse: { kind: "exact", value: "o" },
+      responseBytes: 18,
+      failure: {
+        kind: "device_error",
+        code: "invalid_command",
+        message: "Invalid command",
+      },
     });
     await expect(
       context.service.executeDeviceOperation("A1", { kind: "ping" }),
@@ -676,7 +725,7 @@ describe("persistent device operation service", () => {
       status: "failed",
       result: {
         code: "device_reported_error",
-        message: "Device reported: Invalid command",
+        message: "Device reported invalid_command: Invalid command",
       },
     });
     expect(context.executor.calls).toHaveLength(1);
@@ -700,8 +749,8 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "failed",
-      response: "x".repeat(5_000),
-      expectedResponse: { kind: "exact", value: "o" },
+      responseBytes: 5_000,
+      failure: { kind: "protocol_error", detail: "x".repeat(5_000) },
     });
 
     await expect(
@@ -721,6 +770,7 @@ describe("persistent device operation service", () => {
     const repository = new ControlOperationRepository(context.databases.state);
     await context.registry.handleAnnouncement({
       announcement: {
+        protocolVersion: 1,
         id: "A1",
         name: "One",
         freq: 5_000,
@@ -861,7 +911,7 @@ describe("persistent device operation service", () => {
       command: "A1 e Desired 5000 8",
       targetId: "A1",
       status: "succeeded",
-      response: "Desired 5000 8",
+      responseBytes: 14,
       analogValue: null,
     });
 
@@ -918,7 +968,7 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "succeeded",
-      response: "o",
+      responseBytes: 1,
       analogValue: null,
     });
     vi.spyOn(context.registry, "recordResponseContact").mockRejectedValueOnce(
@@ -1009,7 +1059,7 @@ describe("persistent device operation service", () => {
       command: "A1 p",
       targetId: "A1",
       status: "succeeded",
-      response: "o",
+      responseBytes: 1,
       analogValue: null,
     });
     await expect(
@@ -1034,6 +1084,7 @@ describe("persistent device operation service", () => {
       });
       await firstRegistry.handleAnnouncement({
         announcement: {
+          protocolVersion: 1,
           id: "A1",
           name: "One",
           freq: 5_000,
@@ -1095,7 +1146,7 @@ describe("persistent device operation service", () => {
         command: "A1 p",
         targetId: "A1",
         status: "succeeded",
-        response: "o",
+        responseBytes: 1,
         analogValue: null,
       });
       await expect(
@@ -1204,6 +1255,7 @@ async function setup(
   });
   await registry.handleAnnouncement({
     announcement: {
+      protocolVersion: 1,
       id: "A1",
       name: "One",
       freq: 5_000,

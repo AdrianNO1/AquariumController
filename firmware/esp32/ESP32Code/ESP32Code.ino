@@ -23,6 +23,10 @@
 #include <mbedtls/sha256.h>
 #include "firmware-config.h"
 
+#ifndef AQUARIUM_REPROVISION_NETWORK_CONFIG
+#define AQUARIUM_REPROVISION_NETWORK_CONFIG false
+#endif
+
 unsigned long lastReconnectAttempt = 0;
 const unsigned long reconnectInterval = 5000; // 5 seconds
 const char* DEFAULT_DEVICE_NAME = "ESP32_Device"; // Default name
@@ -45,7 +49,7 @@ const int ALLOWED_ANALOG_INPUT_PINS[] = {32, 33, 34, 35, 36, 39};
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "5.0.6";
+const char* VERSION = "6.0.0";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
@@ -89,6 +93,8 @@ JsonDocument globalDoc;
 #define MQTT_MAX_COMMAND_PAYLOAD_SIZE 5120
 #define MQTT_PACKET_BUFFER_SIZE 6144
 #define MAX_REQUEST_ID_LENGTH 64
+#define MQTT_PROTOCOL_VERSION 1
+#define MQTT_MAX_COMMANDS_PER_REQUEST 3
 #define MAX_LAST_ERROR_CODE_LENGTH 48
 #define MAX_LAST_ERROR_MESSAGE_LENGTH 160
 
@@ -137,6 +143,7 @@ unsigned long telemetryAnnouncementAttemptAt = 0;
 bool eepromAvailable = false;
 bool networkConfigurationAvailable = false;
 bool mqttBufferAvailable = false;
+bool bootConfigurationPersistenceFailed = false;
 unsigned long wifiDisconnectedAt = 0;
 
 bool attachedPins[64] = {false};
@@ -146,6 +153,10 @@ String deviceName;
 String deviceId;
 int freq;
 int resolution;
+String mqttDiscoveryTopic;
+String mqttCommandTopic;
+String mqttAnnouncementTopic;
+String mqttResponseTopic;
 
 unsigned long lastScheduleUpdate = 0;
 unsigned long lastScheduleAttachRetry = 0;
@@ -230,6 +241,16 @@ String generateId() {
 	return id;
 }
 
+void configureMqttTopics() {
+	const String mqttNamespace = TEST ? "test/aquarium" : "aquarium";
+	const String protocolRoot = mqttNamespace + "/v1";
+	const String deviceRoot = protocolRoot + "/devices/" + deviceId;
+	mqttDiscoveryTopic = protocolRoot + "/discovery/request";
+	mqttCommandTopic = deviceRoot + "/command";
+	mqttAnnouncementTopic = deviceRoot + "/announce";
+	mqttResponseTopic = deviceRoot + "/response";
+}
+
 // Read string from EEPROM
 String readFromEEPROM(int startAddr, int maximumLength) {
     String data;
@@ -304,20 +325,49 @@ bool writeToEEPROM(int startAddr, String data, int maximumLength) {
     return false;
 }
 
+bool isValidDeviceId(const String& id) {
+	if (id.length() < 1 || id.length() > ID_MAX_LENGTH) {
+		return false;
+	}
+	if (!(
+		(id[0] >= 'A' && id[0] <= 'Z') ||
+		(id[0] >= 'a' && id[0] <= 'z') ||
+		(id[0] >= '0' && id[0] <= '9')
+	)) {
+		return false;
+	}
+	for (size_t index = 0; index < id.length(); index++) {
+		const char character = id[index];
+		if (!(
+			(character >= 'A' && character <= 'Z') ||
+			(character >= 'a' && character <= 'z') ||
+			(character >= '0' && character <= '9') ||
+			character == '_' || character == '-'
+		)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void initializeEEPROM() {
 	String storedName = readFromEEPROM(NAME_ADDR, NAME_MAX_LENGTH);
 	if (storedName.length() == 0 || storedName[0] == 0xFF) {	// Check if EEPROM is empty or corrupted
 		Serial.println("Initializing EEPROM with default device name");
-		writeToEEPROM(NAME_ADDR, String(DEFAULT_DEVICE_NAME), NAME_MAX_LENGTH);
+		bootConfigurationPersistenceFailed =
+			!writeToEEPROM(NAME_ADDR, String(DEFAULT_DEVICE_NAME), NAME_MAX_LENGTH) ||
+			bootConfigurationPersistenceFailed;
 		deviceName = DEFAULT_DEVICE_NAME;
 	} else {
 		deviceName = storedName;
 	}
 	
 	String storedId = readFromEEPROM(ID_ADDR, ID_MAX_LENGTH);
-	if (storedId.length() == 0 || storedId[0] == 0xFF) {
+	if (!isValidDeviceId(storedId)) {
 		deviceId = generateId();
-		writeToEEPROM(ID_ADDR, deviceId, ID_MAX_LENGTH);
+		bootConfigurationPersistenceFailed =
+			!writeToEEPROM(ID_ADDR, deviceId, ID_MAX_LENGTH) ||
+			bootConfigurationPersistenceFailed;
 	} else {
 		deviceId = storedId;
 	}
@@ -327,7 +377,8 @@ void initializeEEPROM() {
 	if (freq <= 0 || freq > 40000) {	// Validate frequency
 		freq = DEFAULT_FREQ;
 		EEPROM.put(FREQ_ADDR, freq);
-		EEPROM.commit();
+		bootConfigurationPersistenceFailed =
+			!EEPROM.commit() || bootConfigurationPersistenceFailed;
 	}
 
 	// Read resolution from EEPROM
@@ -335,7 +386,8 @@ void initializeEEPROM() {
 	if (resolution < 1 || resolution > 16) {	// Validate resolution
 		resolution = DEFAULT_RES;
 		EEPROM.put(RES_ADDR, resolution);
-		EEPROM.commit();
+		bootConfigurationPersistenceFailed =
+			!EEPROM.commit() || bootConfigurationPersistenceFailed;
 	}
 	if (!isValidPwmConfiguration(freq, resolution)) {
 		Serial.println("Persisted PWM frequency/resolution pair is unsupported; restoring defaults");
@@ -343,7 +395,8 @@ void initializeEEPROM() {
 		resolution = DEFAULT_RES;
 		EEPROM.put(FREQ_ADDR, freq);
 		EEPROM.put(RES_ADDR, resolution);
-		EEPROM.commit();
+		bootConfigurationPersistenceFailed =
+			!EEPROM.commit() || bootConfigurationPersistenceFailed;
 	}
 	
 	Serial.println("Device Name: " + deviceName);
@@ -436,11 +489,16 @@ void serviceLastErrorPersistence() {
     }
 
     lastErrorPersistenceAttemptAt = currentMillis;
+    const bool persistenceWasFailed = lastErrorPersistenceFailed;
     if (persistLastError()) {
         lastErrorPersistenceDirty = false;
         lastErrorPersistedThisBoot = true;
         lastErrorPersistenceFailed = false;
         lastErrorPersistenceSuccessAt = currentMillis;
+        if (persistenceWasFailed) {
+            diagnosticAnnouncementPending = true;
+            diagnosticAnnouncementAttempted = false;
+        }
     } else {
         lastErrorPersistenceFailed = true;
     }
@@ -459,6 +517,11 @@ void loadLastError() {
     if (!SPIFFS.exists(currentPath) && SPIFFS.exists(nextPath)) {
         if (!SPIFFS.rename(nextPath, currentPath)) {
             Serial.println("Could not recover the staged last-error document");
+            recordLastError(
+                "diagnostic_storage_failed",
+                "error",
+                "Could not recover the staged firmware diagnostic"
+            );
         }
     }
     if (!SPIFFS.exists(currentPath)) {
@@ -468,6 +531,11 @@ void loadLastError() {
     File file = SPIFFS.open(currentPath, "r");
     if (!file) {
         Serial.println("Failed to open the persisted last-error document");
+        recordLastError(
+            "diagnostic_storage_failed",
+            "error",
+            "Could not open the persisted firmware diagnostic"
+        );
         return;
     }
     JsonDocument doc;
@@ -484,6 +552,11 @@ void loadLastError() {
         !sequenceValue.is<unsigned long>() || !activeValue.is<bool>() ||
         !atValue.is<unsigned long>()) {
         Serial.println("Persisted last-error document is invalid; ignoring it");
+        recordLastError(
+            "diagnostic_storage_corrupt",
+            "warning",
+            "Persisted firmware diagnostic JSON was invalid"
+        );
         return;
     }
 
@@ -497,6 +570,11 @@ void loadLastError() {
         message.length() < 1 || message.length() > MAX_LAST_ERROR_MESSAGE_LENGTH ||
         sequence < 1 || at > MAX_SYNC_UNIX_TIME) {
         Serial.println("Persisted last-error fields are invalid; ignoring them");
+        recordLastError(
+            "diagnostic_storage_corrupt",
+            "warning",
+            "Persisted firmware diagnostic fields were invalid"
+        );
         return;
     }
 
@@ -639,6 +717,13 @@ bool storeSchedule(const String& schedule) {
     }
     if (SPIFFS.exists(previousPath) && !SPIFFS.remove(previousPath)) {
         Serial.println("Replacement succeeded but prior schedule cleanup failed");
+        recordLastError(
+            "schedule_cleanup_failed",
+            "warning",
+            "Replacement schedule is active but its backup file could not be removed"
+        );
+    } else {
+        resolveLastError("schedule_cleanup_failed");
     }
     Serial.println("Schedule saved to SPIFFS, size: " + String(schedule.length()) + " bytes");
     return true;
@@ -1032,23 +1117,6 @@ bool isValidRequestId(const String& requestId) {
     return true;
 }
 
-bool unwrapRequestEnvelope(String& message, String& requestId) {
-    requestId = "";
-    if (!message.startsWith("request:")) {
-        return true;
-    }
-    int separator = message.indexOf('|', 8);
-    if (separator < 0) {
-        return false;
-    }
-    requestId = message.substring(8, separator);
-    if (!isValidRequestId(requestId)) {
-        return false;
-    }
-    message = message.substring(separator + 1);
-    return message.length() > 0;
-}
-
 bool schedulePointIsValid(JsonVariant point) {
     if (!point.is<JsonObject>()) {
         return false;
@@ -1432,6 +1500,17 @@ bool loadNetworkConfiguration() {
         return false;
     }
 
+    const bool compileTimeCredentialsPaired =
+        (strlen(mqtt_username) == 0) == (strlen(mqtt_password) == 0);
+    if (AQUARIUM_REPROVISION_NETWORK_CONFIG && (
+        strlen(ssid) == 0 || strlen(mqtt_server) == 0 || mqtt_port == 0 ||
+        strlen(ntp_server) == 0 || !compileTimeCredentialsPaired
+    )) {
+        preferences.end();
+        Serial.println("Network reprovisioning requires complete compile-time settings");
+        return false;
+    }
+
     if (!preferences.getBool("cfgReady", false)) {
         Serial.println("Migrating compile-time network settings to persistent storage");
         bool stored =
@@ -1454,6 +1533,42 @@ bool loadNetworkConfiguration() {
             preferences.end();
             Serial.println("Could not persist the bootstrap network configuration");
             return false;
+        }
+    } else if (AQUARIUM_REPROVISION_NETWORK_CONFIG) {
+        const String storedWifiSsid = preferences.getString("wifiSsid", "");
+        const String storedWifiPassword = preferences.getString("wifiPass", "");
+        const String storedMqttServer = preferences.getString("mqttHost", "");
+        const uint16_t storedMqttPort = preferences.getUShort("mqttPort", 0);
+        const String storedUsername = preferences.getString("mqttUser", "");
+        const String storedPassword = preferences.getString("mqttPass", "");
+        const String storedNtpServer = preferences.getString("ntpHost", "");
+        if (
+            storedWifiSsid != ssid || storedWifiPassword != password ||
+            storedMqttServer != mqtt_server || storedMqttPort != mqtt_port ||
+            storedUsername != mqtt_username || storedPassword != mqtt_password ||
+            storedNtpServer != ntp_server
+        ) {
+            bool stored =
+                preferences.putString("wifiSsid", ssid) > 0 &&
+                preferences.putString("wifiPass", password) > 0 &&
+                preferences.putString("mqttHost", mqtt_server) > 0 &&
+                preferences.putUShort("mqttPort", mqtt_port) > 0 &&
+                preferences.putString("ntpHost", ntp_server) > 0;
+            if (strlen(mqtt_username) > 0) {
+                stored =
+                    preferences.putString("mqttUser", mqtt_username) > 0 &&
+                    preferences.putString("mqttPass", mqtt_password) > 0 &&
+                    stored;
+            } else {
+                preferences.remove("mqttUser");
+                preferences.remove("mqttPass");
+            }
+            if (!stored) {
+                preferences.end();
+                Serial.println("Could not reprovision persistent network configuration");
+                return false;
+            }
+            Serial.println("Reprovisioned persistent network configuration from USB build");
         }
     }
 
@@ -1529,6 +1644,8 @@ void initializeOtaBootState() {
     Preferences preferences;
     if (!preferences.begin("aquarium", false)) {
         Serial.println("Could not inspect OTA probation state");
+		otaReport = {"failed", "", "probation_state_unavailable", 0};
+		telemetryAnnouncementPending = true;
         return;
     }
     if (!preferences.getBool("otaPending", false)) {
@@ -1927,6 +2044,7 @@ bool allOutputsAreOff() {
 
 String buildPresenceMessage() {
 	JsonDocument doc;
+	doc["protocolVersion"] = MQTT_PROTOCOL_VERSION;
 	doc["name"] = deviceName;
 	doc["freq"] = freq;
 	doc["res"] = resolution;
@@ -1935,6 +2053,8 @@ String buildPresenceMessage() {
   	doc["version"] = VERSION;
 	doc["hardwareProfile"] = HARDWARE_PROFILE;
 	doc["hardwareModel"] = HARDWARE_MODEL;
+	doc["diagnosticStorageHealthy"] =
+		spiffsAvailable && !lastErrorPersistenceFailed;
 	doc["outputsOff"] = allOutputsAreOff();
 	JsonArray outputs = doc["outputs"].to<JsonArray>();
 	for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
@@ -2006,6 +2126,7 @@ void finishPublishedAnnouncement() {
 			lastError.code == "wifi_connection_failed" ||
 			lastError.code == "mqtt_connection_failed" ||
 			lastError.code == "mqtt_subscription_failed" ||
+			lastError.code == "mqtt_announcement_publish_failed" ||
 			lastError.code == "mqtt_response_publish_failed" ||
 			(
 				lastError.code == "network_configuration_unavailable" &&
@@ -2027,12 +2148,19 @@ void finishPublishedAnnouncement() {
 
 bool announcePresence() {
 	String message = buildPresenceMessage();
-	bool published = TEST
-		? publishWithRetry("test/aquarium/announce", message.c_str())
-		: publishWithRetry("aquarium/announce", message.c_str());
+	bool published = publishWithRetry(
+		mqttAnnouncementTopic.c_str(),
+		message.c_str()
+	);
 	if (published) {
 		Serial.println("Announced presence: " + message);
 		finishPublishedAnnouncement();
+	} else {
+		recordLastError(
+			"mqtt_announcement_publish_failed",
+			"warning",
+			"MQTT presence announcement could not be published"
+		);
 	}
 	return published;
 }
@@ -2059,14 +2187,16 @@ void serviceDiagnosticAnnouncement() {
 	diagnosticAnnouncementAttemptAt = currentMillis;
 	telemetryAnnouncementAttemptAt = currentMillis;
 	String message = buildPresenceMessage();
-	const char* topic = TEST
-		? "test/aquarium/announce"
-		: "aquarium/announce";
-	if (client.publish(topic, message.c_str())) {
+	if (client.publish(mqttAnnouncementTopic.c_str(), message.c_str())) {
 		Serial.println("Published queued diagnostic announcement: " + message);
 		finishPublishedAnnouncement();
 	} else {
 		Serial.println("Queued diagnostic announcement publish failed; retry remains pending");
+		recordLastError(
+			"mqtt_announcement_publish_failed",
+			"warning",
+			"MQTT presence announcement could not be published"
+		);
 	}
 }
 
@@ -2335,62 +2465,53 @@ void callback(char* topic, byte* payload, unsigned int length) {
 	Serial.println("Message received on topic: " + String(topic));
 
 	if (length > MQTT_MAX_COMMAND_PAYLOAD_SIZE) {
-		Serial.println("MQTT command exceeded the 5120-byte payload limit; ignoring message");
+		Serial.println("MQTT request exceeded the 5120-byte payload limit; ignoring message");
+		recordLastError(
+			"mqtt_request_too_large",
+			"warning",
+			"MQTT command request exceeded the payload limit"
+		);
 		return;
 	}
 
 	String message;
 	if (!message.reserve(length)) {
-		Serial.println("Could not allocate memory for MQTT command; ignoring message");
+		Serial.println("Could not allocate memory for MQTT request; ignoring message");
+		recordLastError(
+			"mqtt_request_allocation_failed",
+			"error",
+			"Could not allocate memory for an MQTT request"
+		);
 		return;
 	}
 	message.concat(reinterpret_cast<const char*>(payload), length);
 	Serial.println("Message content: " + message);
 
-	if ((!TEST && String(topic) == "aquarium/command") || (TEST && String(topic) == "test/aquarium/command")) {
-		if (message == "discover") {
-			Serial.println("Discover message received, announcing presence");
+	const String receivedTopic(topic);
+	if (receivedTopic == mqttDiscoveryTopic) {
+		JsonDocument discovery;
+		DeserializationError error = deserializeJson(discovery, message);
+		if (!error && discovery["protocolVersion"].is<int>() &&
+			discovery["protocolVersion"].as<int>() == MQTT_PROTOCOL_VERSION &&
+			discovery["kind"].is<const char*>() &&
+			String(discovery["kind"].as<const char*>()) == "discover" &&
+			discovery.as<JsonObject>().size() == 2) {
+			Serial.println("Discovery request received, announcing presence");
 			announcePresence();
-			return;
+		} else {
+			recordLastError(
+				"invalid_mqtt_request",
+				"warning",
+				"Invalid MQTT discovery request"
+			);
 		}
-
+		return;
+	}
+	if (receivedTopic == mqttCommandTopic) {
 		processCompleteMessage(message);
 	} else {
 		Serial.println("Invalid topic, ignoring message");
 	}
-}
-
-String processCommand(String message) {
-	// Find first space to get device name/id
-	int firstSpace = message.indexOf(' ');
-	if (firstSpace == -1) return "";
-
-	String targetDevice = message.substring(0, firstSpace);
-	if (targetDevice != deviceName && targetDevice != deviceId) return "";
-
-	// Get remaining part after device name
-	String remainder = message.substring(firstSpace + 1);
-
-  // Check if this is a schedule command
-  if (remainder.startsWith("sc ")) {
-      String scheduleJson = remainder.substring(3);
-      return handleScheduleCommand(scheduleJson);
-  }
-	
-	// Find command
-	int secondSpace = remainder.indexOf(' ');
-	String command;
-	String args;
-	
-	if (secondSpace == -1) {
-		command = remainder;
-		args = "";
-	} else {
-		command = remainder.substring(0, secondSpace);
-		args = remainder.substring(secondSpace + 1);
-	}
-
-	return handleCommand(command, args);
 }
 
 void onNtpTimeAvailable(struct timeval*) {
@@ -2734,7 +2855,14 @@ void setup() {
 			"error",
 			"EEPROM could not be initialized; persistent configuration and clock storage are unavailable"
 		);
+	} else if (bootConfigurationPersistenceFailed) {
+		recordLastError(
+			"configuration_persistence_failed",
+			"error",
+			"Default or repaired device configuration could not be persisted"
+		);
 	}
+	configureMqttTopics();
 
     mqttBufferAvailable = client.setBufferSize(MQTT_PACKET_BUFFER_SIZE);
     if (!mqttBufferAvailable) {
@@ -2823,14 +2951,17 @@ void loop() {
 				);
 			if (mqttConnected) {
 				Serial.println("MQTT connected");
-				const bool subscribed = TEST
-					? client.subscribe("test/aquarium/command")
-					: client.subscribe("aquarium/command");
+				const bool subscribedToDiscovery =
+					client.subscribe(mqttDiscoveryTopic.c_str());
+				const bool subscribedToCommands =
+					client.subscribe(mqttCommandTopic.c_str());
+				const bool subscribed =
+					subscribedToDiscovery && subscribedToCommands;
 				if (!subscribed) {
 					recordLastError(
 						"mqtt_subscription_failed",
 						"error",
-						"Could not subscribe to the aquarium command topic"
+						"Could not subscribe to the structured MQTT topics"
 					);
 					client.disconnect();
 				} else if (announcePresence()) {
@@ -3059,65 +3190,278 @@ void checkOverwriteExpiries() {
     }
 }
 
-void processCompleteMessage(String message) {
-    String requestId;
-    if (!unwrapRequestEnvelope(message, requestId)) {
-        Serial.println("Invalid request envelope; ignoring message");
+bool jsonObjectHasExactlyFields(
+    JsonObject object,
+    const char* const* fields,
+    size_t fieldCount
+) {
+    if (object.size() != fieldCount) {
+        return false;
+    }
+    for (size_t index = 0; index < fieldCount; index++) {
+        if (object[fields[index]].isNull()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validateStructuredCommand(JsonObject command, size_t expectedIndex) {
+    JsonVariant indexValue = command["index"];
+    JsonVariant kindValue = command["kind"];
+    if (!indexValue.is<int>() || indexValue.as<int>() != expectedIndex ||
+        !kindValue.is<const char*>()) {
+        return false;
+    }
+    const String kind = kindValue.as<String>();
+
+    if (kind == "ping") {
+        const char* fields[] = {"index", "kind"};
+        return jsonObjectHasExactlyFields(command, fields, 2);
+    }
+    if (kind == "set_pwm") {
+        const char* fields[] = {"index", "kind", "pin", "value", "overwrite"};
+        return jsonObjectHasExactlyFields(command, fields, 5) &&
+            command["pin"].is<int>() && command["value"].is<int>() &&
+            command["overwrite"].is<bool>();
+    }
+    if (kind == "edit_configuration") {
+        const char* fields[] = {
+            "index", "kind", "name", "pwmFrequencyHz", "pwmResolutionBits"
+        };
+        return jsonObjectHasExactlyFields(command, fields, 5) &&
+            command["name"].is<const char*>() &&
+            command["pwmFrequencyHz"].is<int>() &&
+            command["pwmResolutionBits"].is<int>();
+    }
+    if (kind == "schedule") {
+        const char* fields[] = {"index", "kind", "schedule"};
+        if (!jsonObjectHasExactlyFields(command, fields, 3) ||
+            !command["schedule"].is<JsonObject>()) {
+            return false;
+        }
+        String scheduleJson;
+        serializeJson(command["schedule"], scheduleJson);
+        if (scheduleJson.length() >= sizeof(currentSchedule)) {
+            return false;
+        }
+        JsonDocument scheduleDocument;
+        if (deserializeJson(scheduleDocument, scheduleJson)) {
+            return false;
+        }
+        return schedulePinsAreValid(scheduleDocument);
+    }
+    if (kind == "sync_time") {
+        const char* fields[] = {"index", "kind", "epochSeconds"};
+        return jsonObjectHasExactlyFields(command, fields, 3) &&
+            command["epochSeconds"].is<unsigned long>() &&
+            command["epochSeconds"].as<unsigned long>() >= 1 &&
+            command["epochSeconds"].as<unsigned long>() <= MAX_SYNC_UNIX_TIME;
+    }
+    if (kind == "analog_read") {
+        const char* fields[] = {"index", "kind", "pin"};
+        return jsonObjectHasExactlyFields(command, fields, 3) &&
+            command["pin"].is<int>();
+    }
+    if (kind == "firmware_update") {
+        const char* fields[] = {
+            "index", "kind", "version", "url", "size", "sha256"
+        };
+        return jsonObjectHasExactlyFields(command, fields, 6) &&
+            command["version"].is<const char*>() &&
+            command["url"].is<const char*>() &&
+            command["size"].is<unsigned long>() &&
+            command["sha256"].is<const char*>();
+    }
+    return false;
+}
+
+String commandErrorCode(const String& response) {
+    String source = response.startsWith("E:")
+        ? response.substring(2)
+        : String("command failed");
+    source.trim();
+    source.toLowerCase();
+    String code;
+    bool priorUnderscore = false;
+    for (size_t index = 0;
+        index < source.length() && code.length() < MAX_LAST_ERROR_CODE_LENGTH;
+        index++) {
+        const char character = source[index];
+        const bool alphaNumeric =
+            (character >= 'a' && character <= 'z') ||
+            (character >= '0' && character <= '9');
+        if (alphaNumeric) {
+            code += character;
+            priorUnderscore = false;
+        } else if (!priorUnderscore && code.length() > 0) {
+            code += '_';
+            priorUnderscore = true;
+        }
+    }
+    while (code.endsWith("_")) {
+        code.remove(code.length() - 1);
+    }
+    return code.length() > 0 ? code : String("command_failed");
+}
+
+void addStructuredCommandResult(
+    JsonObject result,
+    JsonObject command,
+    const String& response
+) {
+    const int index = command["index"].as<int>();
+    const String kind = command["kind"].as<String>();
+    result["index"] = index;
+    result["kind"] = kind;
+    const bool succeeded = !response.startsWith("E:");
+    result["ok"] = succeeded;
+    if (!succeeded) {
+        JsonObject error = result["error"].to<JsonObject>();
+        error["code"] = commandErrorCode(response);
+        String message = response.substring(2);
+        message.trim();
+        error["message"] = message.substring(0, MAX_LAST_ERROR_MESSAGE_LENGTH);
         return;
     }
 
-    // Create JSON document for responses
-    JsonDocument responses;
-    responses["id"] = deviceId;
-    responses["name"] = deviceName;
-    if (requestId.length() > 0) {
-        responses["requestId"] = requestId;
+    if (kind == "set_pwm") {
+        result["pin"] = command["pin"].as<int>();
+        result["value"] = command["value"].as<int>();
+        result["overwrite"] = command["overwrite"].as<bool>();
+    } else if (kind == "edit_configuration") {
+        result["name"] = command["name"].as<const char*>();
+        result["pwmFrequencyHz"] = command["pwmFrequencyHz"].as<int>();
+        result["pwmResolutionBits"] = command["pwmResolutionBits"].as<int>();
+    } else if (kind == "sync_time") {
+        result["epochSeconds"] = command["epochSeconds"].as<unsigned long>();
+    } else if (kind == "analog_read") {
+        result["pin"] = command["pin"].as<int>();
+        const int separator = response.lastIndexOf(' ');
+        result["value"] = separator < 0
+            ? 0
+            : response.substring(separator + 1).toInt();
+    } else if (kind == "firmware_update") {
+        result["status"] = "accepted";
     }
-    JsonArray commands = responses["responses"].to<JsonArray>();
-    
-    // Handle multiple commands separated by semicolon
-    int startPos = 0;
-    int endPos;
-    int cmdIndex = 0;
-    while ((endPos = message.indexOf(';', startPos)) != -1) {
-        String response = processCommand(message.substring(startPos, endPos));
-        if (response.length() > 0) {
-            JsonObject cmd = commands.add<JsonObject>();
-            cmd["index"] = cmdIndex;
-            cmd["response"] = response;
-        }
-        startPos = endPos + 1;
-        cmdIndex++;
+}
+
+String executeStructuredCommand(JsonObject command) {
+    const String kind = command["kind"].as<String>();
+    if (kind == "ping") {
+        return handleCommand("p", "");
     }
-    // Process the last or only command
-    if (startPos < message.length()) {
-        String response = processCommand(message.substring(startPos));
-        if (response.length() > 0) {
-            JsonObject cmd = commands.add<JsonObject>();
-            cmd["index"] = cmdIndex;
-            cmd["response"] = response;
-        }
+    if (kind == "set_pwm") {
+        const String args = String(command["pin"].as<int>()) + " " +
+            String(command["value"].as<int>()) + " " +
+            String(command["overwrite"].as<bool>() ? 1 : 0);
+        return handleCommand("s", args);
     }
-    
-    // Publish responses if any commands were processed
-    if (commands.size() > 0) {
-        String responseStr;
-        serializeJson(responses, responseStr);
-        const char* responseTopic = TEST
-            ? "test/aquarium/response"
-            : "aquarium/response";
-        Serial.println(
-            "Publishing response to " + String(responseTopic) + ": " +
-            responseStr
+    if (kind == "edit_configuration") {
+        const String args = command["name"].as<String>() + " " +
+            String(command["pwmFrequencyHz"].as<int>()) + " " +
+            String(command["pwmResolutionBits"].as<int>());
+        return handleCommand("e", args);
+    }
+    if (kind == "schedule") {
+        String scheduleJson;
+        serializeJson(command["schedule"], scheduleJson);
+        return handleScheduleCommand(scheduleJson);
+    }
+    if (kind == "sync_time") {
+        return handleCommand(
+            "sync",
+            String(command["epochSeconds"].as<unsigned long>())
         );
-        if (publishWithRetry(responseTopic, responseStr.c_str())) {
-            Serial.println("Published to " + String(responseTopic));
-        } else {
+    }
+    if (kind == "analog_read") {
+        return handleCommand("r", String(command["pin"].as<int>()));
+    }
+    if (kind == "firmware_update") {
+        const String args = command["version"].as<String>() + " " +
+            String(command["size"].as<unsigned long>()) + " " +
+            command["sha256"].as<String>() + " " +
+            command["url"].as<String>();
+        return handleCommand("ota", args);
+    }
+    return "E: Invalid command";
+}
+
+void processCompleteMessage(const String& message) {
+    JsonDocument request;
+    DeserializationError error = deserializeJson(request, message);
+    JsonObject root = request.as<JsonObject>();
+    const char* rootFields[] = {
+        "protocolVersion", "deviceId", "requestId", "commands"
+    };
+    if (error || root.isNull() ||
+        !jsonObjectHasExactlyFields(root, rootFields, 4) ||
+        !root["protocolVersion"].is<int>() ||
+        root["protocolVersion"].as<int>() != MQTT_PROTOCOL_VERSION ||
+        !root["deviceId"].is<const char*>() ||
+        root["deviceId"].as<String>() != deviceId ||
+        !root["requestId"].is<const char*>() ||
+        !isValidRequestId(root["requestId"].as<String>()) ||
+        !root["commands"].is<JsonArray>()) {
+        Serial.println("Invalid structured MQTT request; ignoring message");
+        recordLastError(
+            "invalid_mqtt_request",
+            "warning",
+            "Invalid or misaddressed MQTT command request"
+        );
+        return;
+    }
+
+    JsonArray commands = root["commands"].as<JsonArray>();
+    if (commands.size() < 1 ||
+        commands.size() > MQTT_MAX_COMMANDS_PER_REQUEST) {
+        recordLastError(
+            "invalid_mqtt_request",
+            "warning",
+            "MQTT command request has an invalid command count"
+        );
+        return;
+    }
+    for (size_t index = 0; index < commands.size(); index++) {
+        if (!commands[index].is<JsonObject>() ||
+            !validateStructuredCommand(commands[index].as<JsonObject>(), index)) {
             recordLastError(
-                "mqtt_response_publish_failed",
+                "invalid_mqtt_request",
                 "warning",
-                "MQTT command response could not be published"
+                "MQTT command request failed schema validation"
             );
+            return;
         }
+    }
+    resolveLastError("invalid_mqtt_request");
+    resolveLastError("mqtt_request_too_large");
+    resolveLastError("mqtt_request_allocation_failed");
+
+    JsonDocument response;
+    response["protocolVersion"] = MQTT_PROTOCOL_VERSION;
+    response["deviceId"] = deviceId;
+    response["name"] = deviceName;
+    response["requestId"] = root["requestId"].as<const char*>();
+    JsonArray results = response["results"].to<JsonArray>();
+    for (JsonVariant commandValue : commands) {
+        JsonObject command = commandValue.as<JsonObject>();
+        const String commandResponse = executeStructuredCommand(command);
+        JsonObject result = results.add<JsonObject>();
+        addStructuredCommandResult(result, command, commandResponse);
+    }
+
+    String responseString;
+    serializeJson(response, responseString);
+    Serial.println(
+        "Publishing response to " + mqttResponseTopic + ": " + responseString
+    );
+    if (publishWithRetry(mqttResponseTopic.c_str(), responseString.c_str())) {
+        Serial.println("Published to " + mqttResponseTopic);
+    } else {
+        recordLastError(
+            "mqtt_response_publish_failed",
+            "warning",
+            "MQTT command response could not be published"
+        );
     }
 }

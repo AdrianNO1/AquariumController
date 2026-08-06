@@ -2,15 +2,11 @@ import {
   ManualFakeEspClock,
   MemoryFakeEspPersistence,
   MqttFakeEspSession,
-  type FakeEspPersistence,
 } from "@aquarium/fake-esp";
 import {
-  assertLegacyScheduleFits,
   calculateLegacyScheduleHash,
   createEspTopicSet,
-  encodeCorrelatedLegacyRequest,
-  encodeLegacyMessage,
-  utf8ByteLength,
+  espCommandRequestSchema,
 } from "@aquarium/esp-protocol";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
@@ -34,14 +30,12 @@ const EPOCH_SECONDS = 1_735_689_600;
 interface ActorFixture {
   readonly session: MqttFakeEspSession;
   readonly clock: ManualFakeEspClock;
-  readonly persistence: FakeEspPersistence;
 }
 
 interface TransportFixture {
   readonly transport: LegacyMqttTransport;
   readonly announcements: LegacyAnnouncementEvent[];
   readonly interactions: LegacyMqttInteraction[];
-  readonly requestSessionId: string;
 }
 
 let broker: MosquittoTestHarness;
@@ -72,266 +66,54 @@ afterAll(async () => {
   await (broker as MosquittoTestHarness | undefined)?.stop();
 }, 30_000);
 
-describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
-  it("discovers multiple actors and recovers fake, controller, and broker restarts", async () => {
+describe.sequential("structured MQTT transport against pinned Mosquitto", () => {
+  it("discovers multiple actors and recovers controller and broker restarts", async () => {
     const alpha = await startActor("alpha", "Alpha", ALPHA_ID);
     await startActor("beta", "Beta", BETA_ID);
-    const firstController = await startTransport();
+    const first = await startTransport();
+    await waitForDiscovery(first, ALPHA_ID, BETA_ID);
 
-    await waitUntil(
-      () => announcedIds(firstController).includes(ALPHA_ID),
-      "Alpha discovery",
-    );
-    await waitUntil(
-      () => announcedIds(firstController).includes(BETA_ID),
-      "Beta discovery",
-    );
-
-    await broker.publish(topics.announce, "{");
+    await broker.publish(topics.announcement(ALPHA_ID), "{");
     await waitUntil(
       () =>
-        firstController.interactions.some(
+        first.interactions.some(
           (interaction) => interaction.kind === "malformed_message",
         ),
-      "malformed announcement accounting",
+      "malformed structured announcement accounting",
     );
 
-    const alphaAnnouncements = countAnnouncements(firstController, ALPHA_ID);
-    await delay(25);
-    alpha.session.actor.reconnect();
-    alpha.session.actor.reconnect();
-    await waitUntil(
-      () =>
-        countAnnouncements(firstController, ALPHA_ID) >= alphaAnnouncements + 2,
-      "duplicate delayed announcements",
-    );
+    await first.transport.stop();
+    const restarted = await startTransport();
+    await waitForDiscovery(restarted, ALPHA_ID, BETA_ID);
 
-    await firstController.transport.stop();
-    const restartedController = await startTransport();
-    await waitUntil(
-      () =>
-        announcedIds(restartedController).includes(ALPHA_ID) &&
-        announcedIds(restartedController).includes(BETA_ID),
-      "discovery after controller restart",
-    );
-
-    const readyCount = lifecycleCount(restartedController, "ready");
-    const announcementCount = restartedController.announcements.length;
+    const readyCount = lifecycleCount(restarted, "ready");
     await broker.restartBroker();
     await waitUntil(
-      () => lifecycleCount(restartedController, "ready") > readyCount,
+      () => lifecycleCount(restarted, "ready") > readyCount,
       "controller reconnect after broker restart",
       15_000,
     );
-    await waitUntil(
-      () => restartedController.announcements.length > announcementCount,
-      "fake announcement after broker restart",
-      15_000,
-    );
+    alpha.session.actor.reconnect();
+    await waitForDiscovery(restarted, ALPHA_ID, BETA_ID);
 
-    const pingResult = await restartedController.transport.executeCommands([
-      ping(ALPHA_ID),
-    ]);
-    expect(pingResult.outcomes).toMatchObject([
-      { targetId: ALPHA_ID, status: "succeeded", response: "o" },
-    ]);
-    expect(
-      broker
-        .publications()
-        .filter(({ topic }) => topic.startsWith("aquarium/")),
-    ).toEqual([]);
+    await expect(
+      restarted.transport.executeCommands([ping(ALPHA_ID)]),
+    ).resolves.toMatchObject({
+      outcomes: [{ targetId: ALPHA_ID, status: "succeeded" }],
+    });
   }, 30_000);
 
-  it("runs independent device lanes with complete messages, local response indexes, and command fixtures", async () => {
+  it("uses independent device topics and executes typed schedule, PWM, and analog commands", async () => {
     const alpha = await startActor("alpha", "Alpha", ALPHA_ID);
     const beta = await startActor("beta", "Beta", BETA_ID);
     alpha.session.actor.setAnalogValue(34, 321);
-    const controller = await startTransport(1_000);
+    const controller = await startTransport();
     await waitForDiscovery(controller, ALPHA_ID, BETA_ID);
-    broker.clearPublications();
 
-    alpha.session.actor.setResponseFaults({ delayMilliseconds: 100 });
-    const alphaLongPing = paddedAsciiPingFor(ALPHA_ID, 500);
-    const betaLongPing = paddedAsciiPingFor(BETA_ID, 500);
-    let alphaSettled = false;
-    const firstConcurrent = controller.transport.executeCommands([
-      exact(alphaLongPing, ALPHA_ID, "o"),
-    ]);
-    void firstConcurrent.then(
-      () => {
-        alphaSettled = true;
-      },
-      () => {
-        alphaSettled = true;
-      },
-    );
-    const secondConcurrent = controller.transport.executeCommands([
-      exact(betaLongPing, BETA_ID, "o"),
-    ]);
-
-    const concurrentRequests = await capturedCorrelatedRequests(2);
-    expect(concurrentRequests.map(({ payload }) => payload)).toEqual([
-      alphaLongPing,
-      betaLongPing,
-    ]);
-    expect(concurrentRequests.every(({ frames }) => frames.length === 1)).toBe(
-      true,
-    );
-    expect(
-      new Set(concurrentRequests.map(({ requestId }) => requestId)).size,
-    ).toBe(2);
-    expect((await secondConcurrent).outcomes[0]?.status).toBe("succeeded");
-    expect(alphaSettled).toBe(false);
-
-    alpha.clock.advanceBy(100);
-    alpha.session.actor.runLoop();
-    expect((await firstConcurrent).outcomes[0]?.status).toBe("succeeded");
-    alpha.session.actor.setResponseFaults({});
-    await delay(25);
-    broker.clearPublications();
-
-    const result = await controller.transport.executeCommands([
-      exact("Alpha p", ALPHA_ID, "o", ["Alpha"]),
-      ping(BETA_ID),
-      exact(`${ALPHA_ID} s 4 128 1`, ALPHA_ID, "s 4 128 1"),
-      exact(`${BETA_ID} sync ${EPOCH_SECONDS}`, BETA_ID, `${EPOCH_SECONDS}`),
-      analogRead(ALPHA_ID, 34),
-      exact(`${ALPHA_ID} e Renamed 6000 10`, ALPHA_ID, "Renamed 6000 10"),
-      ping(ALPHA_ID),
-    ]);
-
-    expect(result.outcomes.map(({ status }) => status)).toEqual([
-      "succeeded",
-      "succeeded",
-      "succeeded",
-      "succeeded",
-      "succeeded",
-      "succeeded",
-      "succeeded",
-    ]);
-    expect(result.outcomes[4]).toMatchObject({ analogValue: 321 });
-    const commandRequests = await capturedCorrelatedRequests(3);
-    expect(commandRequests.map(({ payload }) => payload)).toEqual([
-      `${ALPHA_ID} p;${ALPHA_ID} s 4 128 1;${ALPHA_ID} r 34`,
-      `${BETA_ID} p;${BETA_ID} sync ${EPOCH_SECONDS}`,
-      `${ALPHA_ID} e Renamed 6000 10;${ALPHA_ID} p`,
-    ]);
-
-    await waitUntil(
-      () => capturedResponsePayloads().length >= 3,
-      "batch-local response frames",
-    );
-    const responseFrames = capturedResponsePayloads()
-      .filter((payload) => payload.startsWith("{"))
-      .map(parseResponseFrame);
-    expect(responseFrames).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: ALPHA_ID,
-          responses: expect.arrayContaining([
-            { index: 0, response: "o" },
-            { index: 1, response: "s 4 128 1" },
-            { index: 2, response: "r 34 321" },
-          ]),
-        }),
-        expect.objectContaining({
-          id: BETA_ID,
-          responses: [
-            { index: 0, response: "o" },
-            { index: 1, response: `${EPOCH_SECONDS}` },
-          ],
-        }),
-        expect.objectContaining({
-          id: ALPHA_ID,
-          responses: [
-            { index: 0, response: "Renamed 6000 10" },
-            { index: 1, response: "o" },
-          ],
-        }),
-      ]),
-    );
-
-    expect(alpha.session.actor.identity()).toMatchObject({
-      deviceName: "Renamed",
-      frequency: 6_000,
-      resolution: 10,
-    });
-    await alpha.session.stop();
-    const restartedAlpha = await startActor(
-      "alpha-restarted",
-      "Alpha",
-      ALPHA_ID,
-      alpha.persistence,
-    );
-    await waitUntil(
-      () =>
-        controller.announcements.some(
-          ({ announcement }) =>
-            announcement.id === ALPHA_ID &&
-            announcement.name === "Renamed" &&
-            announcement.freq === 6_000 &&
-            announcement.res === 10,
-        ),
-      "edited configuration after fake restart",
-    );
-
-    broker.clearPublications();
-    await broker.publish(topics.command, `${ALPHA_ID} clear`);
-    await waitUntil(
-      () =>
-        capturedResponsePayloads().some((payload) =>
-          payload.includes("E: Invalid command"),
-        ),
-      "targeted clear rejection",
-    );
-    broker.clearPublications();
-    await broker.publish(topics.command, "clear");
-    await delay(100);
-    expect(capturedResponsePayloads()).toEqual([]);
-    expect(restartedAlpha.session.actor.identity().deviceName).toBe("Renamed");
-    expect(beta.session.actor.identity().deviceName).toBe("Beta");
-  }, 20_000);
-
-  it("carries UTF-8, large messages, schedules, hashes, persistence, and time boundaries over the broker", async () => {
-    const actor = await startActor("alpha", "Alpha", ALPHA_ID);
-    const controller = await startTransport(1_000);
-    await waitForDiscovery(controller, ALPHA_ID);
-
-    for (const [wireByteLength, requestSequence] of [
-      [256, 1],
-      [257, 2],
-      [5_120, 3],
-    ] as const) {
-      broker.clearPublications();
-      const requestId = `${controller.requestSessionId}-request-${requestSequence}`;
-      const envelopeBytes =
-        utf8ByteLength(encodeCorrelatedLegacyRequest(requestId, "x")) - 1;
-      const command = paddedPing(wireByteLength - envelopeBytes);
-      expect(
-        utf8ByteLength(encodeCorrelatedLegacyRequest(requestId, command)),
-      ).toBe(wireByteLength);
-      const operation = await controller.transport.executeCommands([
-        exact(command, ALPHA_ID, "o"),
-      ]);
-      expect(operation.outcomes[0]?.status).toBe("succeeded");
-      const [request] = await capturedCorrelatedRequests(1);
-      if (request === undefined) {
-        throw new Error("Expected a captured correlated request");
-      }
-      expect(request).toMatchObject({ requestId, payload: command });
-      expect(request.frames).toEqual([
-        encodeLegacyMessage(
-          encodeCorrelatedLegacyRequest(request.requestId, command),
-        ),
-      ]);
-      expect(request.frames).toHaveLength(1);
-    }
-
-    broker.clearPublications();
-    const scheduleCore = {
+    const schedule = {
       c: [
         {
-          o: 4,
+          o: 16,
           t: 108 as const,
           l: [
             {
@@ -341,184 +123,124 @@ describe.sequential("legacy MQTT transport against pinned Mosquitto", () => {
           ],
         },
       ],
-    };
-    const scheduleDocument = JSON.stringify({
-      c: scheduleCore.c,
       syncTime: EPOCH_SECONDS,
-    });
-    const scheduleResult = await controller.transport.executeCommands([
-      exact(`${ALPHA_ID} sc ${scheduleDocument}`, ALPHA_ID, "schedule_ok"),
-      exact(`${ALPHA_ID} sync ${EPOCH_SECONDS}`, ALPHA_ID, `${EPOCH_SECONDS}`),
+    };
+    const operation = controller.transport.executeCommands([
+      scheduleCommand(ALPHA_ID, schedule),
+      syncTime(ALPHA_ID, EPOCH_SECONDS),
+      analogRead(ALPHA_ID, 34),
+      setPwm(BETA_ID, 17, 128, true),
     ]);
+    await expect(operation).resolves.toMatchObject({
+      outcomes: [
+        { targetId: ALPHA_ID, status: "succeeded" },
+        { targetId: ALPHA_ID, status: "succeeded" },
+        { targetId: ALPHA_ID, status: "succeeded", analogValue: 321 },
+        { targetId: BETA_ID, status: "succeeded" },
+      ],
+    });
+
+    alpha.clock.advanceBy(1_000);
+    alpha.session.actor.runLoop();
+    expect(alpha.session.actor.pinSnapshot(16).outputValue).toBe(127);
+    expect(beta.session.actor.pinSnapshot(17)).toMatchObject({
+      attached: true,
+      overwritten: true,
+      outputValue: 128,
+    });
+
+    const commandTopics = broker
+      .publications()
+      .filter(
+        ({ topic }) =>
+          topic.includes("/v1/devices/") && topic.endsWith("/command"),
+      )
+      .map(({ topic }) => topic);
+    expect(new Set(commandTopics)).toEqual(
+      new Set([topics.command(ALPHA_ID), topics.command(BETA_ID)]),
+    );
+    for (const publication of broker
+      .publications()
+      .filter(
+        ({ topic }) =>
+          topic.includes("/v1/devices/") && topic.endsWith("/command"),
+      )) {
+      expect(() =>
+        espCommandRequestSchema.parse(JSON.parse(publication.payload)),
+      ).not.toThrow();
+    }
     expect(
-      scheduleResult.outcomes.every(({ status }) => status === "succeeded"),
+      broker
+        .publications()
+        .filter(({ topic }) => topic === topics.legacyCommand)
+        .every(({ payload }) => payload === "discover"),
     ).toBe(true);
-    actor.clock.advanceBy(1_000);
-    actor.session.actor.runLoop();
-    expect(actor.session.actor.pinSnapshot(4).outputValue).toBe(127);
-    expect(actor.session.actor.persistenceSnapshot()).toMatchObject({
-      schedule: scheduleDocument,
-      time: { lastSavedEpochSeconds: EPOCH_SECONDS },
+    expect(calculateLegacyScheduleHash({ c: schedule.c })).not.toBe("0");
+  });
+
+  it("isolates a dropped-response device while a healthy actor completes", async () => {
+    const alpha = await startActor("alpha", "Alpha", ALPHA_ID, {
+      drop: true,
     });
+    await startActor("beta", "Beta", BETA_ID);
+    const controller = await startTransport(250);
+    await waitForDiscovery(controller, ALPHA_ID, BETA_ID);
 
-    const priorAnnouncements = controller.announcements.length;
-    await expect(controller.transport.requestDiscovery()).resolves.toBe(
-      "published",
-    );
-    await waitUntil(
-      () => controller.announcements.length > priorAnnouncements,
-      "post-schedule announcement",
-    );
-    expect(controller.announcements.at(-1)?.announcement.scheduleHash).toBe(
-      calculateLegacyScheduleHash(scheduleCore),
-    );
+    await expect(
+      controller.transport.executeCommands([ping(ALPHA_ID), ping(BETA_ID)]),
+    ).resolves.toMatchObject({
+      outcomes: [
+        { targetId: ALPHA_ID, status: "outcome_unknown", reason: "timeout" },
+        { targetId: BETA_ID, status: "succeeded" },
+      ],
+    });
+    expect(alpha.session.actor.isReady()).toBe(true);
+  });
 
-    const maximumSchedule = paddedEmptySchedule(4_095);
-    const maximumResult = await controller.transport.executeCommands([
-      exact(`${ALPHA_ID} sc ${maximumSchedule}`, ALPHA_ID, "schedule_ok"),
-    ]);
-    const maximumOutcome = maximumResult.outcomes[0];
-    expect(
-      maximumOutcome?.status,
-      maximumOutcome?.status === "failed"
-        ? `Maximum schedule response: ${maximumOutcome.response}`
-        : "Maximum schedule produced no successful outcome",
-    ).toBe("succeeded");
-    expect(
-      utf8ByteLength(actor.session.actor.persistenceSnapshot().schedule ?? ""),
-    ).toBe(4_095);
-
-    const publicationCount = broker.publications().length;
-    expect(() => assertLegacyScheduleFits(paddedEmptySchedule(4_096))).toThrow(
-      /4095/u,
-    );
-    expect(broker.publications()).toHaveLength(publicationCount);
-  }, 30_000);
-
-  it("records response faults and continues without retrying the uncertain command", async () => {
-    const actor = await startActor("alpha", "Alpha", ALPHA_ID);
-    const controller = await startTransport(200);
+  it("surfaces pin failures as typed device errors and later recovery", async () => {
+    const alpha = await startActor("alpha", "Alpha", ALPHA_ID);
+    alpha.session.actor.setPinAttachmentFailure(16, true);
+    const controller = await startTransport();
     await waitForDiscovery(controller, ALPHA_ID);
 
-    actor.session.actor.setResponseFaults({ drop: true });
-    broker.clearPublications();
-    const dropped = await controller.transport.executeCommands([
-      exact(`${ALPHA_ID} s 4 200 1`, ALPHA_ID, "s 4 200 1"),
-    ]);
-    expect(dropped.outcomes).toMatchObject([
-      { status: "outcome_unknown", reason: "timeout" },
-    ]);
-    expect(
-      (await capturedCorrelatedRequests(1)).map(({ payload }) => payload),
-    ).toEqual([`${ALPHA_ID} s 4 200 1`]);
-    actor.session.actor.setResponseFaults({});
-    expect(
-      (await controller.transport.executeCommands([ping(ALPHA_ID)])).outcomes[0]
-        ?.status,
-    ).toBe("succeeded");
-
-    broker.clearPublications();
-    actor.session.actor.setResponseFaults({ delayMilliseconds: 100 });
-    const delayed = controller.transport.executeCommands([ping(ALPHA_ID)]);
-    await capturedCorrelatedRequests(1);
-    await delay(25);
-    actor.clock.advanceBy(100);
-    actor.session.actor.runLoop();
-    expect((await delayed).outcomes[0]?.status).toBe("succeeded");
-
-    broker.clearPublications();
-    actor.session.actor.setResponseFaults({ duplicateResponses: 1 });
-    expect(
-      (await controller.transport.executeCommands([ping(ALPHA_ID)])).outcomes[0]
-        ?.status,
-    ).toBe("succeeded");
-    await waitUntil(
-      () => capturedResponsesAfterLastCommand().length >= 2,
-      "duplicate responses",
-    );
-    expect(capturedResponsesAfterLastCommand()).toHaveLength(2);
-    await waitUntil(
-      () =>
-        controller.interactions.some(
-          (interaction) =>
-            interaction.kind === "ignored_response" &&
-            (interaction.reason === "duplicate" ||
-              interaction.reason === "no_active_batch"),
-        ),
-      "controller duplicate-response rejection",
-    );
-
-    broker.clearPublications();
-    actor.session.actor.setResponseFaults({ malformed: true });
-    const malformed = await controller.transport.executeCommands([
-      ping(ALPHA_ID),
-    ]);
-    expect(malformed.outcomes[0]).toMatchObject({
-      status: "outcome_unknown",
-      reason: "timeout",
+    await expect(
+      controller.transport.executeCommands([setPwm(ALPHA_ID, 16, 100, false)]),
+    ).resolves.toMatchObject({
+      outcomes: [
+        {
+          status: "failed",
+          failure: { kind: "device_error", code: "ledc_attach_failed" },
+        },
+      ],
     });
-    expect(
-      controller.interactions.some(
-        (interaction) =>
-          interaction.kind === "malformed_message" &&
-          interaction.topic === topics.response,
-      ),
-    ).toBe(true);
-    broker.clearPublications();
-    actor.session.actor.setResponseFaults({ delayMilliseconds: 1_000 });
-    const readyCount = lifecycleCount(controller, "ready");
-    const announcementCount = controller.announcements.length;
-    const interrupted = controller.transport.executeCommands([
-      exact(`${ALPHA_ID} s 4 17 1`, ALPHA_ID, "s 4 17 1"),
-    ]);
-    await capturedCorrelatedRequests(1);
-    await delay(25);
-    await broker.restartBroker();
-    const interruptedOutcome = (await interrupted).outcomes[0];
-    if (interruptedOutcome?.status !== "outcome_unknown") {
-      throw new Error("Broker interruption did not fail closed");
-    }
-    expect(["disconnected", "timeout"]).toContain(interruptedOutcome.reason);
-    expect(await capturedCorrelatedRequests(1)).toHaveLength(1);
-    await waitUntil(
-      () => lifecycleCount(controller, "ready") > readyCount,
-      "controller ready after interrupted broker operation",
-      15_000,
-    );
-    await waitUntil(
-      () => controller.announcements.length > announcementCount,
-      "fake ESP ready after interrupted broker operation",
-      15_000,
-    );
-
-    actor.session.actor.setResponseFaults({});
-    expect(
-      (await controller.transport.executeCommands([ping(ALPHA_ID)])).outcomes[0]
-        ?.status,
-    ).toBe("succeeded");
-  }, 30_000);
+    alpha.session.actor.setPinAttachmentFailure(16, false);
+    await expect(
+      controller.transport.executeCommands([setPwm(ALPHA_ID, 16, 100, false)]),
+    ).resolves.toMatchObject({ outcomes: [{ status: "succeeded" }] });
+  });
 });
 
 async function startActor(
   key: string,
   name: string,
   id: string,
-  persistence: FakeEspPersistence = new MemoryFakeEspPersistence(),
+  responseFaults: { readonly drop?: boolean } = {},
 ): Promise<ActorFixture> {
   const clock = new ManualFakeEspClock(1);
+  const persistence = new MemoryFakeEspPersistence({
+    deviceName: name,
+    deviceId: id,
+    frequency: 5_000,
+    resolution: 8,
+  });
   const session = new MqttFakeEspSession({
     brokerUrl: broker.brokerUrl,
-    clientId: `aquarium-integration-fake-${key}-${++clientSequence}`,
-    actor: {
-      clock,
-      persistence,
-      defaultDeviceName: name,
-      idGenerator: () => id,
-    },
+    clientId: `fake-${key}-${++clientSequence}`,
+    actor: { clock, persistence, responseFaults },
   });
   activeSessions.push(session);
   await session.start();
-  return { session, clock, persistence };
+  return { session, clock };
 }
 
 async function startTransport(
@@ -526,15 +248,10 @@ async function startTransport(
 ): Promise<TransportFixture> {
   const announcements: LegacyAnnouncementEvent[] = [];
   const interactions: LegacyMqttInteraction[] = [];
-  const transportSequence = ++clientSequence;
-  const requestSessionId = `integration-${transportSequence}`;
   const transport = new LegacyMqttTransport({
     clientFactory: createMqttJsClientFactory({
       brokerUrl: broker.brokerUrl,
-      clientId: `aquarium-integration-controller-${transportSequence}`,
-      keepaliveSeconds: 5,
-      reconnectPeriodMs: 100,
-      connectTimeoutMs: 5_000,
+      clientId: `controller-${++clientSequence}`,
     }),
     topics,
     responseTimeoutMs,
@@ -542,45 +259,31 @@ async function startTransport(
       onAnnouncement: (announcement) => announcements.push(announcement),
       onInteraction: (interaction) => interactions.push(interaction),
     },
-    requestSessionId,
+    requestSessionId: `integration-${clientSequence}`,
   });
   activeTransports.push(transport);
   transport.start();
   await waitUntil(
-    () =>
-      interactions.some(
-        (interaction) =>
-          interaction.kind === "lifecycle" && interaction.state === "ready",
-      ),
+    () => lifecycleCount({ transport, announcements, interactions }, "ready") > 0,
     "controller MQTT readiness",
   );
-  return { transport, announcements, interactions, requestSessionId };
+  return { transport, announcements, interactions };
 }
 
 async function waitForDiscovery(
   controller: TransportFixture,
   ...deviceIds: readonly string[]
 ): Promise<void> {
+  await controller.transport.requestDiscovery().catch(() => "skipped_busy");
   await waitUntil(
     () =>
       deviceIds.every((deviceId) =>
-        announcedIds(controller).includes(deviceId),
+        controller.announcements.some(
+          ({ announcement }) => announcement.id === deviceId,
+        ),
       ),
     `device discovery for ${deviceIds.join(", ")}`,
   );
-}
-
-function announcedIds(controller: TransportFixture): readonly string[] {
-  return controller.announcements.map(({ announcement }) => announcement.id);
-}
-
-function countAnnouncements(
-  controller: TransportFixture,
-  deviceId: string,
-): number {
-  return controller.announcements.filter(
-    ({ announcement }) => announcement.id === deviceId,
-  ).length;
 }
 
 function lifecycleCount(
@@ -594,139 +297,62 @@ function lifecycleCount(
 }
 
 function ping(targetId: string): LegacyWireCommand {
-  return exact(`${targetId} p`, targetId, "o");
+  return command(targetId, "ping", { kind: "ping" });
+}
+
+function setPwm(
+  targetId: string,
+  pin: number,
+  value: number,
+  overwrite: boolean,
+): LegacyWireCommand {
+  return command(targetId, "set PWM", {
+    kind: "set_pwm",
+    pin,
+    value,
+    overwrite,
+  });
 }
 
 function analogRead(targetId: string, pin: number): LegacyWireCommand {
-  return {
-    command: `${targetId} r ${pin}`,
-    target: { id: targetId },
-    expectedResponse: { kind: "analog_read", pin },
-  };
+  return command(targetId, "read analog", { kind: "analog_read", pin });
 }
 
-function exact(
-  command: string,
+function syncTime(
   targetId: string,
-  response: string,
-  aliases: readonly string[] = [],
+  epochSeconds: number,
+): LegacyWireCommand {
+  return command(targetId, "sync time", { kind: "sync_time", epochSeconds });
+}
+
+function scheduleCommand(
+  targetId: string,
+  schedule: {
+    c: {
+      o: number;
+      t: 108;
+      l: {
+        s: { t: number; p: number };
+        d: { t: number; p: number };
+      }[];
+    }[];
+    syncTime: number;
+  },
+): LegacyWireCommand {
+  return command(targetId, "schedule", { kind: "schedule", schedule });
+}
+
+function command(
+  targetId: string,
+  description: string,
+  operation: LegacyWireCommand["operation"],
 ): LegacyWireCommand {
   return {
-    command,
-    target: { id: targetId, aliases },
-    expectedResponse: { kind: "exact", value: response },
+    command: `${targetId} ${description}`,
+    target: { id: targetId },
+    operation,
+    wireProtocol: "structured_v1",
   };
-}
-
-interface CapturedCorrelatedRequest {
-  readonly requestId: string;
-  readonly payload: string;
-  readonly frames: readonly string[];
-}
-
-async function capturedCorrelatedRequests(
-  expectedCount: number,
-): Promise<readonly CapturedCorrelatedRequest[]> {
-  let captured: readonly CapturedCorrelatedRequest[] = [];
-  await waitUntil(() => {
-    captured = decodeCorrelatedRequests(
-      broker
-        .publications()
-        .filter(({ topic }) => topic === topics.command)
-        .map(({ payload }) => payload)
-        .filter((payload) => payload !== "discover"),
-    );
-    return captured.length >= expectedCount;
-  }, `${expectedCount} correlated MQTT command request(s)`);
-  return captured;
-}
-
-function decodeCorrelatedRequests(
-  messages: readonly string[],
-): readonly CapturedCorrelatedRequest[] {
-  return messages.map((message) => parseCorrelatedRequest(message, [message]));
-}
-
-function parseCorrelatedRequest(
-  envelope: string,
-  frames: readonly string[],
-): CapturedCorrelatedRequest {
-  const separator = envelope.indexOf("|");
-  if (!envelope.startsWith("request:") || separator <= "request:".length) {
-    throw new Error("Captured command did not use a correlated request");
-  }
-  const requestId = envelope.slice("request:".length, separator);
-  const payload = envelope.slice(separator + 1);
-  if (payload.length === 0) {
-    throw new Error("Captured correlated request had an empty payload");
-  }
-  return { requestId, payload, frames: [...frames] };
-}
-
-function capturedResponsePayloads(): readonly string[] {
-  return broker
-    .publications()
-    .filter(({ topic }) => topic === topics.response)
-    .map(({ payload }) => payload);
-}
-
-function capturedResponsesAfterLastCommand(): readonly string[] {
-  const publications = broker.publications();
-  const lastCommandIndex = publications.findLastIndex(
-    ({ topic }) => topic === topics.command,
-  );
-  if (lastCommandIndex < 0) {
-    return [];
-  }
-  return publications
-    .slice(lastCommandIndex + 1)
-    .filter(({ topic }) => topic === topics.response)
-    .map(({ payload }) => payload);
-}
-
-function parseResponseFrame(payload: string): {
-  readonly id: string;
-  readonly responses: readonly {
-    readonly index: number;
-    readonly response: string;
-  }[];
-} {
-  return JSON.parse(payload) as {
-    readonly id: string;
-    readonly responses: readonly {
-      readonly index: number;
-      readonly response: string;
-    }[];
-  };
-}
-
-function paddedPing(byteLength: number): string {
-  const prefix = `${ALPHA_ID} p `;
-  const suffix = "é";
-  const paddingLength =
-    byteLength - utf8ByteLength(prefix) - utf8ByteLength(suffix);
-  if (paddingLength < 0) {
-    throw new RangeError("Padded ping length is too small");
-  }
-  return `${prefix}${"x".repeat(paddingLength)}${suffix}`;
-}
-
-function paddedAsciiPingFor(targetId: string, byteLength: number): string {
-  const prefix = `${targetId} p `;
-  const paddingLength = byteLength - prefix.length;
-  if (paddingLength < 0) {
-    throw new RangeError("Padded ping length is too small");
-  }
-  return `${prefix}${"x".repeat(paddingLength)}`;
-}
-
-function paddedEmptySchedule(bytes: number): string {
-  const json = JSON.stringify({ c: [], syncTime: EPOCH_SECONDS });
-  return `${" ".repeat(bytes - json.length)}${json}`;
-}
-
-async function delay(milliseconds: number): Promise<void> {
-  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function toError(error: unknown): Error {

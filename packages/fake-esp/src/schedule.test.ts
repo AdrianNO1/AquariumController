@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FakeEspHarness } from "./harness.js";
+import type { FakeEspCommandResult } from "./structured-protocol.js";
 import {
   FIRMWARE_FLAT_DOCUMENT_JSON,
   FIRMWARE_FLAT_HASH,
@@ -351,7 +352,7 @@ describe("independent fake ESP schedule behavior", () => {
     );
   });
 
-  it("accepts 4095 bytes and rejects 4096 without replacing persistence", () => {
+  it("rejects an oversized structured schedule without replacing persistence", () => {
     const harness = createConnectedHarness();
     const safe = paddedEmptySchedule(4_095);
     harness.publishCommand(`${DEVICE_ID} sc ${safe}`);
@@ -361,10 +362,33 @@ describe("independent fake ESP schedule behavior", () => {
     expect(latestAnnouncement(harness).scheduleHash).toBe("570947766");
 
     harness.bus.clearPublications();
-    const oversized = paddedEmptySchedule(4_096);
-    harness.publishCommand(`${DEVICE_ID} sc ${oversized}`);
-    expect(responseStrings(harness)).toEqual(["E: Schedule too large"]);
-    expect(harness.actor("alpha").persistenceSnapshot().schedule).toBe(safe);
+    const oversized = {
+      c: [
+        {
+          o: 4,
+          t: 108,
+          l: Array.from({ length: 100 }, () => ({
+            s: { t: 0, p: 0 },
+            d: { t: 1439, p: 100 },
+          })),
+        },
+      ],
+      syncTime: 1_735_689_600,
+    };
+    expect(JSON.stringify(oversized).length).toBeGreaterThan(4_095);
+    harness.bus.publishFromHost(
+      harness.topics.command,
+      JSON.stringify({
+        protocolVersion: 1,
+        deviceId: DEVICE_ID,
+        requestId: "oversized-schedule",
+        commands: [{ index: 0, kind: "schedule", schedule: oversized }],
+      }),
+    );
+    expect(responseStrings(harness)).toEqual([]);
+    expect(harness.actor("alpha").persistenceSnapshot().schedule).toBe(
+      JSON.stringify(JSON.parse(safe)),
+    );
     harness.bus.clearPublications();
     harness.publishCommand("discover");
     expect(latestAnnouncement(harness).scheduleHash).toBe("570947766");
@@ -443,10 +467,30 @@ function responseStrings(harness: FakeEspHarness): readonly string[] {
     )
     .flatMap((publication) => {
       const parsed = JSON.parse(publication.payload) as {
-        readonly responses?: readonly { readonly response: string }[];
+        readonly results?: readonly FakeEspCommandResult[];
       };
-      return parsed.responses?.map(({ response }) => response) ?? [];
+      return parsed.results?.map(legacyResponseForResult) ?? [];
     });
+}
+
+function legacyResponseForResult(result: FakeEspCommandResult): string {
+  if (!result.ok) return `E: ${result.error.message}`;
+  switch (result.kind) {
+    case "ping":
+      return "o";
+    case "set_pwm":
+      return `s ${result.pin} ${result.value} ${result.overwrite ? 1 : 0}`;
+    case "edit_configuration":
+      return `${result.name} ${result.pwmFrequencyHz} ${result.pwmResolutionBits}`;
+    case "schedule":
+      return "schedule_ok";
+    case "sync_time":
+      return String(result.epochSeconds);
+    case "analog_read":
+      return `r ${result.pin} ${result.value}`;
+    case "firmware_update":
+      return "ota_accepted";
+  }
 }
 
 function latestAnnouncement(harness: FakeEspHarness): {

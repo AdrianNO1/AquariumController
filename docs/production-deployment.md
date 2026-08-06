@@ -9,7 +9,7 @@ commands are run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
 [Pi production handoff checklist](pi-production-handoff.md). The current
-firmware 5.0.6 and per-device command-lane implementation are deployed. Every
+firmware 6.0.0 and structured per-device protocol are the release candidate. Every
 future candidate must still pass protected CI, merge, publish, and receive a
 newly selected immutable digest before its deployment. Historical pre-4.1
 validation is recorded in the
@@ -125,7 +125,7 @@ remain release gates.
 Only after the current protected default-branch run and publisher succeed,
 record the reviewed values:
 
-- source: `<reviewed-5.0.6-source-commit>`;
+- source: `<reviewed-release-source-commit>`;
 - repository: `ghcr.io/adrianno1/aquarium-controller`; and
 - digest: `sha256:<published-64-character-manifest-digest>`.
 
@@ -141,8 +141,9 @@ them for this deployment.
 
 Load production values into the current shell from an operator-managed secret
 store or a root-owned file outside the checkout. Do not commit credentials and
-do not put them in the repository's default `.env` path. MQTT credentials can
-be present in the broker URL, and the webhook authentication value is a secret.
+do not put them in the repository's default `.env` path. MQTT credentials must
+use their dedicated variables rather than broker-URL userinfo. The MQTT password
+and webhook authentication value are secrets.
 Avoid `docker compose config` without `--quiet`, because a full rendering can
 print environment values.
 
@@ -154,7 +155,12 @@ export AQUARIUM_CONTROLLER_IMAGE_SHA256=<published-64-character-manifest-digest>
 export COMPOSE_DISABLE_ENV_FILE=1
 export AQUARIUM_HTTP_BIND_ADDRESS=<explicit-Pi-LAN-address>
 export AQUARIUM_HTTP_PORT=3001
+export AQUARIUM_FIRMWARE_BASE_URL=http://<explicit-Pi-LAN-address>:3001
 export AQUARIUM_MQTT_BROKER_URL=mqtt://<production-broker-host>:1883
+export AQUARIUM_MQTT_USERNAME=aquarium-controller
+read -rsp 'Controller MQTT password: ' AQUARIUM_MQTT_PASSWORD
+printf '\n'
+export AQUARIUM_MQTT_PASSWORD
 export AQUARIUM_PRODUCTION_MQTT_CONFIRMATION=ENABLE_PRODUCTION_AQUARIUM_MQTT
 export AQUARIUM_STATE_HOST_DIRECTORY=/srv/aquarium/state
 export AQUARIUM_EVENTS_HOST_DIRECTORY=/srv/aquarium/events
@@ -193,17 +199,61 @@ The production Compose file gives the controller a deterministic private bridge:
 - host gateway: `172.30.188.1`.
 
 This avoids granting a changing Docker subnet access to a native Mosquitto
-listener. Configure Mosquitto to listen on the Pi's IPv4 interfaces, keep port
-1883 denied by default, and add separate narrow firewall rules for the aquarium
-LAN and controller bridge. For example, with UFW and a `192.168.1.0/24` aquarium
-LAN:
+listener. Require authentication, use a password file and ACL, listen on the
+Pi's IPv4 interfaces, keep port 1883 denied by default, and add separate narrow
+firewall rules for the aquarium LAN and controller bridge. For example, create
+distinct controller and firmware credentials outside the repository:
 
 ```sh
-listener 1883 0.0.0.0
+sudo install -o root -g mosquitto -m 0640 /dev/null /etc/mosquitto/aquarium.passwd
+sudo mosquitto_passwd /etc/mosquitto/aquarium.passwd aquarium-controller
+sudo mosquitto_passwd /etc/mosquitto/aquarium.passwd aquarium-esp
 ```
 
-The line above belongs in the reviewed Mosquitto configuration, not the shell.
-After Compose has created `br-aquarium`, configure the firewall:
+Create `/etc/mosquitto/aquarium.acl` as root with mode `0640` and group
+`mosquitto`:
+
+```text
+user aquarium-controller
+topic read aquarium/v1/devices/+/announce
+topic read aquarium/v1/devices/+/response
+topic read aquarium/announce
+topic write aquarium/v1/discovery/request
+topic write aquarium/v1/devices/+/command
+topic write aquarium/command
+
+user aquarium-esp
+topic read aquarium/v1/discovery/request
+topic read aquarium/v1/devices/+/command
+topic write aquarium/v1/devices/+/announce
+topic write aquarium/v1/devices/+/response
+topic read aquarium/command
+topic write aquarium/announce
+topic write aquarium/response
+```
+
+Then add a reviewed Mosquitto configuration such as:
+
+```text
+listener 1883 0.0.0.0
+allow_anonymous false
+password_file /etc/mosquitto/aquarium.passwd
+acl_file /etc/mosquitto/aquarium.acl
+max_packet_size 8192
+```
+
+These lines belong in the reviewed Mosquitto configuration, not the shell.
+Restart Mosquitto only during the controlled cutover and prove an unauthorized
+client cannot connect. Do not enable `allow_anonymous false` while production
+firmware still depends on anonymous MQTT; those devices will lose broker access
+and fall back to their local schedules. The firmware-5 OTA bridge changes the
+application image but does not invent MQTT credentials for a device whose NVS
+configuration is anonymous. Keep the restricted anonymous transition available
+long enough to perform the OTA, then use a device-specific firmware-6 USB build
+with `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` to replace its persisted
+network configuration without erasing its labeled ID or schedule. The reviewed
+generic OTA build must keep that switch `false`. After Compose has created
+`br-aquarium`, configure the firewall for a `192.168.1.0/24` aquarium LAN:
 
 ```sh
 sudo ufw allow from 192.168.1.0/24 to any port 1883 proto tcp
@@ -278,6 +328,56 @@ The default minimum is 10 GiB available on every configured storage
 filesystem. A reviewed deployment can raise or lower it explicitly with
 `AQUARIUM_PREFLIGHT_MIN_FREE_BYTES`; the runtime's projection and free-space
 alerts remain mandatory after startup.
+
+Persist exactly the validated values for verification, backup, rollback, and
+later supervised upgrades. This writes no secret to the checkout or terminal;
+the temporary file and final configuration are both mode `0600`:
+
+```sh
+set -Eeuo pipefail
+
+required_configuration_variables=(
+  AQUARIUM_CONTROLLER_IMAGE_REPOSITORY
+  AQUARIUM_CONTROLLER_IMAGE_SHA256
+  AQUARIUM_HTTP_BIND_ADDRESS
+  AQUARIUM_HTTP_PORT
+  AQUARIUM_FIRMWARE_BASE_URL
+  AQUARIUM_MQTT_BROKER_URL
+  AQUARIUM_MQTT_USERNAME
+  AQUARIUM_MQTT_PASSWORD
+  AQUARIUM_PRODUCTION_MQTT_CONFIRMATION
+  AQUARIUM_STATE_HOST_DIRECTORY
+  AQUARIUM_EVENTS_HOST_DIRECTORY
+  AQUARIUM_ARCHIVE_HOST_DIRECTORY
+  AQUARIUM_BACKUP_HOST_DIRECTORY
+)
+optional_configuration_variables=(
+  AQUARIUM_ALERT_WEBHOOK_URL
+  AQUARIUM_ALERT_WEBHOOK_KEY
+  AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS
+  AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME
+  AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE
+)
+configuration_staging="$(mktemp)"
+chmod 0600 "${configuration_staging}"
+trap 'rm -f -- "${configuration_staging}"' EXIT
+for variable_name in "${required_configuration_variables[@]}"; do
+  declare -p "${variable_name}" >>"${configuration_staging}"
+done
+for variable_name in "${optional_configuration_variables[@]}"; do
+  if [[ -v "${variable_name}" ]]; then
+    declare -p "${variable_name}" >>"${configuration_staging}"
+  fi
+done
+sudo install -d -o root -g root -m 0700 /etc/aquarium-controller
+sudo install -o root -g root -m 0600 \
+  "${configuration_staging}" /etc/aquarium-controller/production.conf
+sudo bash -n /etc/aquarium-controller/production.conf
+```
+
+The deployment scripts source only this root-owned file and update only its
+immutable image digest during a routine release. Repeat the preflight and this
+step whenever a non-digest production setting changes.
 
 ## 3. Create the pre-start recovery set
 
@@ -607,7 +707,7 @@ docker compose --file compose.production.yaml exec -T controller \
   --events-db /var/lib/aquarium/events/events.db
 ```
 
-Confirm the snapshot and UI, firmware version 5.0.6 for every ESP32, MQTT
+Confirm the snapshot and UI, firmware version 6.0.0 for every ESP32, MQTT
 discovery, schedules, overrides, alert history, notification destination,
 storage-health readings, and the latest verified backup. Confirm a
 nonresponding ESP becomes offline without stopping healthy device lanes, and

@@ -47,34 +47,64 @@ describe("legacy command builders", () => {
       {
         command: "A1B2C3D4 s 12 128 1",
         target,
-        expectedResponse: { kind: "exact", value: "s 12 128 1" },
+        operation: { kind: "set_pwm", pin: 12, value: 128, overwrite: true },
+        wireProtocol: "structured_v1",
       },
       {
         command: "A1B2C3D4 p",
         target,
-        expectedResponse: { kind: "exact", value: "o" },
+        operation: { kind: "ping" },
+        wireProtocol: "structured_v1",
       },
       {
         command: "A1B2C3D4 e ReefTank 5000 8",
         target,
-        expectedResponse: { kind: "exact", value: "ReefTank 5000 8" },
+        operation: {
+          kind: "edit_configuration",
+          name: "ReefTank",
+          pwmFrequencyHz: 5_000,
+          pwmResolutionBits: 8,
+        },
+        wireProtocol: "structured_v1",
       },
       {
         command: `A1B2C3D4 sc ${scheduleJson}`,
         target,
-        expectedResponse: { kind: "exact", value: "schedule_ok" },
+        operation: {
+          kind: "schedule",
+          schedule: JSON.parse(scheduleJson),
+        },
+        wireProtocol: "structured_v1",
       },
       {
         command: "A1B2C3D4 sync 1752192000",
         target,
-        expectedResponse: { kind: "exact", value: "1752192000" },
+        operation: { kind: "sync_time", epochSeconds: 1_752_192_000 },
+        wireProtocol: "structured_v1",
       },
       {
         command: "A1B2C3D4 r 7",
         target,
-        expectedResponse: { kind: "analog_read", pin: 7 },
+        operation: { kind: "analog_read", pin: 7 },
+        wireProtocol: "structured_v1",
       },
     ]);
+  });
+
+  it("allows the legacy wire format only for OTA bootstrap", () => {
+    const request = {
+      kind: "firmware_update" as const,
+      version: "6.0.0",
+      url: "http://controller/firmware.bin",
+      size: 1_200_000,
+      sha256: "a".repeat(64),
+    };
+    expect(
+      buildLegacyWireCommand(target, request, "legacy_v5_ota").wireProtocol,
+    ).toBe("legacy_v5_ota");
+    expect(() =>
+      buildLegacyWireCommand(target, { kind: "ping" }, "legacy_v5_ota"),
+    ).toThrow(/OTA commands only/u);
   });
 
   it("uses strict firmware bounds for PWM writes and analog reads", () => {
@@ -110,9 +140,13 @@ describe("legacy command builders", () => {
     expect(
       buildEditConfigurationCommand(target, "Tank", 1_220, 16).command,
     ).toBe("A1B2C3D4 e Tank 1220 16");
+    expect(
+      buildEditConfigurationCommand(target, "semi;colon", 5_000, 8)
+        .operation,
+    ).toMatchObject({ kind: "edit_configuration", name: "semi;colon" });
     expect(CONTRACT_LEDC_SOURCE_CLOCK_HZ).toBe(PROTOCOL_LEDC_SOURCE_CLOCK_HZ);
 
-    for (const name of ["", "two words", "semi;colon", "å", "x".repeat(32)]) {
+    for (const name of ["", "two words", "å", "x".repeat(32)]) {
       expect(() =>
         buildEditConfigurationCommand(target, name, 5_000, 8),
       ).toThrow(/device name/);
@@ -135,7 +169,10 @@ describe("legacy command builders", () => {
   it("accepts only canonical, strictly validated schedule documents", () => {
     expect(buildScheduleCommand(target, scheduleJson)).toMatchObject({
       command: `A1B2C3D4 sc ${scheduleJson}`,
-      expectedResponse: { kind: "exact", value: "schedule_ok" },
+      operation: {
+        kind: "schedule",
+        schedule: JSON.parse(scheduleJson),
+      },
     });
 
     const extraFieldSchedule = JSON.stringify({

@@ -1,16 +1,11 @@
 import {
   boundedTextSchema,
-  canonicalUint32HashSchema,
-  hardwareProfileIdSchema,
   identifierSchema,
   nonnegativeSafeIntegerSchema,
 } from "@aquarium/contracts";
 import {
-  espFirmwareDiagnosticSchema,
-  espOtaStatusSchema,
-  espOutputStateSchema,
+  espAnnouncementSchema,
   isSupportedEspFirmwareVersion,
-  isSupportedEsp32PwmConfiguration,
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   type EspAnnouncement,
 } from "@aquarium/esp-protocol";
@@ -29,37 +24,8 @@ export const DEFAULT_ANNOUNCEMENT_PERSIST_INTERVAL_MS = 30_000;
 export const DEFAULT_DEVICE_STALE_AFTER_MS = 90_000;
 export const DEFAULT_DEVICE_OFFLINE_AFTER_MS = 300_000;
 
-const registryAnnouncementSchema = z
-  .strictObject({
-    id: identifierSchema,
-    name: boundedTextSchema,
-    freq: z.number().int().min(1).max(40_000),
-    res: z.number().int().min(1).max(16),
-    status: boundedTextSchema,
-    version: boundedTextSchema,
-    hardwareProfile: hardwareProfileIdSchema.optional(),
-    hardwareModel: boundedTextSchema.optional(),
-    scheduleHash: canonicalUint32HashSchema,
-    outputsOff: z.boolean().optional(),
-    outputs: espOutputStateSchema.optional(),
-    ota: espOtaStatusSchema.optional(),
-    lastError: espFirmwareDiagnosticSchema.optional(),
-  })
-  .superRefine((announcement, context) => {
-    if (
-      !isSupportedEsp32PwmConfiguration(announcement.freq, announcement.res)
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["res"],
-        message:
-          "PWM frequency and resolution exceed the ESP32 LEDC source-clock limit",
-      });
-    }
-  });
-
 const announcementEventSchema = z.strictObject({
-  announcement: registryAnnouncementSchema,
+  announcement: espAnnouncementSchema,
   receivedAtMs: nonnegativeSafeIntegerSchema,
 });
 
@@ -762,7 +728,7 @@ export class DeviceRegistry {
 }
 
 function announcementError(
-  announcement: z.infer<typeof registryAnnouncementSchema>,
+  announcement: EspAnnouncement,
   desired: {
     readonly name: string;
     readonly frequencyHz: number;

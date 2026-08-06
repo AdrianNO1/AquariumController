@@ -572,27 +572,28 @@ describe("operations route", () => {
     const base = createTestControlSnapshot(8);
     const snapshot = controllerSnapshotSchema.parse({
       ...base,
-      devices: base.devices.map((device, index) => ({
-        ...device,
-        reported: {
-          ...device.reported,
-          firmwareVersion: index === 0 ? "5.0.0" : null,
-        },
-      })),
       firmware: {
         ...base.firmware,
+        currentVersion: "6.0.1",
         fleetPolicy: {
-          targetVersion: base.firmware.currentVersion,
+          targetVersion: "6.0.1",
           mode: "when_off",
           requestedAt: "2026-07-13T09:55:00.000Z",
         },
       },
+      devices: base.devices.map((device, index) => ({
+        ...device,
+        reported: {
+          ...device.reported,
+          firmwareVersion: index === 0 ? "6.0.0" : "5.0.6",
+        },
+      })),
     });
     const user = renderApp("/operations", controllerState(snapshot, refresh));
 
     expect(
       screen.getByText(
-        "Active rollout for firmware 5.0.4: update when outputs are off. Currently outdated: 2.",
+        "Active rollout for firmware 6.0.1: update when outputs are off. Currently eligible: 1.",
       ),
     ).toBeTruthy();
 
@@ -601,12 +602,11 @@ describe("operations route", () => {
       screen.getByRole("dialog", { name: "Update all ESP32 devices?" }),
     ).toBeTruthy();
     expect(
-      screen.getByRole("heading", { name: "Outdated ESPs (2)" }),
+      screen.getByRole("heading", { name: "Eligible outdated ESPs (1)" }),
     ).toBeTruthy();
     expect(screen.getByText("main-a")).toBeTruthy();
-    expect(screen.getByText("Firmware 5.0.0 · stale")).toBeTruthy();
-    expect(screen.getByText("device-backup")).toBeTruthy();
-    expect(screen.getByText("Firmware version unknown · offline")).toBeTruthy();
+    expect(screen.getByText("Firmware 6.0.0 · stale")).toBeTruthy();
+    expect(screen.queryByText("device-backup")).toBeNull();
     const updateNow = screen.getByRole("button", {
       name: /^Update now \(restart\)/u,
     });

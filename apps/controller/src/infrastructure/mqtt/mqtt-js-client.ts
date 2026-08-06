@@ -117,6 +117,11 @@ function assertMqttBrokerUrl(brokerUrl: string): void {
   if (parsed.protocol !== "mqtt:" && parsed.protocol !== "mqtts:") {
     throw new TypeError("MQTT broker URL must use mqtt:// or mqtts://");
   }
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    throw new TypeError(
+      "MQTT broker URL must not contain credentials; use explicit connection options",
+    );
+  }
 }
 
 function assertIntegerAtLeast(

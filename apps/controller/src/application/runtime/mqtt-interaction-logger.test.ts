@@ -28,6 +28,7 @@ describe("MQTT interaction volume policy", () => {
 
     await logger.logAnnouncement({
       announcement: {
+        protocolVersion: 1,
         id: "A1",
         name: "One",
         freq: 5_000,
@@ -36,6 +37,7 @@ describe("MQTT interaction volume policy", () => {
         version: "4.0.0",
         scheduleHash: "0",
       },
+      topic: "test/aquarium/v1/devices/A1/announce",
       receivedAtMs: 100,
       payloadBytes: 50,
     });
@@ -90,7 +92,7 @@ describe("MQTT interaction volume policy", () => {
         command: "A1 p",
         targetId: "A1",
         status: "succeeded",
-        response: "o",
+        responseBytes: 1,
         analogValue: null,
       },
       atMs: 700,
@@ -103,8 +105,12 @@ describe("MQTT interaction volume policy", () => {
         command: "A1 p",
         targetId: "A1",
         status: "failed",
-        response: "E: Invalid command",
-        expectedResponse: { kind: "exact", value: "o" },
+        responseBytes: 18,
+        failure: {
+          kind: "device_error",
+          code: "invalid_command",
+          message: "Invalid command",
+        },
       },
       atMs: 800,
     });
@@ -140,7 +146,7 @@ describe("MQTT interaction volume policy", () => {
       .where("kind", "=", "mqtt.command-response")
       .executeTakeFirstOrThrow();
     expect(JSON.parse(reportedError.payload_json ?? "null")).toMatchObject({
-      deviceReportedError: "Invalid command",
+      deviceReportedError: "invalid_command: Invalid command",
       payloadStored: false,
     });
     await expect(
@@ -160,11 +166,12 @@ describe("MQTT interaction volume policy", () => {
       createEspTopicSet(true),
     );
     const baseAnnouncement = {
+      protocolVersion: 1 as const,
       id: "A1",
       name: "One",
       freq: 5_000,
       res: 8,
-      status: "online",
+      status: "online" as const,
       version: "4.1.0",
       scheduleHash: "0",
     } as const;
@@ -183,6 +190,7 @@ describe("MQTT interaction volume policy", () => {
           ...baseAnnouncement,
           lastError: activeDiagnostic,
         },
+        topic: "test/aquarium/v1/devices/A1/announce",
         receivedAtMs,
         payloadBytes: 100,
       });
@@ -197,6 +205,7 @@ describe("MQTT interaction volume policy", () => {
             active: false,
           },
         },
+        topic: "test/aquarium/v1/devices/A1/announce",
         receivedAtMs,
         payloadBytes: 100,
       });
@@ -222,6 +231,50 @@ describe("MQTT interaction volume policy", () => {
     ).toMatchObject([{ active: true }, { active: false }]);
   });
 
+  it("logs diagnostic-storage failure and recovery transitions", async () => {
+    const database = await openEventsDatabase({ filename: ":memory:" });
+    openDatabases.push(database);
+    const logger = new MqttInteractionLogger(
+      new InteractionRepository(database),
+      createEspTopicSet(true),
+    );
+    const announcement = {
+      protocolVersion: 1 as const,
+      id: "A1",
+      name: "One",
+      freq: 5_000,
+      res: 8,
+      status: "online" as const,
+      version: "6.0.0",
+      scheduleHash: "0",
+    };
+
+    for (const [receivedAtMs, healthy] of [
+      [100, true],
+      [200, false],
+      [300, false],
+      [400, true],
+    ] as const) {
+      await logger.logAnnouncement({
+        announcement: { ...announcement, diagnosticStorageHealthy: healthy },
+        topic: "test/aquarium/v1/devices/A1/announce",
+        receivedAtMs,
+        payloadBytes: 100,
+      });
+    }
+
+    const transitions = await database
+      .selectFrom("interactions")
+      .select(["outcome", "retention_class"])
+      .where("kind", "=", "mqtt.device-diagnostic-storage")
+      .orderBy("occurred_at_ms")
+      .execute();
+    expect(transitions).toEqual([
+      { outcome: "failed", retention_class: "critical" },
+      { outcome: "succeeded", retention_class: "audit" },
+    ]);
+  });
+
   it("durably logs terminal OTA telemetry without duplicating announcements", async () => {
     const database = await openEventsDatabase({ filename: ":memory:" });
     openDatabases.push(database);
@@ -230,11 +283,12 @@ describe("MQTT interaction volume policy", () => {
       createEspTopicSet(true),
     );
     const announcement = {
+      protocolVersion: 1 as const,
       id: "A1",
       name: "One",
       freq: 5_000,
       res: 8,
-      status: "online",
+      status: "online" as const,
       version: "5.0.6",
       scheduleHash: "0",
       ota: {
@@ -249,6 +303,7 @@ describe("MQTT interaction volume policy", () => {
       [100, 200].map((receivedAtMs) =>
         logger.logAnnouncement({
           announcement,
+          topic: "test/aquarium/v1/devices/A1/announce",
           receivedAtMs,
           payloadBytes: 120,
         }),

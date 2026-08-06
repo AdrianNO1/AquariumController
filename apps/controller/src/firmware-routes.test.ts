@@ -26,6 +26,7 @@ describe("firmware routes", () => {
       url: "/api/firmware/esp32/manifest",
     });
     expect(manifest.statusCode).toBe(200);
+    expect(manifest.headers["cache-control"]).toBe("no-store");
     expect(manifest.json()).toEqual({
       version: "5.0.0",
       sha256:

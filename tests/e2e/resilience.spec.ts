@@ -120,14 +120,8 @@ test("fake ESP persistent state survives actor restart", async ({
   await expect(
     page.locator("article.device-card").filter({ hasText: "A1B2C3D4" }),
   ).toContainText("Online", { timeout: 10_000 });
-  await expect
-    .poll(async () => {
-      const current = await stack.fetchSnapshot();
-      return current.devices.find(
-        (device) => device.hardwareId === primaryBefore.hardwareId,
-      )?.lastSeenAt;
-    })
-    .not.toBe(primaryBefore.lastSeenAt);
+  // Identical announcements intentionally coalesce last-seen persistence, so
+  // restartFakeDevices proves fresh MQTT announcements at the broker instead.
   const primaryAfter = (await stack.fetchSnapshot()).devices.find(
     (device) => device.hardwareId === primaryBefore.hardwareId,
   );
@@ -216,7 +210,7 @@ test("a dropped fake ESP response remains an explicit unknown outcome", async ({
       editCommandPrefix,
     );
     stack.setFakeResponseFaults("main", {
-      dropNextResponseForCommand: "e",
+      dropNextResponseForCommand: "edit_configuration",
     });
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
 
@@ -346,30 +340,20 @@ function countCorrelatedCommandPublications(
   publications: readonly MqttPublication[],
   commandPrefix: string,
 ): number {
+  const deviceId = commandPrefix.split(" ", 1)[0];
   return publications.filter(({ topic, payload }) => {
-    if (topic !== "test/aquarium/command") {
+    if (topic !== `test/aquarium/v1/devices/${deviceId}/command`) {
       return false;
     }
-    return (
-      correlatedSingleFrameCommand(payload)?.startsWith(commandPrefix) ?? false
-    );
+    try {
+      const request = JSON.parse(payload) as {
+        readonly commands?: readonly { readonly kind?: string }[];
+      };
+      return request.commands?.some(({ kind }) => kind === "edit_configuration") ?? false;
+    } catch {
+      return false;
+    }
   }).length;
-}
-
-function correlatedSingleFrameCommand(frame: string): string | null {
-  if (frame === "discover" || frame.startsWith("chunk:")) {
-    return null;
-  }
-  const prefix = "request:";
-  const separator = frame.indexOf("|");
-  if (!frame.startsWith(prefix) || separator <= prefix.length) {
-    throw new Error("Expected a correlated MQTT command envelope");
-  }
-  const command = frame.slice(separator + 1);
-  if (command.length === 0) {
-    throw new Error("Correlated MQTT command envelope had an empty command");
-  }
-  return command;
 }
 
 test("device-offline alert can be acknowledged and recovers when fakes resume", async ({
