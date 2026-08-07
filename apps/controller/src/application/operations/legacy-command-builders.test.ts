@@ -9,6 +9,7 @@ import type { LegacyDeviceTarget } from "../../infrastructure/mqtt/legacy-mqtt-t
 import {
   buildAnalogReadCommand,
   buildEditConfigurationCommand,
+  buildFirmwareUpdateCommand,
   buildLegacyWireCommand,
   buildPingCommand,
   buildScheduleCommand,
@@ -39,6 +40,7 @@ describe("legacy command builders", () => {
       { kind: "schedule", scheduleJson },
       { kind: "sync_time", epochSeconds: 1_752_192_000 },
       { kind: "analog_read", pin: 7 },
+      { kind: "release_startup_hold" },
     ];
 
     expect(
@@ -82,7 +84,47 @@ describe("legacy command builders", () => {
         target,
         operation: { kind: "analog_read", pin: 7 },
       },
+      {
+        command: "A1B2C3D4 release",
+        target,
+        operation: { kind: "release_startup_hold" },
+      },
     ]);
+  });
+
+  it("keeps legacy OTA wire text compatible while carrying the structured transition", () => {
+    const sha256 = "a".repeat(64);
+    expect(
+      buildFirmwareUpdateCommand(
+        target,
+        "6.0.3",
+        "http://controller.local/current.bin",
+        1_196_416,
+        sha256,
+        5,
+      ),
+    ).toEqual({
+      command: `A1B2C3D4 ota 6.0.3 1196416 ${sha256} http://controller.local/current.bin`,
+      target,
+      operation: {
+        kind: "firmware_update",
+        version: "6.0.3",
+        url: "http://controller.local/current.bin",
+        size: 1_196_416,
+        sha256,
+        transitionSeconds: 5,
+      },
+    });
+    expect(() =>
+      buildFirmwareUpdateCommand(
+        target,
+        "6.0.3",
+        "http://controller.local/current.bin",
+        1_196_416,
+        sha256,
+        61,
+      ),
+    ).toThrow(/transition duration/i);
   });
 
   it("uses strict firmware bounds for PWM writes and analog reads", () => {

@@ -19,6 +19,7 @@ import { hardwarePinSafetyMigration } from "./hardware-pin-safety-migration.js";
 import { hardwareProfileMigration } from "./hardware-profile-migration.js";
 import { notificationOutcomeAuditMigration } from "./notification-outcome-audit-migration.js";
 import { operatorConcurrencyMigration } from "./operator-concurrency-migration.js";
+import { otaTransitionMigration } from "./ota-transition-migration.js";
 import { stateRuntimeMigration } from "./state-runtime-migration.js";
 import { stateInitialMigration } from "./state-migrations.js";
 import type { EventsDatabaseSchema, StateDatabaseSchema } from "./types.js";
@@ -39,6 +40,7 @@ export const STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME =
   "010_hardware_pin_safety";
 export const STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME =
   "011_channel_name_scope";
+export const STATE_OTA_TRANSITION_MIGRATION_NAME = "012_ota_transition";
 export const EVENTS_INITIAL_MIGRATION_NAME = "001_initial_events";
 export const EVENTS_QUERY_MIGRATION_NAME = "002_log_query_indexes";
 export const EVENTS_RETENTION_MIGRATION_NAME =
@@ -57,7 +59,8 @@ export type StateMigrationTarget =
   | typeof STATE_CONTROL_AREA_THROTTLE_MIGRATION_NAME
   | typeof STATE_HARDWARE_PROFILE_MIGRATION_NAME
   | typeof STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME
-  | typeof STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME;
+  | typeof STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME
+  | typeof STATE_OTA_TRANSITION_MIGRATION_NAME;
 export type EventsMigrationTarget =
   | typeof EVENTS_INITIAL_MIGRATION_NAME
   | typeof EVENTS_QUERY_MIGRATION_NAME
@@ -89,6 +92,7 @@ const stateMigrationProvider = new EmbeddedMigrationProvider({
   [STATE_HARDWARE_PROFILE_MIGRATION_NAME]: hardwareProfileMigration,
   [STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME]: hardwarePinSafetyMigration,
   [STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME]: channelNameScopeMigration,
+  [STATE_OTA_TRANSITION_MIGRATION_NAME]: otaTransitionMigration,
 });
 
 const eventsMigrationProvider = new EmbeddedMigrationProvider({

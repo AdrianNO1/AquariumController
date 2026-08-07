@@ -130,6 +130,12 @@ interface BatchMutationOutcome {
   readonly invalidations: readonly StateInvalidation[];
 }
 
+interface AreaOwnedResources {
+  readonly channelIds: readonly string[];
+  readonly outputIds: readonly string[];
+  readonly conflicts: readonly RelationConflict[];
+}
+
 export interface ControllerConfigurationRepositoryOptions {
   readonly nowMs?: () => number;
   readonly actor?: string;
@@ -594,37 +600,15 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
         if (stored === undefined) {
           throw new ConfigurationNotFoundError("control_area", areaSlug);
         }
-        const conflicts: RelationConflict[] = [];
-        const channel = await transaction
-          .selectFrom("channels")
-          .select("id")
-          .where("kind", "=", stored.type_key)
-          .executeTakeFirst();
-        if (channel !== undefined) {
-          conflicts.push({
-            resource: "channel",
-            id: channel.id,
-            relation: "control_area",
-            message: "Delete this area's channels before deleting the area",
-          });
-        }
-        const output = await transaction
-          .selectFrom("outputs")
-          .select("id")
-          .where("kind", "=", stored.type_key)
-          .executeTakeFirst();
-        if (output !== undefined) {
-          conflicts.push({
-            resource: "output",
-            id: output.id,
-            relation: "control_area",
-            message: "Delete this area's outputs before deleting the area",
-          });
-        }
-        if (conflicts.length > 0) {
-          throw new ConfigurationRelationalConflictError(conflicts);
+        const owned = await this.areaOwnedResources(
+          transaction,
+          stored.type_key,
+        );
+        if (owned.conflicts.length > 0) {
+          throw new ConfigurationRelationalConflictError(owned.conflicts);
         }
         const before = await this.controlAreaAuditState(transaction, stored);
+        await this.deleteAreaOwnedResources(transaction, owned);
         await transaction
           .deleteFrom("throttles")
           .where("type_key", "=", stored.type_key)
@@ -755,35 +739,14 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
         const deletedAreas = storedAreas.filter(
           (area) => !retainedSlugs.has(area.slug),
         );
+        const ownedByTypeKey = new Map<string, AreaOwnedResources>();
         for (const area of deletedAreas) {
-          const [channel, output] = await Promise.all([
-            transaction
-              .selectFrom("channels")
-              .select("id")
-              .where("kind", "=", area.type_key)
-              .executeTakeFirst(),
-            transaction
-              .selectFrom("outputs")
-              .select("id")
-              .where("kind", "=", area.type_key)
-              .executeTakeFirst(),
-          ]);
-          if (channel !== undefined) {
-            conflicts.push({
-              resource: "channel",
-              id: channel.id,
-              relation: "control_area",
-              message: "Delete this area's channels before deleting the area",
-            });
-          }
-          if (output !== undefined) {
-            conflicts.push({
-              resource: "output",
-              id: output.id,
-              relation: "control_area",
-              message: "Delete this area's outputs before deleting the area",
-            });
-          }
+          const owned = await this.areaOwnedResources(
+            transaction,
+            area.type_key,
+          );
+          ownedByTypeKey.set(area.type_key, owned);
+          conflicts.push(...owned.conflicts);
         }
         const deletedTypeKeys = new Set(
           deletedAreas.map((area) => area.type_key),
@@ -847,6 +810,11 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
 
         const nowMs = assertTime(this.#nowMs());
         for (const area of deletedAreas) {
+          const owned = ownedByTypeKey.get(area.type_key);
+          if (owned === undefined) {
+            throw new Error("Validated area deletion plan is missing");
+          }
+          await this.deleteAreaOwnedResources(transaction, owned);
           await transaction
             .deleteFrom("throttles")
             .where("type_key", "=", area.type_key)
@@ -2332,6 +2300,173 @@ export class ControllerConfigurationRepository implements ControllerConfiguratio
       area: storedControlArea(row),
       throttle: throttle ?? null,
     };
+  }
+
+  private async areaOwnedResources(
+    transaction: StateDatabaseTransaction,
+    typeKey: string,
+  ): Promise<AreaOwnedResources> {
+    const [channels, outputs] = await Promise.all([
+      transaction
+        .selectFrom("channels")
+        .select("id")
+        .where("kind", "=", typeKey)
+        .execute(),
+      transaction
+        .selectFrom("outputs")
+        .select("id")
+        .where("kind", "=", typeKey)
+        .execute(),
+    ]);
+    const conflicts: RelationConflict[] = [];
+    for (const channel of channels) {
+      const [mapping, override] = await Promise.all([
+        transaction
+          .selectFrom("pin_mappings")
+          .select("id")
+          .where("channel_id", "=", channel.id)
+          .executeTakeFirst(),
+        transaction
+          .selectFrom("overrides")
+          .select("id")
+          .where("channel_id", "=", channel.id)
+          .executeTakeFirst(),
+      ]);
+      if (mapping !== undefined) {
+        conflicts.push({
+          resource: "pin_mapping",
+          id: mapping.id,
+          relation: "channel",
+          message: "Remove channel pin mappings before deleting the area",
+        });
+      }
+      if (override !== undefined) {
+        conflicts.push({
+          resource: "override",
+          id: override.id,
+          relation: "channel",
+          message: "Channel history prevents deleting the area",
+        });
+      }
+    }
+    for (const output of outputs) {
+      const [mapping, override, timer, calibration, program, alertRule] =
+        await Promise.all([
+          transaction
+            .selectFrom("pin_mappings")
+            .select("id")
+            .where("output_id", "=", output.id)
+            .executeTakeFirst(),
+          transaction
+            .selectFrom("overrides")
+            .select("id")
+            .where("output_id", "=", output.id)
+            .executeTakeFirst(),
+          transaction
+            .selectFrom("timers")
+            .select("id")
+            .where("target_output_id", "=", output.id)
+            .executeTakeFirst(),
+          transaction
+            .selectFrom("pump_calibrations")
+            .select("id")
+            .where("output_id", "=", output.id)
+            .executeTakeFirst(),
+          transaction
+            .selectFrom("dsl_program_revisions")
+            .select("id")
+            .where("output_id", "=", output.id)
+            .executeTakeFirst(),
+          transaction
+            .selectFrom("alert_rules")
+            .select("id")
+            .where("output_id", "=", output.id)
+            .executeTakeFirst(),
+        ]);
+      const references = [
+        mapping === undefined
+          ? null
+          : {
+              resource: "pin_mapping" as const,
+              id: mapping.id,
+              relation: "output",
+              message: "Remove output pin mappings before deleting the area",
+            },
+        override === undefined
+          ? null
+          : {
+              resource: "override" as const,
+              id: override.id,
+              relation: "output",
+              message: "Output history prevents deleting the area",
+            },
+        timer === undefined
+          ? null
+          : {
+              resource: "timer" as const,
+              id: timer.id,
+              relation: "output",
+              message: "A timer still targets this area's output",
+            },
+        calibration === undefined
+          ? null
+          : {
+              resource: "pump_calibration" as const,
+              id: calibration.id,
+              relation: "output",
+              message: "Pump calibration history prevents deleting the area",
+            },
+        program === undefined
+          ? null
+          : {
+              resource: "dsl_program_revision" as const,
+              id: program.id,
+              relation: "output",
+              message: "Program history prevents deleting the area",
+            },
+        alertRule === undefined
+          ? null
+          : {
+              resource: "alert_rule" as const,
+              id: alertRule.id,
+              relation: "output",
+              message: "An alert rule still uses this area's output",
+            },
+      ];
+      conflicts.push(
+        ...references.filter(
+          (reference): reference is NonNullable<typeof reference> =>
+            reference !== null,
+        ),
+      );
+    }
+    return {
+      channelIds: channels.map((channel) => channel.id),
+      outputIds: outputs.map((output) => output.id),
+      conflicts,
+    };
+  }
+
+  private async deleteAreaOwnedResources(
+    transaction: StateDatabaseTransaction,
+    owned: AreaOwnedResources,
+  ): Promise<void> {
+    if (owned.channelIds.length > 0) {
+      await transaction
+        .deleteFrom("schedules")
+        .where("channel_id", "in", owned.channelIds)
+        .execute();
+      await transaction
+        .deleteFrom("channels")
+        .where("id", "in", owned.channelIds)
+        .execute();
+    }
+    if (owned.outputIds.length > 0) {
+      await transaction
+        .deleteFrom("outputs")
+        .where("id", "in", owned.outputIds)
+        .execute();
+    }
   }
 
   private async assertControlAreaAvailable(

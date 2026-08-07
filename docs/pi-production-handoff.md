@@ -12,16 +12,16 @@ This checklist does not replace that runbook.
 
 ## Current handoff state
 
-The repository contains firmware 6.0.1, structured per-device MQTT,
+The repository contains firmware 6.0.2, structured per-device MQTT,
 per-device lanes, latest-only scheduler, and device-local failure
 implementation. Every subsequent release must pass protected CI, merge,
 publish a new image, and use that image's exact digest.
 
-Current firmware 6.0.1/structured-protocol local evidence is:
+Current firmware 6.0.2/structured-protocol local evidence is:
 
 - lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 111 files/759 tests;
-- critical: 88 files/636 tests;
+- unit: 111 files/762 tests;
+- critical: 88 files/638 tests;
 - real Mosquitto integration: 5/5;
 - production Playwright: 21/21 with zero retries; and
 - pinned firmware compile: 90% flash and 16% global RAM.
@@ -104,9 +104,10 @@ succeeds.
 - [ ] Install the `nemo` password-file entry and reviewed ACL: anonymous clients
       retain non-v1 topics, anonymous `aquarium/v1/#` access is denied, and
       authenticated `nemo` clients can use `aquarium/#`.
-- [x] Restrict the plaintext MQTT listener to the trusted aquarium LAN. The Pi
-      firewall permits ports 1883 and 3001 only from `192.168.1.0/24`, plus the
-      controller's narrow Docker bridge rule.
+- [x] Restrict the plaintext MQTT listener and both HTTP compatibility ports to
+      the trusted aquarium LAN. The Pi firewall permits ports 1883, 2389, and
+      3001 only from `192.168.1.0/24`, plus the controller's narrow Docker
+      bridge rule.
 - [ ] Keep `allow_anonymous true` for the unrelated legacy ESP. Do not narrow
       its non-aquarium topic access until that project is separately migrated.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
@@ -140,14 +141,14 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 6.0.1 with an ignored local configuration containing the
+- [ ] Build firmware 6.0.2 with an ignored local configuration containing the
       intended Wi-Fi, Pi broker, `nemo` credentials, and NTP host.
 - [ ] For a firmware-5 device with old settings already in NVS, set
       `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` only in its one-time USB
       build. Confirm reconnect with the intended settings, then use generic OTA images whose
       release configuration keeps the switch `false`.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports firmware 6.0.1 and hardware profile
+- [ ] Confirm every device reports firmware 6.0.2 and hardware profile
       `nodemcu-esp32s-v1.1`; other protocol majors are intentionally marked
       `firmware_unsupported` and receive no actuator, configuration, schedule,
       time-sync, or OTA work. Every pre-v6 version needs USB bootstrap. Future

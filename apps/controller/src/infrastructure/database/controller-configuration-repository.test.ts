@@ -157,7 +157,7 @@ describe("ControllerConfigurationRepository", () => {
     ]);
   });
 
-  it("does not delete an area while it owns live configuration", async () => {
+  it("atomically deletes an area with unreferenced channels and schedules", async () => {
     const database = await openDatabase();
     const repository = new ControllerConfigurationRepository(database, {
       nowMs: () => 100,
@@ -177,17 +177,45 @@ describe("ControllerConfigurationRepository", () => {
       enabled: true,
     });
 
+    await database
+      .insertInto("outputs")
+      .values({
+        id: "output-coral",
+        name: "Coral output",
+        kind: "coral-tank",
+        display_order: 0,
+        enabled: 1,
+        output_gain: 1,
+        created_at_ms: 100,
+        updated_at_ms: 100,
+      })
+      .executeTakeFirstOrThrow();
+
     await expect(
       repository.deleteControlArea("coral-tank", 2),
-    ).rejects.toMatchObject({
-      conflicts: [
-        expect.objectContaining({
-          resource: "channel",
-          relation: "control_area",
-        }),
-      ],
-    });
-    expect(await readCurrentStateRevision(database)).toBe(2);
+    ).resolves.toMatchObject({ changed: true, revision: 3 });
+    await expect(
+      database
+        .selectFrom("channels")
+        .select("id")
+        .where("id", "=", "channel-coral")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+    await expect(
+      database
+        .selectFrom("schedules")
+        .select("id")
+        .where("channel_id", "=", "channel-coral")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+    await expect(
+      database
+        .selectFrom("outputs")
+        .select("id")
+        .where("id", "=", "output-coral")
+        .executeTakeFirst(),
+    ).resolves.toBeUndefined();
+    expect(await readCurrentStateRevision(database)).toBe(3);
   });
 
   it("does not expose the internal storage-health owner as an operator device", async () => {
@@ -978,6 +1006,21 @@ describe("ControllerConfigurationRepository", () => {
       displayOrder: 0,
       enabled: true,
     });
+    await database
+      .insertInto("overrides")
+      .values({
+        id: "override-return-history",
+        channel_id: "channel-return",
+        output_id: null,
+        value_percentage: 50,
+        status: "expired",
+        requested_at_ms: 10,
+        starts_at_ms: 10,
+        expires_at_ms: 20,
+        completed_at_ms: 20,
+        operation_id: null,
+      })
+      .executeTakeFirstOrThrow();
 
     await expect(
       repository.replaceControlAreas({

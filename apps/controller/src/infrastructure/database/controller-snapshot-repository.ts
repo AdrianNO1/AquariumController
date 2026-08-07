@@ -521,6 +521,7 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
               : {
                   targetVersion: firmwareUpdate.target_version,
                   mode: firmwareUpdate.mode,
+                  transitionSeconds: firmwareUpdate.transition_seconds,
                   status: firmwareUpdate.status,
                   progress: firmwareUpdate.progress,
                   operationId: firmwareUpdate.operation_id,
@@ -859,6 +860,8 @@ export class ControllerSnapshotRepository implements ControllerSnapshotReader {
               : {
                   targetVersion: firmwareRolloutPolicy.target_version,
                   mode: firmwareRolloutPolicy.mode,
+                  transitionSeconds:
+                    firmwareRolloutPolicy.transition_seconds,
                   requestedAt: toIsoTimestamp(
                     firmwareRolloutPolicy.requested_at_ms,
                     "firmware fleet rollout request time",

@@ -16,13 +16,20 @@ export function OperationsPage(): React.JSX.Element {
   const [firmwareDialogOpen, setFirmwareDialogOpen] = useState(false);
   const firmwareMutation = useMutation({
     retry: false,
-    mutationFn: (mode: "immediate" | "when_off") => {
+    mutationFn: ({
+      mode,
+      transitionSeconds,
+    }: {
+      readonly mode: "immediate" | "when_off";
+      readonly transitionSeconds: number;
+    }) => {
       if (controller.snapshot === null) {
         throw new Error("Controller state is unavailable");
       }
       return requestFleetFirmwareUpdate({
         expectedRevision: controller.snapshot.revision,
         mode,
+        transitionSeconds,
       });
     },
     onSuccess: () => {
@@ -164,7 +171,9 @@ export function OperationsPage(): React.JSX.Element {
           targets={fleetEligibleOutdatedDevices}
           immediateDanger
           pending={firmwareMutation.isPending}
-          onConfirm={(mode) => firmwareMutation.mutate(mode)}
+          onConfirm={(mode, transitionSeconds) =>
+            firmwareMutation.mutate({ mode, transitionSeconds })
+          }
           onClose={() => setFirmwareDialogOpen(false)}
         />
       ) : null}

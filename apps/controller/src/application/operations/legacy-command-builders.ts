@@ -51,6 +51,8 @@ export function buildLegacyWireCommand(
       return buildSyncTimeCommand(target, request.epochSeconds);
     case "analog_read":
       return buildAnalogReadCommand(target, request.pin);
+    case "release_startup_hold":
+      return command(target, "release", { kind: "release_startup_hold" });
     case "firmware_update":
       return buildFirmwareUpdateCommand(
         target,
@@ -58,6 +60,7 @@ export function buildLegacyWireCommand(
         request.url,
         request.size,
         request.sha256,
+        request.transitionSeconds,
       );
   }
 }
@@ -182,6 +185,7 @@ export function buildFirmwareUpdateCommand(
   url: string,
   size: number,
   sha256: string,
+  transitionSeconds?: number,
 ): LegacyWireCommand {
   assertWireToken(version, "firmware version", 31);
   assertIntegerInRange(size, 100_000, 1_900_000, "firmware image size");
@@ -193,6 +197,14 @@ export function buildFirmwareUpdateCommand(
   if (!/^[a-f0-9]{64}$/u.test(sha256)) {
     throw new TypeError("Firmware SHA-256 must be lowercase hexadecimal");
   }
+  if (transitionSeconds !== undefined) {
+    assertIntegerInRange(
+      transitionSeconds,
+      0,
+      60,
+      "OTA transition duration",
+    );
+  }
   return command(
     target,
     `ota ${version} ${size} ${sha256} ${url}`,
@@ -202,6 +214,7 @@ export function buildFirmwareUpdateCommand(
       url,
       size,
       sha256,
+      ...(transitionSeconds === undefined ? {} : { transitionSeconds }),
     },
   );
 }

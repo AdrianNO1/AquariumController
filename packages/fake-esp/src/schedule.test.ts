@@ -488,6 +488,8 @@ function legacyResponseForResult(result: FakeEspCommandResult): string {
       return String(result.epochSeconds);
     case "analog_read":
       return `r ${result.pin} ${result.value}`;
+    case "release_startup_hold":
+      return "released";
     case "firmware_update":
       return "ota_accepted";
   }

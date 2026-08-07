@@ -27,6 +27,7 @@ import {
   matchEspCommandResult,
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   supportsPullOta,
+  supportsSmoothOta,
 } from "./index.js";
 
 const baseAnnouncement = {
@@ -77,6 +78,11 @@ describe("ESP MQTT protocol", () => {
     expect(source).not.toContain("clearEEPROM");
     expect(source).toContain("esp_ota_mark_app_valid_cancel_rollback();");
     expect(source).toContain('String clientId = "Aquarium-" + deviceId;');
+    expect(source).toContain(
+      "transitionSeconds == 0 || allOutputsAreOff()",
+    );
+    expect(source).toContain("const unsigned long STARTUP_OUTPUT_HOLD_MS = 15000;");
+    expect(source).toContain('preferences.putUInt("otaFade", otaRequest.transitionSeconds)');
     expect(safeConfiguration).toContain(
       "#define AQUARIUM_REPROVISION_NETWORK_CONFIG false",
     );
@@ -107,6 +113,10 @@ describe("ESP MQTT protocol", () => {
     expect(supportsPullOta("6.9.0")).toBe(true);
     expect(supportsPullOta("5.0.6")).toBe(false);
     expect(supportsPullOta("4.9.9")).toBe(false);
+    expect(supportsSmoothOta("6.0.1")).toBe(false);
+    expect(supportsSmoothOta("6.0.2")).toBe(true);
+    expect(supportsSmoothOta("6.1.0")).toBe(true);
+    expect(supportsSmoothOta("6.0.2-beta.1")).toBe(false);
   });
 
   it("normalizes passive legacy announcements but requires v1 on device topics", () => {
@@ -118,6 +128,7 @@ describe("ESP MQTT protocol", () => {
         ...baseAnnouncement,
         protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
         diagnosticStorageHealthy: true,
+        startupHold: true,
         outputsOff: false,
         outputs: [
           [16, 40],

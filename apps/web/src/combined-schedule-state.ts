@@ -70,6 +70,13 @@ export type CombinedScheduleAction =
       readonly currentRevision: number;
     }
   | {
+      readonly type: "restore_points";
+      readonly pointsByChannel: Readonly<
+        Record<string, readonly SchedulePoint[]>
+      >;
+      readonly currentRevision: number;
+    }
+  | {
       readonly type: "discard_all";
     }
   | {
@@ -201,6 +208,28 @@ export function combinedScheduleReducer(
           [action.channelId]: selectedPointId,
         },
       };
+    }
+    case "restore_points": {
+      const drafts: Record<string, CombinedScheduleDraft> = {};
+      const selectedPointIds = { ...state.selectedPointIds };
+      for (const [channelId, draft] of Object.entries(state.drafts)) {
+        const restored = action.pointsByChannel[channelId];
+        const points =
+          restored === undefined
+            ? draft.points
+            : normalizeLogicalPoints(restored);
+        drafts[channelId] = editDraft(
+          draft,
+          points,
+          action.currentRevision,
+        );
+        if (
+          !points.some((point) => point.id === selectedPointIds[channelId])
+        ) {
+          selectedPointIds[channelId] = preferredPointId(points);
+        }
+      }
+      return { ...state, drafts, selectedPointIds };
     }
     case "discard_all": {
       const drafts: Record<string, CombinedScheduleDraft> = {};

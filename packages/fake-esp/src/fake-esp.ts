@@ -23,7 +23,7 @@ import {
 } from "./transport.js";
 
 export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
-export const FAKE_ESP_FIRMWARE_VERSION = "6.0.1";
+export const FAKE_ESP_FIRMWARE_VERSION = "6.0.2";
 export const FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES = 5_120;
 export const FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS = 120_000;
 
@@ -682,12 +682,17 @@ export class FakeEspActor {
           };
         }
         break;
+      case "release_startup_hold":
+        return { index: command.index, kind: command.kind, ok: true };
       case "firmware_update":
         return {
           index: command.index,
           kind: command.kind,
           ok: true,
           status: "accepted",
+          ...(command.transitionSeconds === undefined
+            ? {}
+            : { transitionSeconds: command.transitionSeconds }),
         };
     }
     return {

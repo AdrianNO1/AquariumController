@@ -25,6 +25,7 @@ import {
   STATE_INITIAL_MIGRATION_NAME,
   STATE_NOTIFICATION_OUTCOME_AUDIT_MIGRATION_NAME,
   STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME,
+  STATE_OTA_TRANSITION_MIGRATION_NAME,
   STATE_RUNTIME_MIGRATION_NAME,
   type EventsDatabaseSchema,
   type StateDatabaseSchema,
@@ -99,6 +100,7 @@ describe("runtime migrations", () => {
       STATE_HARDWARE_PROFILE_MIGRATION_NAME,
       STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
       STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+      STATE_OTA_TRANSITION_MIGRATION_NAME,
     ]);
     expect(eventsResults.map((result) => result.migrationName)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -118,6 +120,7 @@ describe("runtime migrations", () => {
       STATE_HARDWARE_PROFILE_MIGRATION_NAME,
       STATE_HARDWARE_PIN_SAFETY_MIGRATION_NAME,
       STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+      STATE_OTA_TRANSITION_MIGRATION_NAME,
     ]);
     expect(await readMigrationNames(events)).toEqual([
       EVENTS_INITIAL_MIGRATION_NAME,
@@ -164,10 +167,18 @@ describe("runtime migrations", () => {
       singleton_key: 1,
       target_version: "5.0.0",
       mode: "when_off",
+      transition_seconds: 5,
       enabled: 0,
       requested_at_ms: 0,
       updated_at_ms: 0,
     });
+    await expect(
+      state
+        .updateTable("firmware_rollout_policy")
+        .set({ transition_seconds: 61 })
+        .where("singleton_key", "=", 1)
+        .executeTakeFirstOrThrow(),
+    ).rejects.toThrow(/CHECK constraint/i);
 
     const eventIndexes = await readSchemaObjectNames(events, "index");
     for (const name of [
@@ -224,6 +235,11 @@ describe("runtime migrations", () => {
     await expect(migrateStateDatabase(state)).resolves.toMatchObject([
       {
         migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -305,6 +321,11 @@ describe("runtime migrations", () => {
       },
       {
         migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -421,6 +442,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -497,6 +523,11 @@ describe("runtime migrations", () => {
       },
       {
         migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
         direction: "Up",
         status: "Success",
       },
@@ -594,6 +625,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -618,6 +654,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_OPERATOR_CONCURRENCY_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
         direction: "Down",
@@ -776,6 +817,11 @@ describe("runtime migrations", () => {
         direction: "Up",
         status: "Success",
       },
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
+        direction: "Up",
+        status: "Success",
+      },
     ]);
     await expect(
       state
@@ -797,6 +843,11 @@ describe("runtime migrations", () => {
     await expect(
       migrateStateDatabaseTo(state, STATE_RUNTIME_MIGRATION_NAME),
     ).resolves.toMatchObject([
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
         direction: "Down",
@@ -989,6 +1040,11 @@ describe("runtime migrations", () => {
       EVENTS_INITIAL_MIGRATION_NAME,
     );
     expect(stateDown).toMatchObject([
+      {
+        migrationName: STATE_OTA_TRANSITION_MIGRATION_NAME,
+        direction: "Down",
+        status: "Success",
+      },
       {
         migrationName: STATE_CHANNEL_NAME_SCOPE_MIGRATION_NAME,
         direction: "Down",

@@ -216,6 +216,7 @@ const deviceConfigurationSchema = z.strictObject({
 });
 
 export const firmwareUpdateModeSchema = z.enum(["immediate", "when_off"]);
+export const otaTransitionSecondsSchema = z.number().int().min(0).max(60);
 export const firmwareUpdateStatusSchema = z.enum([
   "pending",
   "waiting_for_device",
@@ -255,6 +256,7 @@ const reportedOtaStateSchema = z.strictObject({
 const deviceFirmwareUpdateSchema = z.strictObject({
   targetVersion: boundedTextSchema,
   mode: firmwareUpdateModeSchema,
+  transitionSeconds: otaTransitionSecondsSchema,
   status: firmwareUpdateStatusSchema,
   progress: z.number().int().min(0).max(100),
   operationId: identifierSchema.nullable(),
@@ -301,6 +303,7 @@ export const firmwareDeploymentSchema = z.strictObject({
     .strictObject({
       targetVersion: boundedTextSchema,
       mode: firmwareUpdateModeSchema,
+      transitionSeconds: otaTransitionSecondsSchema,
       requestedAt: isoTimestampSchema,
     })
     .nullable(),
@@ -1531,6 +1534,7 @@ export const setDeviceEnabledRequestSchema = z.strictObject({
 export const requestFirmwareUpdateSchema = z.strictObject({
   expectedRevision: nonnegativeSafeIntegerSchema,
   mode: firmwareUpdateModeSchema,
+  transitionSeconds: otaTransitionSecondsSchema.optional(),
 });
 
 export const alertRuleSourceSchema = z.discriminatedUnion("type", [

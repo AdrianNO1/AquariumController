@@ -1,14 +1,14 @@
 # ESP32 firmware
 
 The supported source is `firmware/esp32/ESP32Code/ESP32Code.ino`. Firmware
-6.0.1 uses the versioned per-device MQTT protocol while retaining
+6.0.2 uses the versioned per-device MQTT protocol while retaining
 controller-managed pull OTA, output-state telemetry, and automatic rollback
 without depending on the legacy `.old` tree.
 
 ## Initial USB bootstrap
 
 Copy `firmware-config.example.h` to the ignored `firmware-config.h`, enter the
-device's Wi-Fi, MQTT, and NTP settings, and flash firmware 6.0.1 once over USB.
+device's Wi-Fi, MQTT, and NTP settings, and flash firmware 6.0.2 once over USB.
 On its first boot the sketch stores those settings in the ESP32's NVS. Later
 generic OTA images reuse the persisted settings, so each release does not need
 device-specific credentials compiled into it.
@@ -38,8 +38,10 @@ The controller bundles one approved binary and exposes it on the trusted LAN at
 or start an update-all rollout with either of these modes:
 
 - `Update now` starts the download immediately. LEDC hardware keeps the current
-  duty while the image downloads, but activating the image requires a brief
-  restart.
+  duty while the image downloads. Before the restart, firmware 6.0.2 and newer
+  fades active outputs to zero over the operator-selected transition duration.
+  It skips that wind-down when every output is already zero, then fades the
+  restored scheduled targets up over the same duration after boot.
 - `Update when outputs are off` waits until the ESP reports every attached pin
   at 0%, avoiding a visible restart while lights are on.
 
@@ -65,8 +67,19 @@ for boot. The old partition remains available during probation:
   can be attempted after the next device announcement.
 
 An active update-all policy is persisted with its chosen mode. An outdated ESP
-that is powered later is enrolled when it announces itself. Devices already on
-the target version are left alone.
+that is powered later is enrolled in `when outputs are off` mode, even when the
+operator originally selected `Update now`. Devices already online when the
+rollout starts retain the selected mode, and devices already on the target
+version are left alone.
+
+Firmware 6.0.2 starts with physical outputs held at zero for at most 15 seconds.
+This gives the controller time to enroll a newly powered outdated ESP before
+its local schedule can energize the lights. If no update is pending, the
+controller releases the hold immediately. If Wi-Fi, MQTT, or the Pi is absent,
+the bounded hold expires and the persisted local schedule resumes, preserving
+device-local failover. Firmware 6.0.1 does not understand the transition field,
+so the one-time update from 6.0.1 to 6.0.2 cannot perform the new symmetric
+wind-down and fade-up sequence.
 
 ## Runtime behavior
 
@@ -81,7 +94,7 @@ firmware uses its last hourly EEPROM timestamp and continues the persisted local
 schedule. Schedule activation remains best-effort per pin, and physical output
 fault diagnostics remain wear-limited in SPIFFS.
 
-Firmware 6.0.1 also keeps the persisted local schedule running when network
+Firmware 6.0.2 also keeps the persisted local schedule running when network
 configuration is missing, verifies command-topic subscription and OTA probation
 confirmation before reporting success, and reports recoverable Wi-Fi, MQTT,
 NTP, EEPROM, schedule-restore, and response-publication failures to the Pi.
@@ -135,7 +148,7 @@ Before releasing a new version:
 4. Prepare the generic OTA artifact from the repository root:
 
    ```sh
-   npm run firmware:release -- 6.0.1
+   npm run firmware:release -- 6.0.2
    ```
 
 The command builds with `firmware-config.example.h`, extracts the application
@@ -155,12 +168,12 @@ exact committed binary hash; CI independently proves that the source compiles.
 The current release can be rebuilt for investigation with:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.1 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.2 .
 ```
 
 The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
 ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
 target using only the safe example configuration. This validation build does
 not replace the approved OTA artifact. The current application binary is
-`firmware/esp32/artifacts/ESP32Code-6.0.1.bin`; its exact size and SHA-256 are
+`firmware/esp32/artifacts/ESP32Code-6.0.2.bin`; its exact size and SHA-256 are
 pinned in `@aquarium/esp-protocol` and revalidated by the controller at startup.
