@@ -32,7 +32,7 @@ OTA endpoints, and physical ESP32s as production systems.
 - Never point local development or fake ESPs at the production broker or
   `production` namespace. The Compose test stack uses `test/aquarium/*` and its
   own broker.
-- Firmware below 5.0.0 must remain visible but `firmware_unsupported` and must
+- Firmware below 6.0.0 must remain visible but `firmware_unsupported` and must
   receive no schedules, overrides, configuration writes, or OTA commands.
 - Preserve the documented ESP failover and device-local command behavior. One
   failed ESP must not block healthy devices, and Pi loss must still allow the

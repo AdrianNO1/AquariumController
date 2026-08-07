@@ -2,23 +2,11 @@
 
 set -Eeuo pipefail
 
-readonly release_commit="${1:?Pass the exact deployed commit}"
-readonly image_digest="${2:?Pass the exact deployed image digest without sha256:}"
 readonly checkout=/home/adrian/AquariumController-v2
 readonly configuration_file=/etc/aquarium-controller/production.conf
 readonly script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-[[ "${release_commit}" =~ ^[0-9a-f]{40}$ ]] || {
-  printf 'Release commit must be a full lowercase SHA-1.\n' >&2
-  exit 1
-}
-[[ "${image_digest}" =~ ^[0-9a-f]{64}$ ]] || {
-  printf 'Image digest must be 64 lowercase hexadecimal characters.\n' >&2
-  exit 1
-}
-
-bash "${script_directory}/pi-verify-production.sh" "${release_commit}" "${image_digest}" >/dev/null
-
+test -r "${configuration_file}"
 set -a
 # shellcheck disable=SC1090
 source "${configuration_file}"
@@ -28,6 +16,20 @@ unset AQUARIUM_ALERT_WEBHOOK_URL AQUARIUM_ALERT_WEBHOOK_KEY
 unset AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS
 unset AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME
 unset AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE
+
+readonly current_commit="$(git -C "${checkout}" rev-parse HEAD)"
+readonly current_digest="${AQUARIUM_CONTROLLER_IMAGE_SHA256:?}"
+[[ "${current_commit}" =~ ^[0-9a-f]{40}$ ]] || {
+  printf 'Current checkout commit must be a full lowercase SHA-1.\n' >&2
+  exit 1
+}
+[[ "${current_digest}" =~ ^[0-9a-f]{64}$ ]] || {
+  printf 'Current image digest must be 64 lowercase hexadecimal characters.\n' >&2
+  exit 1
+}
+
+bash "${script_directory}/pi-verify-production.sh" \
+  "${current_commit}" "${current_digest}" >/dev/null
 
 cd "${checkout}"
 backup_result="$(docker compose --file compose.production.yaml exec -T controller \
