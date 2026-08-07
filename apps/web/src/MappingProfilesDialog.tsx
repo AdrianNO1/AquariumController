@@ -98,6 +98,7 @@ export function MappingProfilesDialog({
   >(() => new Set());
   const [editorDirty, setEditorDirty] = useState(false);
   const [closeRequested, setCloseRequested] = useState(false);
+  const [acceptedRevisionFloor, setAcceptedRevisionFloor] = useState(0);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const restoreFocusAfterEditorReplacement = useRef(false);
   const visibleProfiles = profiles.filter(
@@ -313,11 +314,17 @@ export function MappingProfilesDialog({
             controlAreas={controlAreas}
             currentTypeKey={currentTypeKey}
             expectedRevision={expectedRevision}
+            acceptedRevisionFloor={acceptedRevisionFloor}
             refresh={refresh}
             onCancelNew={cancelNewProfile}
             onSavedNew={finishNewProfile}
             onDeleted={finishDeletion}
             onDirtyChange={setEditorDirty}
+            onAcceptedRevision={(revision) =>
+              setAcceptedRevisionFloor((current) =>
+                Math.max(current, revision),
+              )
+            }
             onSaved={finishEditorAction}
             onDiscarded={finishEditorAction}
             closeRequested={closeRequested}
@@ -339,11 +346,13 @@ interface MappingProfileEditorProps {
   readonly controlAreas: readonly ControlArea[];
   readonly currentTypeKey: string;
   readonly expectedRevision: number;
+  readonly acceptedRevisionFloor: number;
   readonly refresh: () => void;
   readonly onCancelNew: () => void;
   readonly onSavedNew: (profileId: string) => void;
   readonly onDeleted: (profileId: string) => void;
   readonly onDirtyChange: (dirty: boolean) => void;
+  readonly onAcceptedRevision: (revision: number) => void;
   readonly onSaved: () => void;
   readonly onDiscarded: () => void;
   readonly closeRequested: boolean;
@@ -360,11 +369,13 @@ function MappingProfileEditor({
   controlAreas,
   currentTypeKey,
   expectedRevision,
+  acceptedRevisionFloor,
   refresh,
   onCancelNew,
   onSavedNew,
   onDeleted,
   onDirtyChange,
+  onAcceptedRevision,
   onSaved,
   onDiscarded,
   closeRequested,
@@ -408,12 +419,20 @@ function MappingProfileEditor({
   const dirty = draftSignature !== savedBaseline;
   const saveExpectedRevision =
     saveConflictRevision === null
-      ? draftRevision.revision
-      : Math.max(saveConflictRevision, expectedRevision);
+      ? Math.max(draftRevision.revision, acceptedRevisionFloor)
+      : Math.max(
+          saveConflictRevision,
+          expectedRevision,
+          acceptedRevisionFloor,
+        );
   const deleteExpectedRevision =
     deleteConflictRevision === null
-      ? expectedRevision
-      : Math.max(deleteConflictRevision, expectedRevision);
+      ? Math.max(expectedRevision, acceptedRevisionFloor)
+      : Math.max(
+          deleteConflictRevision,
+          expectedRevision,
+          acceptedRevisionFloor,
+        );
   const validationErrors = validateDraft(draft);
   const assignedDevices = devices.filter(
     (device) => device.mappingProfileId === profileId,
@@ -458,6 +477,7 @@ function MappingProfileEditor({
       });
       setSaveConflictRevision(null);
       draftRevision.reset();
+      onAcceptedRevision(result.revision);
       refresh();
       if (profile === null) onSavedNew(profileId);
       onSaved();
@@ -472,7 +492,8 @@ function MappingProfileEditor({
   const deleteMutation = useMutation({
     retry: false,
     mutationFn: () => deleteMappingProfile(profileId, deleteExpectedRevision),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      onAcceptedRevision(result.revision);
       setDeleteConflictRevision(null);
       setConfirmingDelete(false);
       refresh();
