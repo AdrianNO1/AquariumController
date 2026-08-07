@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -103,4 +104,21 @@ test("deployment confirmation includes the selected commit", () => {
   assert.equal(confirmationMatches("DEPLOY 111111111111", commit), true);
   assert.equal(confirmationMatches("DEPLOY", commit), false);
   assert.equal(confirmationMatches("DEPLOY 000000000000", commit), false);
+});
+
+test("backs up the verified currently running release before an upgrade", () => {
+  const script = readFileSync(
+    new URL("../deployment/pi-backup-production.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(script, /current_commit=.*git -C .* rev-parse HEAD/);
+  assert.match(
+    script,
+    /current_digest=.*AQUARIUM_CONTROLLER_IMAGE_SHA256/,
+  );
+  assert.match(
+    script,
+    /pi-verify-production\.sh.*\\\n\s+"\$\{current_commit\}" "\$\{current_digest\}"/,
+  );
+  assert.doesNotMatch(script, /release_commit|image_digest/);
 });

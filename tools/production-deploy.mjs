@@ -354,7 +354,7 @@ async function deploy() {
     console.log("\nCreating and verifying the pre-deployment recovery set...");
     const backupOutput = remoteCommand(
       target,
-      `bash ${remoteDirectory}/pi-backup-production.sh ${release.headSha} ${release.image.digest}`,
+      `bash ${remoteDirectory}/pi-backup-production.sh`,
       environment,
       true,
     );
