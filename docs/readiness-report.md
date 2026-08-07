@@ -1,8 +1,8 @@
 # Readiness report
 
-Assessment date: 2026-08-06
+Assessment date: 2026-08-07
 
-Basis: the current firmware 6.0.0 structured per-device protocol branch, plus
+Basis: the current firmware 6.0.1 structured per-device protocol branch, plus
 the explicitly historical pre-4.1 release evidence recorded below. The
 aquarium Raspberry Pi and live ESPs were not contacted or used for this
 assessment.
@@ -53,8 +53,8 @@ branch's protected validation and merge succeed.
 
 | Boundary                          | Evidence                                                                     | Remaining boundary                                                         |
 | --------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Current ESP32 firmware 6.0.0      | Pinned release build passes at 90% flash and 16% global RAM                  | Protected firmware job, fleet flash, and physical soak                     |
-| Current transport/schedulers      | Local verification passes 111 files/761 unit and 88 files/639 critical tests | Full protected branch validation                                           |
+| Current ESP32 firmware 6.0.1      | Pinned release build passes at 90% flash and 16% global RAM                  | Protected firmware job, fleet flash, and physical soak                     |
+| Current transport/schedulers      | Local verification passes 111 files/759 unit and 88 files/636 critical tests | Full protected branch validation                                           |
 | Historical host verification      | Unit 97 files/638 tests; critical 82 files/571 tests                         | Historical pre-4.1 result; not current-branch evidence                     |
 | Current real Mosquitto            | Local current-branch integration passes 5/5                                  | Current protected integration job; production broker and LAN not contacted |
 | Current production Chromium       | Local current-branch run passes 21/21 with zero retries                      | Current protected browser job; real Pi/browser clients                     |
@@ -77,18 +77,22 @@ without reducing importer behavior coverage.
 
 ### Current branch verification
 
-The current firmware 6.0.0/structured-protocol source passed local lint, all
+The current firmware 6.0.1/structured-protocol source passed local lint, all
 workspace and E2E typechecks, and production builds. Its current test
 counts are:
 
-- unit: 111 files, 761 tests;
-- critical: 88 files, 639 tests;
+- unit: 111 files, 759 tests;
+- critical: 88 files, 636 tests;
 - real-Mosquitto integration: 5/5; and
 - production Playwright: 21/21 with retries disabled.
 
 The browser run used production-built assets, fresh SQLite databases, real
-Mosquitto, and independent fake ESPs. These local results still require
-confirmation by the protected pull-request and default-branch workflows.
+Mosquitto, and independent fake ESPs. One earlier full 6.0.1 attempt stopped at
+the broker-restart test because a new scheduler operation reached
+`outcome_unknown` before the requested clean boundary; the isolated rerun and a
+subsequent complete 21/21 run passed with Playwright retries disabled. This
+intermittent result and the other local evidence still require confirmation by
+the protected pull-request and default-branch workflows.
 
 ### Historical host and clean-source verification
 
@@ -116,7 +120,7 @@ current branch.
 
 ### Real broker integration
 
-The current firmware 6.0.0/structured-protocol real-wire suite passes 5/5 against
+The current firmware 6.0.1/structured-protocol real-wire suite passes 5/5 against
 digest-pinned Mosquitto
 `eclipse-mosquitto:2.0.22-openssl@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c`.
 It covers multi-device discovery, controller/broker/fake restarts, command and
@@ -146,15 +150,15 @@ includes:
 
 The harness rejects unexpected external requests and browser console errors.
 
-### ESP32 firmware 6.0.0 and historical 4.0 compile evidence
+### ESP32 firmware 6.0.1 and historical 4.0 compile evidence
 
 The supported sketch is `firmware/esp32/ESP32Code/ESP32Code.ino`, now version
-6.0.0. Its pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and
+6.0.1. Its pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and
 PubSubClient 2.8 build passes. The compiler image verifies the official Arduino
 CLI archive SHA-256 before extraction.
 
-The reviewed generic OTA artifact is 1,192,720 bytes with SHA-256
-`422d1ec248b0677efd8fcb3167407f6c68f5055745ecf75e35ead1d542237636`.
+The newly prepared generic OTA artifact is 1,192,720 bytes with SHA-256
+`55868c9dab1d70792b46c8dc1aabe46d647e6dd1f676ca451cf2d9984f72c5c2`.
 The compiler reports 1,186,133 bytes (90%) of program storage and 53,096 bytes
 (16%) of global RAM.
 
@@ -167,7 +171,7 @@ build. They are historical and are not claimed for 4.1:
 | Global RAM                        |    63,180 bytes |
 | Local-variable capacity remaining |   264,500 bytes |
 
-Firmware 6.0.0 retains rollover-safe override expiry, schedule restoration,
+Firmware 6.0.1 retains rollover-safe override expiry, schedule restoration,
 cache invalidation, and normalized 0-255 duty scaling. It adds correlated
 request IDs, strict typed JSON, per-device topics, wear-limited diagnostics,
 controller-owned overwrite behavior, and valid-EEPROM-time fallback when
@@ -288,7 +292,7 @@ exact digest before the Pi handoff starts.
 ### ESP32 fleet
 
 - Build the ignored local firmware configuration without committing secrets.
-- Flash every deployed board with 6.0.0 and confirm its reported version.
+- Flash every deployed board with 6.0.1 and confirm its reported version.
 - Bench-test override expiry, schedule restoration, resolution changes, time
   acquisition, Wi-Fi/broker loss, reboot, and power cycling before enabling
   aquarium actuators.

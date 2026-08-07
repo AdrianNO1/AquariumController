@@ -1,6 +1,6 @@
 # Raspberry Pi production handoff
 
-Updated: 2026-08-06
+Updated: 2026-08-07
 
 This is the concise external-operator checklist retained for first cutover,
 fleet upgrades, and incident recovery. The initial controller deployment on the
@@ -12,19 +12,24 @@ This checklist does not replace that runbook.
 
 ## Current handoff state
 
-The repository contains firmware 6.0.0, structured per-device MQTT,
+The repository contains firmware 6.0.1, structured per-device MQTT,
 per-device lanes, latest-only scheduler, and device-local failure
 implementation. Every subsequent release must pass protected CI, merge,
 publish a new image, and use that image's exact digest.
 
-Current firmware 6.0.0/structured-protocol local evidence is:
+Current firmware 6.0.1/structured-protocol local evidence is:
 
 - lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 111 files/761 tests;
-- critical: 88 files/639 tests;
+- unit: 111 files/759 tests;
+- critical: 88 files/636 tests;
 - real Mosquitto integration: 5/5;
 - production Playwright: 21/21 with zero retries; and
 - pinned firmware compile: 90% flash and 16% global RAM.
+
+One earlier full 6.0.1 browser attempt stopped at the broker-restart safety
+boundary after a scheduler operation reached `outcome_unknown`; its isolated
+rerun and a later complete 21/21 run passed. Treat protected confirmation as a
+hard gate rather than hiding this intermittent result.
 
 These results have not yet been confirmed by the protected pull-request or
 default-branch workflows.
@@ -135,14 +140,14 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 6.0.0 with an ignored local configuration containing the
+- [ ] Build firmware 6.0.1 with an ignored local configuration containing the
       intended Wi-Fi, Pi broker, `nemo` credentials, and NTP host.
 - [ ] For a firmware-5 device with old settings already in NVS, set
       `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` only in its one-time USB
       build. Confirm reconnect with the intended settings, then use generic OTA images whose
       release configuration keeps the switch `false`.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports firmware 6.0.0 and hardware profile
+- [ ] Confirm every device reports firmware 6.0.1 and hardware profile
       `nodemcu-esp32s-v1.1`; other protocol majors are intentionally marked
       `firmware_unsupported` and receive no actuator, configuration, schedule,
       time-sync, or OTA work. Every pre-v6 version needs USB bootstrap. Future

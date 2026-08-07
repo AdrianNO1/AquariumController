@@ -23,7 +23,7 @@ import {
 } from "./transport.js";
 
 export const FAKE_ESP_DEFAULT_NAMESPACE = FAKE_ESP_TEST_NAMESPACE;
-export const FAKE_ESP_FIRMWARE_VERSION = "6.0.0";
+export const FAKE_ESP_FIRMWARE_VERSION = "6.0.1";
 export const FAKE_ESP_MAX_COMMAND_PAYLOAD_BYTES = 5_120;
 export const FAKE_ESP_OVERRIDE_DURATION_MILLISECONDS = 120_000;
 

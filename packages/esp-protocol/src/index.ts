@@ -13,16 +13,16 @@ import { legacyScheduleDocumentSchema } from "./schedule.js";
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "6.0.0";
+export const CURRENT_ESP_FIRMWARE_VERSION = "6.0.1";
 export const MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION = "6.0.0";
 export const MINIMUM_PULL_OTA_FIRMWARE_VERSION =
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION;
 export const ESP_MQTT_PROTOCOL_VERSION = 1 as const;
 export const ESP_FIRMWARE_ARTIFACT = {
   version: CURRENT_ESP_FIRMWARE_VERSION,
-  fileName: "ESP32Code-6.0.0.bin",
+  fileName: "ESP32Code-6.0.1.bin",
   sizeBytes: 1_192_720,
-  sha256: "422d1ec248b0677efd8fcb3167407f6c68f5055745ecf75e35ead1d542237636",
+  sha256: "55868c9dab1d70792b46c8dc1aabe46d647e6dd1f676ca451cf2d9984f72c5c2",
 } as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
