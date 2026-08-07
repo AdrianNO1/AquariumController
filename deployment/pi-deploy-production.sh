@@ -91,15 +91,18 @@ git -C "${checkout}" checkout --detach "${release_commit}"
 test "$(git -C "${checkout}" rev-parse HEAD)" = "${release_commit}"
 test -z "$(git -C "${checkout}" status --porcelain)"
 
-sudo -n sed -i \
-  "s/^AQUARIUM_CONTROLLER_IMAGE_SHA256=.*/AQUARIUM_CONTROLLER_IMAGE_SHA256=${image_digest}/" \
+test "$(sudo -n grep -Ec \
+  '^(declare -x |export )?AQUARIUM_CONTROLLER_IMAGE_SHA256=' \
+  "${configuration_file}")" -eq 1
+sudo -n sed -i -E \
+  "s/^(declare -x |export )?AQUARIUM_CONTROLLER_IMAGE_SHA256=.*/AQUARIUM_CONTROLLER_IMAGE_SHA256=${image_digest}/" \
   "${configuration_file}"
-grep -Fx "AQUARIUM_CONTROLLER_IMAGE_SHA256=${image_digest}" "${configuration_file}" >/dev/null
 
 set -a
 # shellcheck disable=SC1090
 source <(sudo -n cat -- "${configuration_file}")
 set +a
+test "${AQUARIUM_CONTROLLER_IMAGE_SHA256}" = "${image_digest}"
 export COMPOSE_DISABLE_ENV_FILE=1
 unset AQUARIUM_ALERT_WEBHOOK_URL AQUARIUM_ALERT_WEBHOOK_KEY
 unset AQUARIUM_ALERT_WEBHOOK_TIMEOUT_MS

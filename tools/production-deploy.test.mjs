@@ -141,3 +141,23 @@ test("deployment scripts read the root-owned production configuration through su
     assert.doesNotMatch(script, /source "\$\{configuration_file\}"/);
   }
 });
+
+test("the digest update handles shell-export formats without direct protected reads", () => {
+  const script = readFileSync(
+    new URL("../deployment/pi-deploy-production.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    script,
+    /sudo -n grep -Ec \\\n\s+'\^\(declare -x \|export \)\?AQUARIUM_CONTROLLER_IMAGE_SHA256='/,
+  );
+  assert.match(
+    script,
+    /sudo -n sed -i -E \\\n\s+"s\/\^\(declare -x \|export \)\?AQUARIUM_CONTROLLER_IMAGE_SHA256=/,
+  );
+  assert.match(
+    script,
+    /test "\$\{AQUARIUM_CONTROLLER_IMAGE_SHA256\}" = "\$\{image_digest\}"/,
+  );
+  assert.doesNotMatch(script, /^grep .*"\$\{configuration_file\}"/m);
+});
