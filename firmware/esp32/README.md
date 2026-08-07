@@ -1,14 +1,14 @@
 # ESP32 firmware
 
 The supported source is `firmware/esp32/ESP32Code/ESP32Code.ino`. Firmware
-6.0.0 uses the versioned per-device MQTT protocol while retaining
+6.0.1 uses the versioned per-device MQTT protocol while retaining
 controller-managed pull OTA, output-state telemetry, and automatic rollback
 without depending on the legacy `.old` tree.
 
 ## Initial USB bootstrap
 
 Copy `firmware-config.example.h` to the ignored `firmware-config.h`, enter the
-device's Wi-Fi, MQTT, and NTP settings, and flash firmware 6.0.0 once over USB.
+device's Wi-Fi, MQTT, and NTP settings, and flash firmware 6.0.1 once over USB.
 On its first boot the sketch stores those settings in the ESP32's NVS. Later
 generic OTA images reuse the persisted settings, so each release does not need
 device-specific credentials compiled into it.
@@ -81,7 +81,7 @@ firmware uses its last hourly EEPROM timestamp and continues the persisted local
 schedule. Schedule activation remains best-effort per pin, and physical output
 fault diagnostics remain wear-limited in SPIFFS.
 
-Firmware 6.0.0 also keeps the persisted local schedule running when network
+Firmware 6.0.1 also keeps the persisted local schedule running when network
 configuration is missing, verifies command-topic subscription and OTA probation
 confirmation before reporting success, and reports recoverable Wi-Fi, MQTT,
 NTP, EEPROM, schedule-restore, and response-publication failures to the Pi.
@@ -135,7 +135,7 @@ Before releasing a new version:
 4. Prepare the generic OTA artifact from the repository root:
 
    ```sh
-   npm run firmware:release -- 6.0.0
+   npm run firmware:release -- 6.0.1
    ```
 
 The command builds with `firmware-config.example.h`, extracts the application
@@ -155,12 +155,12 @@ exact committed binary hash; CI independently proves that the source compiles.
 The current release can be rebuilt for investigation with:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.0 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.1 .
 ```
 
 The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
 ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
 target using only the safe example configuration. This validation build does
 not replace the approved OTA artifact. The current application binary is
-`firmware/esp32/artifacts/ESP32Code-6.0.0.bin`; its exact size and SHA-256 are
+`firmware/esp32/artifacts/ESP32Code-6.0.1.bin`; its exact size and SHA-256 are
 pinned in `@aquarium/esp-protocol` and revalidated by the controller at startup.

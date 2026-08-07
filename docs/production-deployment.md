@@ -1,6 +1,6 @@
 # Raspberry Pi production deployment
 
-Updated: 2026-08-06
+Updated: 2026-08-07
 
 This is a supervised deployment and rollback runbook. No GitHub workflow
 contacts the Pi or deploys the controller. Routine upgrades are initiated by
@@ -9,7 +9,7 @@ commands are run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
 [Pi production handoff checklist](pi-production-handoff.md). The current
-firmware 6.0.0 and structured per-device protocol are the release candidate. Every
+firmware 6.0.1 and structured per-device protocol are the release candidate. Every
 future candidate must still pass protected CI, merge, publish, and receive a
 newly selected immutable digest before its deployment. Historical pre-4.1
 validation is recorded in the
@@ -697,7 +697,7 @@ docker compose --file compose.production.yaml exec -T controller \
   --events-db /var/lib/aquarium/events/events.db
 ```
 
-Confirm the snapshot and UI, firmware version 6.0.0 for every ESP32, MQTT
+Confirm the snapshot and UI, firmware version 6.0.1 for every ESP32, MQTT
 discovery, schedules, overrides, alert history, notification destination,
 storage-health readings, and the latest verified backup. Confirm a
 nonresponding ESP becomes offline without stopping healthy device lanes, and
