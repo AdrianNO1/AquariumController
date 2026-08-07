@@ -111,6 +111,10 @@ describe("controller application", () => {
     expect(indexResponse.headers["content-security-policy"]).toContain(
       "default-src 'self'",
     );
+    expect(indexResponse.headers["content-security-policy"]).not.toContain(
+      "upgrade-insecure-requests",
+    );
+    expect(indexResponse.headers["strict-transport-security"]).toBeUndefined();
     expect(spaResponse.statusCode).toBe(200);
     expect(spaResponse.body).toContain("Aquarium UI");
     expect(assetResponse.statusCode).toBe(200);
