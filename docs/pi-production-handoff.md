@@ -96,11 +96,14 @@ succeeds.
 
 ## 3. Network, MQTT, and notifications
 
-- [ ] Provision separate production MQTT accounts for the controller and
-      firmware 6.0.0 and install the reviewed password-file/ACL configuration
-      from the full runbook. Enable `allow_anonymous false` only after every
-      ESP that must stay connected has persisted credentials.
-- [ ] Restrict the plaintext MQTT listener to the trusted aquarium LAN.
+- [ ] Install the `nemo` password-file entry and reviewed ACL: anonymous clients
+      retain non-v1 topics, anonymous `aquarium/v1/#` access is denied, and
+      authenticated `nemo` clients can use `aquarium/#`.
+- [x] Restrict the plaintext MQTT listener to the trusted aquarium LAN. The Pi
+      firewall permits ports 1883 and 3001 only from `192.168.1.0/24`, plus the
+      controller's narrow Docker bridge rule.
+- [ ] Keep `allow_anonymous true` for the unrelated legacy ESP. Do not narrow
+      its non-aquarium topic access until that project is separately migrated.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
       interlock.
 - [ ] Verify firewall rules prevent unintended HTTP/MQTT exposure.
@@ -133,18 +136,17 @@ future firmware work and physical validation.
 ## 5. ESP32 fleet gate
 
 - [ ] Build firmware 6.0.0 with an ignored local configuration containing the
-      intended Wi-Fi, MQTT username/password, and NTP host.
+      intended Wi-Fi, Pi broker, `nemo` credentials, and NTP host.
 - [ ] For a firmware-5 device with old settings already in NVS, set
       `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` only in its one-time USB
-      build. Confirm authenticated reconnect, then use generic OTA images whose
+      build. Confirm reconnect with the intended settings, then use generic OTA images whose
       release configuration keeps the switch `false`.
 - [ ] Flash every deployed ESP32.
 - [ ] Confirm every device reports firmware 6.0.0 and hardware profile
       `nodemcu-esp32s-v1.1`; other protocol majors are intentionally marked
       `firmware_unsupported` and receive no actuator, configuration, schedule,
-      or time-sync work. Firmware 5.x can be upgraded individually through the
-      website's legacy OTA bridge; update-all excludes it. Older versions need
-      USB.
+      time-sync, or OTA work. Every pre-v6 version needs USB bootstrap. Future
+      firmware 6.x releases retain structured per-device OTA support.
 - [ ] Review each device's explicit mapping-profile selection after import.
       Names no longer select profiles. Investigate every GPIO12 warning and
       confirm the existing driver still does not pull that strapping pin high

@@ -27,13 +27,7 @@ export type { DeviceOperationRequest } from "./device-operation-types.js";
 export function buildLegacyWireCommand(
   target: LegacyDeviceTarget,
   request: DeviceOperationRequest,
-  wireProtocol: LegacyWireCommand["wireProtocol"] = "structured_v1",
 ): LegacyWireCommand {
-  if (wireProtocol === "legacy_v5_ota" && request.kind !== "firmware_update") {
-    throw new TypeError(
-      "The firmware 5 compatibility bridge accepts OTA commands only",
-    );
-  }
   switch (request.kind) {
     case "set_pwm":
       return buildSetPwmCommand(
@@ -64,7 +58,6 @@ export function buildLegacyWireCommand(
         request.url,
         request.size,
         request.sha256,
-        wireProtocol,
       );
   }
 }
@@ -189,7 +182,6 @@ export function buildFirmwareUpdateCommand(
   url: string,
   size: number,
   sha256: string,
-  wireProtocol: LegacyWireCommand["wireProtocol"] = "structured_v1",
 ): LegacyWireCommand {
   assertWireToken(version, "firmware version", 31);
   assertIntegerInRange(size, 100_000, 1_900_000, "firmware image size");
@@ -211,7 +203,6 @@ export function buildFirmwareUpdateCommand(
       size,
       sha256,
     },
-    wireProtocol,
   );
 }
 
@@ -219,7 +210,6 @@ function command(
   target: LegacyDeviceTarget,
   operation: string,
   structuredOperation: EspCommandInput,
-  wireProtocol: LegacyWireCommand["wireProtocol"] = "structured_v1",
 ): LegacyWireCommand {
   assertWireToken(target.id, "target id");
   for (const alias of target.aliases ?? []) {
@@ -232,7 +222,6 @@ function command(
       ...(target.aliases === undefined ? {} : { aliases: [...target.aliases] }),
     },
     operation: structuredOperation,
-    wireProtocol,
   };
 }
 

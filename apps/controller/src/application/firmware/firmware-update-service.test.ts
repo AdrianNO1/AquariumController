@@ -36,7 +36,7 @@ describe("FirmwareUpdateService", () => {
     const database = await createDatabase();
     await seedDevice(database, {
       id: "device-a",
-      firmwareVersion: "5.0.6",
+      firmwareVersion: "6.0.0-beta.1",
       outputsOff: false,
     });
     const operations = new RecordingFirmwareOperations(database);
@@ -207,7 +207,7 @@ describe("FirmwareUpdateService", () => {
     });
   });
 
-  it("requires an explicit per-device request before using the firmware 5 bridge", async () => {
+  it("requires USB for firmware 5 in both fleet and per-device requests", async () => {
     const database = await createDatabase();
     await seedDevice(database, {
       id: "legacy-ota-device",
@@ -232,10 +232,10 @@ describe("FirmwareUpdateService", () => {
       mode: "immediate",
     });
     await service.drain();
-    expect(operations.requests).toHaveLength(1);
+    expect(operations.requests).toHaveLength(0);
     await expect(
       readUpdate(database, "legacy-ota-device"),
-    ).resolves.toMatchObject({ status: "accepted" });
+    ).resolves.toMatchObject({ status: "usb_required" });
   });
 });
 

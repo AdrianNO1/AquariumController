@@ -5,7 +5,7 @@ Updated: 2026-08-06
 Purpose: execution record and handoff plan. R0-R14 repository implementation is
 complete, including firmware 6.0.0, strict per-device JSON MQTT, bounded
 per-device lanes, latest-only routine PWM coalescing, and device-local failure
-handling. Firmware 5.x retains only an explicit per-device OTA bridge. The
+handling. Legacy topics are passive discovery only; every pre-v6 device requires USB. The
 current branch still needs protected CI, merge, default-branch validation,
 image publication, and immutable digest selection. Fleet flashing and physical
 firmware-6 validation remain external.
@@ -38,7 +38,8 @@ Repository work is complete only when the only remaining actions are:
 3. Flash and identify firmware 6.0.0 on every production ESP32, then complete a
    controlled hardware/failover soak.
 4. Configure the Pi's production MQTT/database/archive/backup paths and
-   credentials outside the repository.
+   credentials outside the repository. The shared broker authenticates
+   `aquarium/v1/#` while retaining anonymous access to other topic namespaces.
 5. Preserve the legacy installation and an immutable JSON snapshot, repeat the
    importer dry-run on the Pi, record the newly calculated fingerprint, review
    the complete report, and commit only that exact snapshot into new storage

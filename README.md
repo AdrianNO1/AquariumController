@@ -52,10 +52,9 @@ deliberately not horizontally scalable because device queues, schedules, and
 state revisions need one owner. Firmware 6.0 uses correlated JSON requests and
 responses on isolated per-device MQTT topics. The controller runs bounded
 per-device command lanes, so an unresponsive ESP cannot block healthy devices.
-Legacy broadcast topics remain passive discovery inputs plus one narrowly
-scoped operator-initiated OTA bridge for firmware 5.x. The controller never
-sends actuator, configuration, schedule, or time commands through them, and
-fleet update-all does not enroll v5 devices automatically.
+Legacy broadcast topics remain passive discovery inputs only. The controller
+never sends actuator, configuration, schedule, time, or OTA commands through
+them; every pre-v6 device requires one USB bootstrap.
 
 ESP pin mappings use explicit hardware profiles and explicit per-device profile
 selection; device names no longer choose mappings. The bundled NodeMCU ESP-32S
@@ -311,12 +310,11 @@ separate verified database/archive backup procedure.
   remaining secret-scanning alert as `revoked`, and keep secret scanning and
   push protection enabled.
 - Flash firmware 6.0.0 to every deployed ESP32 and persist its device-specific
-  network configuration in NVS. Firmware 5.x can be upgraded individually from
-  the website through a bounded legacy OTA bridge; it is never enrolled by
-  update-all and receives no other legacy command. Firmware below 5.0.0 requires
-  USB bootstrap. If a firmware-5 device already persisted anonymous MQTT
-  settings, use the documented one-time USB network-reprovision switch
-  before disabling anonymous broker access. Older firmware remains visible
+  network configuration in NVS. Every firmware version below 6.0.0 requires USB
+  bootstrap and receives no command from the new controller. If a firmware-5
+  device already persisted anonymous MQTT settings, the documented one-time USB
+  network-reprovision switch replaces them without erasing its ID or schedule.
+  Older firmware remains visible
   through passive discovery, is
   marked `firmware_unsupported`, and receives no schedule, output,
   configuration, or time-sync commands. Firmware 6.0.0 retains
@@ -337,9 +335,11 @@ separate verified database/archive backup procedure.
   subscription and OTA probation transitions, and removes remote fleet-wide
   EEPROM clearing. It publishes commands, responses, and announcements as
   strict versioned JSON on per-device topics.
-- Configure the ESP32's ignored local firmware header with both an MQTT username
-  and password plus the intended NTP host, and restrict that plaintext broker
-  listener to the trusted aquarium LAN. The current ESP firmware does not
+- Configure the ESP32's ignored local firmware header with the Pi broker,
+  `nemo` MQTT account, and intended NTP host. The shared broker still permits
+  anonymous non-aquarium topics for the unrelated legacy ESP but denies
+  anonymous access to `aquarium/v1/#`. Restrict that plaintext broker listener
+  to the trusted aquarium LAN. The current ESP firmware does not
   support `mqtts://`; enabling
   TLS would require another firmware change and physical validation.
 - Set `AQUARIUM_FIRMWARE_BASE_URL` to the controller's ESP-reachable local HTTP

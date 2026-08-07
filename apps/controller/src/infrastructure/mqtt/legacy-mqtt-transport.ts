@@ -3,13 +3,11 @@ import { randomBytes } from "node:crypto";
 import {
   encodeEspCommandRequest,
   encodeEspDiscoveryRequest,
-  encodeLegacyOtaRequest,
   espDeviceIdSchema,
   espCommandSchema,
   espAnnouncementSchema,
   espCommandResponseSchema,
   ESP_COMMANDS_PER_REQUEST,
-  legacyOtaResponseSchema,
   matchEspCommandResult,
   utf8ByteLength,
 } from "@aquarium/esp-protocol";
@@ -49,7 +47,6 @@ export interface LegacyWireCommand {
   readonly command: string;
   readonly target: LegacyDeviceTarget;
   readonly operation: EspCommandInput;
-  readonly wireProtocol: "structured_v1" | "legacy_v5_ota";
 }
 
 export type LegacyCommandPriority = "interactive" | "background";
@@ -200,12 +197,10 @@ interface NormalizedCommand {
   readonly command: string;
   readonly targetId: string;
   readonly operation: EspCommandInput;
-  readonly wireProtocol: "structured_v1" | "legacy_v5_ota";
 }
 
 interface EspCommandBatch {
   readonly originalIndexes: readonly number[];
-  readonly wireProtocol: "structured_v1" | "legacy_v5_ota";
 }
 
 export type LegacyDiscoveryRequestResult = "published" | "skipped_busy";
@@ -235,7 +230,6 @@ interface ActiveBatch {
   readonly operationId: string;
   readonly requestId: string;
   readonly batchIndex: number;
-  readonly wireProtocol: "structured_v1" | "legacy_v5_ota";
   readonly expectations: ReadonlyMap<number, BatchExpectation>;
   readonly outcomes: Map<number, LegacyCommandOutcome>;
   readonly responsesEnabled: () => boolean;
@@ -473,8 +467,8 @@ export class LegacyMqttTransport {
           encodeEspDiscoveryRequest(),
           NON_RETAINED_QOS_ZERO,
         );
-        // Legacy discovery keeps firmware 5.x visible for an explicit manual
-        // OTA upgrade. No operational command is ever sent on this topic.
+        // Legacy discovery keeps pre-v6 firmware visible as unsupported until
+        // it is replaced over USB. No operational command is sent here.
         await client.publish(
           this.topics.legacyCommand,
           "discover",
@@ -513,7 +507,6 @@ export class LegacyMqttTransport {
           this.topics.announcementFilter,
           this.topics.responseFilter,
           this.topics.legacyAnnouncement,
-          this.topics.legacyResponse,
         ],
         QOS_ZERO_SUBSCRIPTION,
       );
@@ -605,10 +598,6 @@ export class LegacyMqttTransport {
 
     if (topic === this.topics.legacyAnnouncement) {
       this.handleAnnouncement(topic, null, decoded.value, payload.byteLength);
-      return;
-    }
-    if (topic === this.topics.legacyResponse) {
-      this.handleLegacyOtaResponse(topic, decoded.value, payload.byteLength);
       return;
     }
     const announcementDeviceId = this.topics.announcementDeviceId(topic);
@@ -847,165 +836,6 @@ export class LegacyMqttTransport {
       this.emitCommandOutcome(activeBatch.operationId, outcome);
       activeBatch.settleIfComplete();
     }
-  }
-
-  private handleLegacyOtaResponse(
-    topic: string,
-    rawPayload: string,
-    payloadBytes: number,
-  ): void {
-    const parsedJson = parseJson(rawPayload);
-    if (!parsedJson.ok) {
-      this.emitMalformed(
-        topic,
-        preview(rawPayload),
-        payloadBytes,
-        isPreviewTruncated(rawPayload),
-        parsedJson.detail,
-      );
-      return;
-    }
-    const parsedResponse = legacyOtaResponseSchema.safeParse(parsedJson.value);
-    if (!parsedResponse.success) {
-      this.emitMalformed(
-        topic,
-        preview(rawPayload),
-        payloadBytes,
-        isPreviewTruncated(rawPayload),
-        parsedResponse.error.message,
-      );
-      this.handleAttributableMalformedLegacyOtaResponse(
-        parsedJson.value,
-        payloadBytes,
-      );
-      return;
-    }
-
-    const response = parsedResponse.data;
-    const activeBatch = this.activeBatches.get(response.requestId);
-    if (
-      activeBatch === undefined ||
-      activeBatch.wireProtocol !== "legacy_v5_ota"
-    ) {
-      this.emitIgnoredResponse(
-        activeBatch === undefined && this.activeBatches.size === 0
-          ? "no_active_batch"
-          : "wrong_request",
-        response.id,
-        0,
-        payloadBytes,
-      );
-      return;
-    }
-    const expectation = activeBatch.expectations.get(0);
-    if (expectation === undefined) {
-      this.emitIgnoredResponse(
-        "index_out_of_range",
-        response.id,
-        0,
-        payloadBytes,
-      );
-      return;
-    }
-    if (expectation.command.targetId !== response.id) {
-      this.emitIgnoredResponse("wrong_device", response.id, 0, payloadBytes);
-      return;
-    }
-    if (!activeBatch.responsesEnabled()) {
-      this.emitIgnoredResponse(
-        "premature_response",
-        response.id,
-        0,
-        payloadBytes,
-      );
-      return;
-    }
-    if (activeBatch.outcomes.has(0)) {
-      this.emitIgnoredResponse("duplicate", response.id, 0, payloadBytes);
-      return;
-    }
-
-    const firstResponse = response.responses[0];
-    if (firstResponse === undefined) {
-      throw new Error("Validated firmware 5 OTA response was empty");
-    }
-    const wireResponse = firstResponse.response;
-    const responseBytes = utf8ByteLength(wireResponse);
-    let outcome: LegacyCommandOutcome;
-    if (wireResponse === "ota_accepted") {
-      outcome = {
-        index: expectation.originalIndex,
-        command: expectation.command.command,
-        targetId: expectation.command.targetId,
-        status: "succeeded",
-        responseBytes,
-        analogValue: null,
-      };
-    } else {
-      const deviceError = parseLegacyDeviceError(wireResponse);
-      outcome = {
-        index: expectation.originalIndex,
-        command: expectation.command.command,
-        targetId: expectation.command.targetId,
-        status: "failed",
-        responseBytes,
-        failure:
-          deviceError === null
-            ? {
-                kind: "protocol_error",
-                detail: "Unexpected firmware 5 OTA response",
-              }
-            : {
-                kind: "device_error",
-                code: "legacy_ota_rejected",
-                message: deviceError,
-              },
-      };
-    }
-    activeBatch.outcomes.set(0, outcome);
-    this.emitCommandOutcome(activeBatch.operationId, outcome);
-    activeBatch.settleIfComplete();
-  }
-
-  private handleAttributableMalformedLegacyOtaResponse(
-    value: JsonValue,
-    payloadBytes: number,
-  ): void {
-    const identity = legacyResponseIdentity(value);
-    const activeBatch =
-      identity === null
-        ? undefined
-        : this.activeBatches.get(identity.requestId);
-    if (
-      identity === null ||
-      activeBatch === undefined ||
-      activeBatch.wireProtocol !== "legacy_v5_ota" ||
-      !activeBatch.responsesEnabled()
-    ) {
-      return;
-    }
-    const expectation = activeBatch.expectations.get(0);
-    if (
-      expectation === undefined ||
-      expectation.command.targetId !== identity.deviceId ||
-      activeBatch.outcomes.has(0)
-    ) {
-      return;
-    }
-    const outcome: LegacyCommandOutcome = {
-      index: expectation.originalIndex,
-      command: expectation.command.command,
-      targetId: expectation.command.targetId,
-      status: "failed",
-      responseBytes: payloadBytes,
-      failure: {
-        kind: "protocol_error",
-        detail: "Malformed firmware 5 OTA response envelope",
-      },
-    };
-    activeBatch.outcomes.set(0, outcome);
-    this.emitCommandOutcome(activeBatch.operationId, outcome);
-    activeBatch.settleIfComplete();
   }
 
   private handleAttributableMalformedResponse(
@@ -1324,24 +1154,14 @@ export class LegacyMqttTransport {
       }
       return command;
     });
-    const payload =
-      batch.wireProtocol === "structured_v1"
-        ? encodeEspCommandRequest({
-            deviceId: targetId,
-            requestId,
-            commands: batchCommands.map((command, index) =>
-              espCommandSchema.parse({ index, ...command.operation }),
-            ),
-          })
-        : encodeLegacyOtaRequest({
-            deviceId: targetId,
-            requestId,
-            command: legacyOtaOperation(batchCommands),
-          });
-    const publishTopic =
-      batch.wireProtocol === "structured_v1"
-        ? this.topics.command(targetId)
-        : this.topics.legacyCommand;
+    const payload = encodeEspCommandRequest({
+      deviceId: targetId,
+      requestId,
+      commands: batchCommands.map((command, index) =>
+        espCommandSchema.parse({ index, ...command.operation }),
+      ),
+    });
+    const publishTopic = this.topics.command(targetId);
     let activeBatch: ActiveBatch | undefined;
     try {
       await this.withPublicationLock(generation, async () => {
@@ -1495,7 +1315,6 @@ export class LegacyMqttTransport {
       operationId,
       requestId,
       batchIndex,
-      wireProtocol: batch.wireProtocol,
       expectations,
       outcomes,
       responsesEnabled: () => responsesEnabled,
@@ -1726,7 +1545,6 @@ function normalizeCommand(
     command: command.command,
     targetId,
     operation,
-    wireProtocol: command.wireProtocol,
   };
 }
 
@@ -1751,23 +1569,6 @@ function partitionCommandsByDevice(
 function batchEspCommands(
   commands: readonly NormalizedCommand[],
 ): readonly EspCommandBatch[] {
-  const legacyCommands = commands.filter(
-    ({ wireProtocol }) => wireProtocol === "legacy_v5_ota",
-  );
-  if (legacyCommands.length > 0) {
-    if (
-      commands.length !== 1 ||
-      legacyCommands.length !== 1 ||
-      legacyCommands[0]?.operation.kind !== "firmware_update"
-    ) {
-      throw new TypeError(
-        "The firmware 5 compatibility bridge accepts one OTA command only",
-      );
-    }
-    return [
-      { originalIndexes: [0], wireProtocol: "legacy_v5_ota" as const },
-    ];
-  }
   const batches: EspCommandBatch[] = [];
   for (
     let firstIndex = 0;
@@ -1783,7 +1584,6 @@ function batchEspCommands(
         { length: endIndex - firstIndex },
         (_, offset) => firstIndex + offset,
       ),
-      wireProtocol: "structured_v1",
     });
   }
   return batches;
@@ -1813,7 +1613,6 @@ function assertTopicSet(topics: EspTopicSet): void {
     topics.discoveryRequest,
     topics.legacyCommand,
     topics.legacyAnnouncement,
-    topics.legacyResponse,
     topics.command(sampleDeviceId),
     topics.announcement(sampleDeviceId),
     topics.response(sampleDeviceId),
@@ -1924,50 +1723,6 @@ function responseIdentity(
   return typeof deviceId === "string" && typeof requestId === "string"
     ? { deviceId, requestId }
     : null;
-}
-
-function legacyOtaOperation(
-  commands: readonly NormalizedCommand[],
-): Extract<EspCommandInput, { readonly kind: "firmware_update" }> {
-  const operation = commands[0]?.operation;
-  if (commands.length !== 1 || operation?.kind !== "firmware_update") {
-    throw new TypeError(
-      "The firmware 5 compatibility bridge accepts one OTA command only",
-    );
-  }
-  return operation;
-}
-
-function legacyResponseIdentity(
-  value: JsonValue,
-): { readonly deviceId: string; readonly requestId: string } | null {
-  if (!isJsonObject(value)) {
-    return null;
-  }
-  const deviceId = value["id"];
-  const requestId = value["requestId"];
-  return typeof deviceId === "string" && typeof requestId === "string"
-    ? { deviceId, requestId }
-    : null;
-}
-
-function parseLegacyDeviceError(response: string): string | null {
-  if (!response.startsWith("E: ")) {
-    return null;
-  }
-  const message = response.slice(3);
-  if (
-    message.length < 1 ||
-    message.length > 160 ||
-    message.trim() !== message ||
-    [...message].some((character) => {
-      const code = character.charCodeAt(0);
-      return code < 0x20 || code > 0x7e;
-    })
-  ) {
-    return null;
-  }
-  return message;
 }
 
 function isJsonObject(

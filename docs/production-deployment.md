@@ -142,8 +142,9 @@ them for this deployment.
 Load production values into the current shell from an operator-managed secret
 store or a root-owned file outside the checkout. Do not commit credentials and
 do not put them in the repository's default `.env` path. MQTT credentials must
-use their dedicated variables rather than broker-URL userinfo. The MQTT password
-and webhook authentication value are secrets.
+use their dedicated variables rather than broker-URL userinfo. The controller
+and aquarium ESPs share the `nemo` account; its password and any webhook
+authentication value are secrets.
 Avoid `docker compose config` without `--quiet`, because a full rendering can
 print environment values.
 
@@ -157,8 +158,8 @@ export AQUARIUM_HTTP_BIND_ADDRESS=<explicit-Pi-LAN-address>
 export AQUARIUM_HTTP_PORT=3001
 export AQUARIUM_FIRMWARE_BASE_URL=http://<explicit-Pi-LAN-address>:3001
 export AQUARIUM_MQTT_BROKER_URL=mqtt://<production-broker-host>:1883
-export AQUARIUM_MQTT_USERNAME=aquarium-controller
-read -rsp 'Controller MQTT password: ' AQUARIUM_MQTT_PASSWORD
+export AQUARIUM_MQTT_USERNAME=nemo
+read -rsp 'Nemo MQTT password: ' AQUARIUM_MQTT_PASSWORD
 printf '\n'
 export AQUARIUM_MQTT_PASSWORD
 export AQUARIUM_PRODUCTION_MQTT_CONFIRMATION=ENABLE_PRODUCTION_AQUARIUM_MQTT
@@ -199,61 +200,50 @@ The production Compose file gives the controller a deterministic private bridge:
 - host gateway: `172.30.188.1`.
 
 This avoids granting a changing Docker subnet access to a native Mosquitto
-listener. Require authentication, use a password file and ACL, listen on the
-Pi's IPv4 interfaces, keep port 1883 denied by default, and add separate narrow
-firewall rules for the aquarium LAN and controller bridge. For example, create
-distinct controller and firmware credentials outside the repository:
+listener. The current installation keeps `allow_anonymous true` because a
+non-aquarium legacy ESP also uses this broker, but authentication is mandatory
+inside the structured aquarium namespace. Keep port 1883 denied by default and
+add separate narrow firewall rules for the trusted LAN and controller bridge.
+Create the shared aquarium credential outside the repository:
 
 ```sh
 sudo install -o root -g mosquitto -m 0640 /dev/null /etc/mosquitto/aquarium.passwd
-sudo mosquitto_passwd /etc/mosquitto/aquarium.passwd aquarium-controller
-sudo mosquitto_passwd /etc/mosquitto/aquarium.passwd aquarium-esp
+sudo mosquitto_passwd /etc/mosquitto/aquarium.passwd nemo
 ```
 
 Create `/etc/mosquitto/aquarium.acl` as root with mode `0640` and group
 `mosquitto`:
 
 ```text
-user aquarium-controller
-topic read aquarium/v1/devices/+/announce
-topic read aquarium/v1/devices/+/response
-topic read aquarium/announce
-topic write aquarium/v1/discovery/request
-topic write aquarium/v1/devices/+/command
-topic write aquarium/command
+topic readwrite #
+topic deny aquarium/v1/#
 
-user aquarium-esp
-topic read aquarium/v1/discovery/request
-topic read aquarium/v1/devices/+/command
-topic write aquarium/v1/devices/+/announce
-topic write aquarium/v1/devices/+/response
-topic read aquarium/command
-topic write aquarium/announce
-topic write aquarium/response
+user nemo
+topic readwrite aquarium/#
 ```
 
 Then add a reviewed Mosquitto configuration such as:
 
 ```text
 listener 1883 0.0.0.0
-allow_anonymous false
+allow_anonymous true
 password_file /etc/mosquitto/aquarium.passwd
 acl_file /etc/mosquitto/aquarium.acl
-max_packet_size 8192
+max_packet_size 262144
 ```
 
 These lines belong in the reviewed Mosquitto configuration, not the shell.
-Restart Mosquitto only during the controlled cutover and prove an unauthorized
-client cannot connect. Do not enable `allow_anonymous false` while production
-firmware still depends on anonymous MQTT; those devices will lose broker access
-and fall back to their local schedules. The firmware-5 OTA bridge changes the
-application image but does not invent MQTT credentials for a device whose NVS
-configuration is anonymous. Keep the restricted anonymous transition available
-long enough to perform the OTA, then use a device-specific firmware-6 USB build
-with `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` to replace its persisted
-network configuration without erasing its labeled ID or schedule. The reviewed
-generic OTA build must keep that switch `false`. After Compose has created
-`br-aquarium`, configure the firewall for a `192.168.1.0/24` aquarium LAN:
+Mosquitto applies the topics before the first `user` line only to anonymous
+clients, and `deny` takes precedence over the broader grant. Thus the unrelated
+ESP keeps non-v1 access while anonymous clients cannot publish or subscribe to
+the structured aquarium protocol. The larger existing broker packet limit is
+retained for the unrelated project; the aquarium controller and firmware still
+enforce their tighter application limits. Restart Mosquitto only during a
+controlled cutover and prove both access paths. A device-specific firmware-6
+USB build with `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` replaces persisted
+network settings without erasing its labeled ID or schedule; the generic OTA
+build must keep that switch `false`. After Compose has created `br-aquarium`,
+configure the firewall for a `192.168.1.0/24` aquarium LAN:
 
 ```sh
 sudo ufw allow from 192.168.1.0/24 to any port 1883 proto tcp

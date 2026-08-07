@@ -15,7 +15,6 @@ import {
   CURRENT_ESP_FIRMWARE_VERSION,
   encodeEspCommandRequest,
   encodeEspDiscoveryRequest,
-  encodeLegacyOtaRequest,
   ESP_FIRMWARE_ARTIFACT,
   ESP_MQTT_PROTOCOL_VERSION,
   ESP32_PWM_OVERWRITE_DURATION_MS,
@@ -27,7 +26,6 @@ import {
   isSupportedEspFirmwareVersion,
   matchEspCommandResult,
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
-  requiresLegacyOtaBridge,
   supportsPullOta,
 } from "./index.js";
 
@@ -106,10 +104,9 @@ describe("ESP MQTT protocol", () => {
     expect(isSupportedEspFirmwareVersion("7.1.2")).toBe(false);
     expect(isSupportedEspFirmwareVersion("5.99.0")).toBe(false);
     expect(supportsPullOta("6.0.0")).toBe(true);
-    expect(supportsPullOta("5.0.6")).toBe(true);
+    expect(supportsPullOta("6.9.0")).toBe(true);
+    expect(supportsPullOta("5.0.6")).toBe(false);
     expect(supportsPullOta("4.9.9")).toBe(false);
-    expect(requiresLegacyOtaBridge("5.0.6")).toBe(true);
-    expect(requiresLegacyOtaBridge("6.0.0")).toBe(false);
   });
 
   it("normalizes passive legacy announcements but requires v1 on device topics", () => {
@@ -219,7 +216,6 @@ describe("ESP MQTT protocol", () => {
       "test/aquarium/v1/devices/A1/command",
     );
     expect(topics.legacyCommand).toBe("test/aquarium/command");
-    expect(topics.legacyResponse).toBe("test/aquarium/response");
     expect(topics.announcement("A1")).toBe(
       "test/aquarium/v1/devices/A1/announce",
     );
@@ -233,39 +229,6 @@ describe("ESP MQTT protocol", () => {
       protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
       kind: "discover",
     });
-  });
-
-  it("keeps a bounded firmware-5-only OTA request encoder", () => {
-    const sha256 = "a".repeat(64);
-    expect(
-      encodeLegacyOtaRequest({
-        deviceId: "A1",
-        requestId: "ota-1",
-        command: {
-          kind: "firmware_update",
-          version: "6.0.0",
-          url: "http://192.168.1.73:3001/api/firmware/esp32/current.bin",
-          size: 1_200_000,
-          sha256,
-        },
-      }),
-    ).toBe(
-      `request:ota-1|A1 ota 6.0.0 1200000 ${sha256} ` +
-        "http://192.168.1.73:3001/api/firmware/esp32/current.bin",
-    );
-    expect(() =>
-      encodeLegacyOtaRequest({
-        deviceId: "A1",
-        requestId: "ota-1",
-        command: {
-          kind: "firmware_update",
-          version: "6.0.0",
-          url: "http://controller/firmware;unexpected",
-          size: 1_200_000,
-          sha256,
-        },
-      }),
-    ).toThrow(/semicolon/u);
   });
 
   it("reserves the terminating NUL byte in the firmware schedule buffer", () => {

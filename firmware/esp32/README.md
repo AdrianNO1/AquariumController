@@ -13,19 +13,23 @@ On its first boot the sketch stores those settings in the ESP32's NVS. Later
 generic OTA images reuse the persisted settings, so each release does not need
 device-specific credentials compiled into it.
 
+MQTT username and password must be supplied together. Production aquarium
+firmware uses the shared `nemo` account; its password remains only in this
+ignored header and the Pi's root-owned configuration.
+
 If firmware 5.x already persisted old or anonymous network settings, set
 `AQUARIUM_REPROVISION_NETWORK_CONFIG` to `true` only in that device-specific
 USB build. Firmware 6 then replaces the persisted Wi-Fi, broker, MQTT
 credentials, and NTP settings; it does not erase the labeled device ID or
 schedule.
 The generic release configuration keeps the switch `false`, and release tests
-enforce that default. Once the device reconnects with authentication, future
-generic OTA releases continue using the new NVS credentials.
+enforce that default. Once the device reconnects with the intended network
+settings, future generic OTA releases continue using the persisted NVS values.
 
-Firmware 5.x may be upgraded individually from the protocol-v1 website through
-a bounded legacy OTA bridge. Update-all never uses the bridge, and no other old
-command is sent. Firmware below 5.0.0 requires USB bootstrap. The web UI
-identifies devices without pull OTA as `USB required`.
+Every firmware version below 6.0.0 requires USB bootstrap and receives no
+command from the protocol-v1 controller. The web UI identifies devices without
+pull OTA as `USB required`. Once firmware 6.x is installed, future 6.x releases
+use the structured per-device OTA path described below.
 
 ## Controller-managed OTA
 
@@ -108,8 +112,8 @@ The command payload limit is 5,120 UTF-8 bytes, which covers the 4,095-byte
 schedule limit plus JSON metadata. PubSubClient uses a 6,144-byte packet buffer
 for MQTT framing and topic overhead. The earlier semicolon wire format and
 custom `chunk:index:total:isLast:data` protocol are no longer used. Legacy
-broadcast topics support passive discovery and explicit firmware-5 OTA upgrade
-only; v6 never subscribes to the old command topic.
+broadcast topics support passive discovery only; firmware 5 and earlier require
+a one-time USB upgrade. Firmware v6 never subscribes to the old command topic.
 
 ## Preparing a firmware release
 

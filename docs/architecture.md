@@ -177,9 +177,9 @@ the application:
 - MQTT 3.1.1, QoS 0, non-retained messages.
 - The ESP32 uses plaintext MQTT and supports either an explicit username/
   password pair or an intentionally anonymous listener. It does not support
-  `mqtts://`. Production must therefore use an authenticated plaintext listener
-  restricted to the trusted aquarium LAN unless a future TLS firmware is
-  implemented and physically validated.
+  `mqtts://`. The shared broker authenticates `aquarium/v1/#` while retaining
+  anonymous access outside that namespace for a non-aquarium legacy client.
+  Its plaintext listener is restricted to the trusted LAN.
 - Production protocol-v1 topics are
   `aquarium/v1/discovery/request` and
   `aquarium/v1/devices/<device-id>/{command,announce,response}`. Development
@@ -200,9 +200,9 @@ the application:
   commanded until compatibility is reviewed. Compatible legacy announcements
   remain visible but all older firmware is marked `firmware_unsupported` and
   excluded from actuator, configuration, schedule, and time-sync work.
-  Firmware 5.x alone may receive one explicitly requested OTA command through
-  its correlated legacy wire format; update-all never uses that bridge. No
-  operational compatibility is promised for firmware below 6.
+  No command, including OTA, is sent to firmware below 6. Those devices require
+  a one-time USB bootstrap; passive discovery exists only to show them as
+  unsupported until they are replaced.
 
 The transport maintains one FIFO lane per ESP, permits one response-waiting
 operation per ESP, and runs at most sixteen device lanes concurrently by
@@ -693,7 +693,7 @@ hex digest, so a mutable tag such as `latest` can never become the selected
 artifact. Docker rejects an invalid digest before starting the service. The
 template also requires an HTTP bind address/port, production
 broker URL, exact MQTT confirmation, and four host storage directories. It does
-not create an anonymous production broker or infer a database path. The image
+not create or reconfigure the separately managed broker or infer a database path. The image
 runs as UID/GID 1000 with all capabilities dropped, `no-new-privileges`, a
 read-only root filesystem, and explicit state/events/archive/backup mounts.
 The optional webhook URL, destination key, timeout, authentication header name,

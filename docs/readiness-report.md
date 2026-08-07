@@ -175,8 +175,8 @@ neither Pi nor NTP is reachable. It continues local scheduling without network
 configuration, checks MQTT subscription and OTA probation results, and forwards
 recoverable Wi-Fi, MQTT, NTP, EEPROM, schedule-restore, and publication
 failures. Per-pin schedule activation is best effort and reports failures
-without stopping healthy pins. Normal control accepts only firmware 6.x;
-firmware 5.x has a manual OTA-only bridge and older versions are excluded.
+without stopping healthy pins. Normal control and OTA accept only firmware 6.x;
+every older version is excluded and requires USB bootstrap.
 
 Compilation and fake-firmware tests cannot prove physical pin assignments,
 power-loss behavior, Wi-Fi quality, NTP reachability, or deployed output.

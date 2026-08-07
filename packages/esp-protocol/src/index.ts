@@ -35,13 +35,7 @@ export function isSupportedEspFirmwareVersion(version: string): boolean {
 }
 
 export function supportsPullOta(version: string): boolean {
-  const [major] = version.split(".");
-  return /^\d+$/u.test(major ?? "") && [5, 6].includes(Number(major));
-}
-
-export function requiresLegacyOtaBridge(version: string): boolean {
-  const [major] = version.split(".");
-  return /^\d+$/u.test(major ?? "") && Number(major) === 5;
+  return isSupportedEspFirmwareVersion(version);
 }
 
 export const espDeviceIdSchema = z
@@ -340,21 +334,6 @@ export const espDiscoveryRequestSchema = z.strictObject({
   kind: z.literal("discover"),
 });
 
-export const legacyOtaResponseSchema = z.strictObject({
-  id: espDeviceIdSchema,
-  name: espDeviceNameSchema,
-  requestId: espRequestIdSchema,
-  responses: z
-    .array(
-      z.strictObject({
-        index: z.literal(0),
-        response: z.string().min(1).max(192),
-      }),
-    )
-    .length(1),
-});
-export type LegacyOtaResponse = z.infer<typeof legacyOtaResponseSchema>;
-
 export type EspCommandResultMatch =
   | { readonly status: "succeeded"; readonly analogValue: number | null }
   | {
@@ -423,7 +402,6 @@ export interface EspTopicSet {
   readonly responseFilter: string;
   readonly legacyCommand: string;
   readonly legacyAnnouncement: string;
-  readonly legacyResponse: string;
   command(deviceId: string): string;
   announcement(deviceId: string): string;
   response(deviceId: string): string;
@@ -457,7 +435,6 @@ export function createEspTopicSetForNamespace(namespace: string): EspTopicSet {
     responseFilter: `${deviceRoot}/+/response`,
     legacyCommand: `${namespace}/command`,
     legacyAnnouncement: `${namespace}/announce`,
-    legacyResponse: `${namespace}/response`,
     command: (deviceId) => topicFor(deviceId, "command"),
     announcement: (deviceId) => topicFor(deviceId, "announce"),
     response: (deviceId) => topicFor(deviceId, "response"),
@@ -494,29 +471,6 @@ export function encodeEspCommandRequest(input: {
     throw new RangeError(
       `MQTT command payload is ${payloadBytes} bytes; firmware supports at most ${ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES}`,
     );
-  }
-  return payload;
-}
-
-export function encodeLegacyOtaRequest(input: {
-  readonly deviceId: string;
-  readonly requestId: string;
-  readonly command: Extract<EspCommandInput, { readonly kind: "firmware_update" }>;
-}): string {
-  const deviceId = espDeviceIdSchema.parse(input.deviceId);
-  const requestId = espRequestIdSchema.parse(input.requestId);
-  const command = firmwareUpdateCommandSchema.parse({
-    index: 0,
-    ...input.command,
-  });
-  if (command.url.includes(";")) {
-    throw new TypeError("Legacy OTA URL cannot contain a semicolon");
-  }
-  const payload =
-    `request:${requestId}|${deviceId} ota ${command.version} ` +
-    `${command.size} ${command.sha256} ${command.url}`;
-  if (utf8ByteLength(payload) > ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES) {
-    throw new RangeError("Legacy OTA request exceeds the MQTT payload limit");
   }
   return payload;
 }

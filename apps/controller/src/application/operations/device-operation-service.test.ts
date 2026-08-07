@@ -173,7 +173,7 @@ describe("persistent device operation service", () => {
     expect(context.executor.calls).toHaveLength(0);
   });
 
-  it("permits firmware 5 only through the manual OTA bridge", async () => {
+  it("requires USB for firmware 5 without dispatching any command", async () => {
     const context = await setup();
     await context.databases.state
       .updateTable("devices")
@@ -184,15 +184,6 @@ describe("persistent device operation service", () => {
     await expect(
       context.service.executeDeviceOperation("A1", { kind: "ping" }),
     ).resolves.toMatchObject({ status: "cancelled" });
-    context.executor.outcomes.push({
-      index: 0,
-      command: "A1 ota 6.0.0 1000000 " + "0".repeat(64) +
-        " http://controller.local/firmware.bin",
-      targetId: "A1",
-      status: "succeeded",
-      responseBytes: 12,
-      analogValue: null,
-    });
     await expect(
       context.service.executeDeviceOperation("A1", {
         kind: "firmware_update",
@@ -201,13 +192,12 @@ describe("persistent device operation service", () => {
         size: 1_000_000,
         sha256: "0".repeat(64),
       }),
-    ).resolves.toMatchObject({ status: "succeeded" });
-
-    expect(context.executor.calls).toHaveLength(1);
-    expect(context.executor.calls[0]?.[0]).toMatchObject({
-      operation: { kind: "firmware_update" },
-      wireProtocol: "legacy_v5_ota",
+    ).resolves.toMatchObject({
+      status: "cancelled",
+      result: { reason: "cancelled_by_owner" },
     });
+
+    expect(context.executor.calls).toHaveLength(0);
   });
 
   it("cools only the timed-out device until availability is signalled", async () => {

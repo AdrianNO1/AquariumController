@@ -158,7 +158,6 @@ describe("structured per-device MQTT transport", () => {
           topics.announcementFilter,
           topics.responseFilter,
           topics.legacyAnnouncement,
-          topics.legacyResponse,
         ],
         options: { qos: 0 },
       },
@@ -220,57 +219,6 @@ describe("structured per-device MQTT transport", () => {
     await expect(operation).resolves.toMatchObject({
       outcomes: [{ status: "succeeded", targetId: "A1" }],
     });
-    await transport.stop();
-  });
-
-  it("uses the old broadcast protocol only for a firmware 5 OTA upgrade", async () => {
-    const client = new InMemoryMqttClient();
-    const transport = await readyTransport(client);
-    const sha256 = "a".repeat(64);
-    const operation = transport.executeCommands([
-      {
-        command: "OLD ota 6.0.0",
-        target: { id: "OLD" },
-        operation: {
-          kind: "firmware_update",
-          version: "6.0.0",
-          url: "http://192.168.1.73:3001/api/firmware/esp32/current.bin",
-          size: 1_200_000,
-          sha256,
-        },
-        wireProtocol: "legacy_v5_ota",
-      },
-    ]);
-    await vi.waitFor(() =>
-      expect(
-        client.publishes.filter(
-          ({ topic, payload }) =>
-            topic === topics.legacyCommand && payload.startsWith("request:"),
-        ),
-      ).toHaveLength(1),
-    );
-    const publication = client.publishes.find(
-      ({ topic, payload }) =>
-        topic === topics.legacyCommand && payload.startsWith("request:"),
-    );
-    expect(publication?.payload).toContain(
-      `|OLD ota 6.0.0 1200000 ${sha256} http://192.168.1.73:3001/`,
-    );
-    if (publication === undefined) {
-      throw new Error("Expected one legacy OTA publication");
-    }
-    const requestId = /^request:([^|]+)\|/u.exec(publication.payload)?.[1];
-    expect(requestId).toBeDefined();
-    client.emitJson(topics.legacyResponse, {
-      id: "OLD",
-      name: "Legacy",
-      requestId,
-      responses: [{ index: 0, response: "ota_accepted" }],
-    });
-    await expect(operation).resolves.toMatchObject({
-      outcomes: [{ status: "succeeded", targetId: "OLD" }],
-    });
-    expect(commandPublishes(client)).toHaveLength(0);
     await transport.stop();
   });
 
@@ -462,7 +410,6 @@ describe("structured per-device MQTT transport", () => {
           command: "bad",
           target: { id: "bad/topic" },
           operation: { kind: "ping" },
-          wireProtocol: "structured_v1",
         },
       ]),
     ).toThrow();
@@ -472,7 +419,6 @@ describe("structured per-device MQTT transport", () => {
           command: "bad pin",
           target: { id: "A1" },
           operation: { kind: "analog_read", pin: 64 },
-          wireProtocol: "structured_v1",
         },
       ]),
     ).toThrow();
@@ -505,7 +451,6 @@ function ping(targetId: string): LegacyWireCommand {
     command: `${targetId} ping`,
     target: { id: targetId },
     operation: { kind: "ping" },
-    wireProtocol: "structured_v1",
   };
 }
 
@@ -519,7 +464,6 @@ function setPwm(
     command: `${targetId} set PWM`,
     target: { id: targetId },
     operation: { kind: "set_pwm", pin, value, overwrite },
-    wireProtocol: "structured_v1",
   };
 }
 

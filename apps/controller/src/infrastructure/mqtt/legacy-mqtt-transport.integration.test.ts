@@ -351,7 +351,6 @@ function command(
     command: `${targetId} ${description}`,
     target: { id: targetId },
     operation,
-    wireProtocol: "structured_v1",
   };
 }
 

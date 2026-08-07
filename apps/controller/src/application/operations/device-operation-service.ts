@@ -9,7 +9,6 @@ import {
 } from "@aquarium/contracts";
 import {
   isSupportedEspFirmwareVersion,
-  requiresLegacyOtaBridge,
   supportsPullOta,
   utf8ByteLength,
 } from "@aquarium/esp-protocol";
@@ -181,11 +180,6 @@ export class DeviceOperationService implements DeviceConfigurationCommandPort {
     const command = buildLegacyWireCommand(
       { id: device.hardware_id },
       parsedRequest,
-      parsedRequest.kind === "firmware_update" &&
-        device.firmware_version !== null &&
-        requiresLegacyOtaBridge(device.firmware_version)
-        ? "legacy_v5_ota"
-        : "structured_v1",
     );
     const gateReason = this.#reserveDeviceAttempt(device.id, this.#now());
     if (gateReason !== null) {

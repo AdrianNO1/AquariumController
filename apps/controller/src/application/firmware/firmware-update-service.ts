@@ -7,7 +7,6 @@ import {
 import {
   CURRENT_ESP_FIRMWARE_VERSION,
   MINIMUM_PULL_OTA_FIRMWARE_VERSION,
-  requiresLegacyOtaBridge,
   supportsPullOta,
 } from "@aquarium/esp-protocol";
 import { sql, type Kysely, type Selectable } from "kysely";
@@ -133,12 +132,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
         if (device === undefined) {
           throw new ConfigurationNotFoundError("device", deviceId);
         }
-        const status = initialStatus(
-          device,
-          parsed.mode,
-          this.#artifact.version,
-          true,
-        );
+        const status = initialStatus(device, parsed.mode, this.#artifact.version);
         await transaction
           .insertInto("firmware_update_requests")
           .values({
@@ -239,12 +233,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
           .execute();
         for (const device of devices) {
           if (device.firmware_version === this.#artifact.version) continue;
-          const status = initialStatus(
-            device,
-            parsed.mode,
-            this.#artifact.version,
-            false,
-          );
+          const status = initialStatus(device, parsed.mode, this.#artifact.version);
           await transaction
             .insertInto("firmware_update_requests")
             .values({
@@ -366,12 +355,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
     if (existing?.target_version === this.#artifact.version) return;
 
     const nowMs = this.#now();
-    const status = initialStatus(
-      device,
-      policy.mode,
-      this.#artifact.version,
-      false,
-    );
+    const status = initialStatus(device, policy.mode, this.#artifact.version);
     await commitConditionalStateChange(
       this.#database,
       {
@@ -641,14 +625,11 @@ function initialStatus(
   device: DeviceRow,
   mode: RequestFirmwareUpdate["mode"],
   targetVersion: string,
-  allowLegacyOtaBridge: boolean,
 ): FirmwareUpdateStatus {
   if (device.firmware_version === targetVersion) return "succeeded";
   if (
     device.firmware_version === null ||
-    !supportsPullOta(device.firmware_version) ||
-    (!allowLegacyOtaBridge &&
-      requiresLegacyOtaBridge(device.firmware_version))
+    !supportsPullOta(device.firmware_version)
   ) {
     return "usb_required";
   }

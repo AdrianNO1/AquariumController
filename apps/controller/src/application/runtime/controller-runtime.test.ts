@@ -176,7 +176,6 @@ describe("controller MQTT runtime composition", () => {
         "test/aquarium/v1/devices/+/announce",
         "test/aquarium/v1/devices/+/response",
         "test/aquarium/announce",
-        "test/aquarium/response",
       ],
     ]);
     expect(client.publishes).toContainEqual({
