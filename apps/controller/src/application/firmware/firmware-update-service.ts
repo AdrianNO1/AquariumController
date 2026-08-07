@@ -6,6 +6,7 @@ import {
 } from "@aquarium/contracts";
 import {
   CURRENT_ESP_FIRMWARE_VERSION,
+  MINIMUM_PULL_OTA_FIRMWARE_VERSION,
   supportsPullOta,
 } from "@aquarium/esp-protocol";
 import { sql, type Kysely, type Selectable } from "kysely";
@@ -57,6 +58,9 @@ export interface FirmwareUpdateServiceOptions {
 
 type DeviceRow = Selectable<StateDatabaseSchema["devices"]>;
 type UpdateRow = Selectable<StateDatabaseSchema["firmware_update_requests"]>;
+const USB_BOOTSTRAP_MESSAGE =
+  `Install firmware ${MINIMUM_PULL_OTA_FIRMWARE_VERSION} or newer once over USB ` +
+  "to enable wireless updates";
 
 export class FirmwareUpdateService implements FirmwareUpdateCommandService {
   readonly #database: Kysely<StateDatabaseSchema>;
@@ -128,11 +132,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
         if (device === undefined) {
           throw new ConfigurationNotFoundError("device", deviceId);
         }
-        const status = initialStatus(
-          device,
-          parsed.mode,
-          this.#artifact.version,
-        );
+        const status = initialStatus(device, parsed.mode, this.#artifact.version);
         await transaction
           .insertInto("firmware_update_requests")
           .values({
@@ -144,7 +144,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
             operation_id: null,
             error_message:
               status === "usb_required"
-                ? "Install firmware 5.0.0 or newer once over USB to enable wireless updates"
+                ? USB_BOOTSTRAP_MESSAGE
                 : null,
             requested_at_ms: nowMs,
             updated_at_ms: nowMs,
@@ -158,7 +158,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
               operation_id: null,
               error_message:
                 status === "usb_required"
-                  ? "Install firmware 5.0.0 or newer once over USB to enable wireless updates"
+                  ? USB_BOOTSTRAP_MESSAGE
                   : null,
               requested_at_ms: nowMs,
               updated_at_ms: nowMs,
@@ -233,11 +233,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
           .execute();
         for (const device of devices) {
           if (device.firmware_version === this.#artifact.version) continue;
-          const status = initialStatus(
-            device,
-            parsed.mode,
-            this.#artifact.version,
-          );
+          const status = initialStatus(device, parsed.mode, this.#artifact.version);
           await transaction
             .insertInto("firmware_update_requests")
             .values({
@@ -249,7 +245,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
               operation_id: null,
               error_message:
                 status === "usb_required"
-                  ? "Install firmware 5.0.0 or newer once over USB to enable wireless updates"
+                  ? USB_BOOTSTRAP_MESSAGE
                   : null,
               requested_at_ms: nowMs,
               updated_at_ms: nowMs,
@@ -263,7 +259,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
                 operation_id: null,
                 error_message:
                   status === "usb_required"
-                    ? "Install firmware 5.0.0 or newer once over USB to enable wireless updates"
+                    ? USB_BOOTSTRAP_MESSAGE
                     : null,
                 requested_at_ms: nowMs,
                 updated_at_ms: nowMs,
@@ -390,7 +386,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
             operation_id: null,
             error_message:
               status === "usb_required"
-                ? "Install firmware 5.0.0 or newer once over USB to enable wireless updates"
+                ? USB_BOOTSTRAP_MESSAGE
                 : null,
             requested_at_ms: nowMs,
             updated_at_ms: nowMs,
@@ -424,7 +420,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
         update,
         "usb_required",
         0,
-        "Install firmware 5.0.0 or newer once over USB to enable wireless updates",
+        USB_BOOTSTRAP_MESSAGE,
         null,
       );
       return;

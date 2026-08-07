@@ -445,7 +445,7 @@ describe("configuration HTTP routes", () => {
     const invalidName = await app.inject({
       method: "PATCH",
       url: "/api/devices/device-main/configuration",
-      payload: { expectedRevision: 4, name: "Main;Tank" },
+      payload: { expectedRevision: 4, name: "Main Tank" },
     });
     expect(invalidName.statusCode).toBe(400);
     expect(patchDeviceConfiguration).not.toHaveBeenCalled();

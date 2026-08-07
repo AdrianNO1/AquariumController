@@ -12,14 +12,6 @@ import {
 export const PINNED_MOSQUITTO_IMAGE =
   "eclipse-mosquitto:2.0.22-openssl@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c";
 
-export const TEST_AQUARIUM_TOPICS = [
-  "test/aquarium/command",
-  "test/aquarium/announce",
-  "test/aquarium/response",
-] as const;
-
-export type TestAquariumTopic = (typeof TEST_AQUARIUM_TOPICS)[number];
-
 export interface CapturedMqttPublication {
   readonly topic: string;
   readonly payload: string;
@@ -181,7 +173,7 @@ export class MosquittoTestHarness {
 
   assertOnlyTestAquariumTraffic(): void {
     const unsafe = this.#publications.filter(
-      ({ topic }) => !TEST_AQUARIUM_TOPICS.includes(asTestTopic(topic)),
+      ({ topic }) => !isTestAquariumTopic(topic),
     );
     if (unsafe.length > 0) {
       throw new Error(
@@ -256,16 +248,23 @@ export async function waitUntil(
 
 function assertTestAquariumTopic(
   topic: string,
-): asserts topic is TestAquariumTopic {
-  if (!TEST_AQUARIUM_TOPICS.includes(asTestTopic(topic))) {
+): void {
+  if (!isTestAquariumTopic(topic)) {
     throw new Error(
       `MQTT integration publication attempted unsafe topic ${topic}`,
     );
   }
 }
 
-function asTestTopic(topic: string): TestAquariumTopic {
-  return topic as TestAquariumTopic;
+function isTestAquariumTopic(topic: string): boolean {
+  return (
+    topic === "test/aquarium/command" ||
+    topic === "test/aquarium/announce" ||
+    topic === "test/aquarium/v1/discovery/request" ||
+    /^test\/aquarium\/v1\/devices\/[A-Za-z0-9_-]{1,128}\/(?:command|announce|response)$/u.test(
+      topic,
+    )
+  );
 }
 
 function toError(error: unknown): Error {

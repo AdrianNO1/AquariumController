@@ -6,6 +6,7 @@ import {
   MqttFakeEspSession,
   type FakeEspMqttClientPort,
 } from "./mqtt-transport.js";
+import { encodeFakeEspCommandRequest } from "./structured-protocol.js";
 import { createFakeEspTopics, InMemoryFakeEspBus } from "./transport.js";
 
 const encoder = new TextEncoder();
@@ -157,16 +158,20 @@ describe("fake ESP MQTT safety and lifecycle", () => {
     client.emitConnected();
     await ready;
 
-    expect(client.actions.slice(0, 3)).toEqual([
+    expect(client.actions.slice(0, 4)).toEqual([
       "start",
-      "subscribe:test/aquarium/command:0",
-      "publish:test/aquarium/announce",
+      "subscribe:test/aquarium/v1/discovery/request:0",
+      "subscribe:test/aquarium/v1/devices/A1B2C3D4/command:0",
+      "publish:test/aquarium/v1/devices/A1B2C3D4/announce",
     ]);
     expect(client.publications[0]?.options).toEqual({ qos: 0, retain: false });
 
-    client.emitMessage("test/aquarium/command", "A1B2C3D4 p");
+    client.emitMessage(
+      "test/aquarium/v1/devices/A1B2C3D4/command",
+      pingRequest(),
+    );
     expect(client.publications.at(-1)).toMatchObject({
-      topic: "test/aquarium/response",
+      topic: "test/aquarium/v1/devices/A1B2C3D4/response",
       options: { qos: 0, retain: false },
     });
     await session.stop();
@@ -185,7 +190,7 @@ describe("fake ESP MQTT safety and lifecycle", () => {
     await vi.waitFor(() => {
       expect(
         client.actions.filter((action) => action.startsWith("subscribe:")),
-      ).toHaveLength(2);
+      ).toHaveLength(4);
       expect(
         client.publications.filter(({ topic }) => topic.endsWith("/announce")),
       ).toHaveLength(2);
@@ -207,7 +212,10 @@ describe("fake ESP MQTT safety and lifecycle", () => {
     expect(session.isMqttConnected()).toBe(true);
     expect(session.actor.isReady()).toBe(false);
     const publicationCount = client.publications.length;
-    client.emitMessage("test/aquarium/command", "A1B2C3D4 p");
+    client.emitMessage(
+      "test/aquarium/v1/devices/A1B2C3D4/command",
+      pingRequest(),
+    );
     expect(client.publications).toHaveLength(publicationCount);
 
     session.setNetworkEnabled(true);
@@ -266,7 +274,9 @@ describe("fake ESP MQTT safety and lifecycle", () => {
     const ready = session.start();
     client.emitConnected();
     await vi.waitFor(() =>
-      expect(client.actions).toContain("subscribe:test/aquarium/command:0"),
+      expect(client.actions).toContain(
+        "subscribe:test/aquarium/v1/devices/A1B2C3D4/command:0",
+      ),
     );
     const readinessFailure = expect(ready).rejects.toThrow(/stopped before/);
 
@@ -311,19 +321,35 @@ describe("fake ESP MQTT safety and lifecycle", () => {
     expect(() => createFakeEspTopics("aquarium")).toThrow(/test namespaces/);
     expect(() => createFakeEspTopics("test/aquarium/#")).toThrow(/segments/);
     expect(() => createFakeEspTopics("test/aquarium//x")).toThrow(/segments/);
-    expect(createFakeEspTopics("test/aquarium/r8")).toEqual({
-      command: "test/aquarium/r8/command",
-      announce: "test/aquarium/r8/announce",
-      response: "test/aquarium/r8/response",
-    });
+    const topics = createFakeEspTopics("test/aquarium/r8");
+    expect(topics.discoveryRequest).toBe(
+      "test/aquarium/r8/v1/discovery/request",
+    );
+    expect(topics.command("A1B2C3D4")).toBe(
+      "test/aquarium/r8/v1/devices/A1B2C3D4/command",
+    );
+    expect(topics.announcement("A1B2C3D4")).toBe(
+      "test/aquarium/r8/v1/devices/A1B2C3D4/announce",
+    );
+    expect(topics.response("A1B2C3D4")).toBe(
+      "test/aquarium/r8/v1/devices/A1B2C3D4/response",
+    );
 
     const bus = new InMemoryFakeEspBus();
     expect(() => bus.publishFromHost("aquarium/command", "discover")).toThrow();
     expect(() =>
       bus.publishFromHost("test/aquarium/response", "unsafe"),
-    ).toThrow(/command/);
+    ).toThrow(/structured test namespace/);
   });
 });
+
+function pingRequest(): string {
+  return encodeFakeEspCommandRequest({
+    deviceId: "A1B2C3D4",
+    requestId: "mqtt-test-ping",
+    commands: [{ index: 0, kind: "ping" }],
+  });
+}
 
 function createSession(
   client: TestMqttClient,

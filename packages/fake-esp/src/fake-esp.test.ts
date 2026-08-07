@@ -12,7 +12,7 @@ describe("independent fake ESP actor commands", () => {
 
     harness.connectAll();
     expect(actorPayloads(harness, harness.topics.announce)).toEqual([
-      '{"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"5.0.6","hardwareProfile":"nodemcu-esp32s-v1.1","hardwareModel":"Ai-Thinker NodeMCU-32S V1.1","scheduleHash":"0"}',
+      '{"protocolVersion":1,"name":"Alpha","freq":5000,"res":8,"id":"A1B2C3D4","status":"online","version":"6.0.0","hardwareProfile":"nodemcu-esp32s-v1.1","hardwareModel":"Ai-Thinker NodeMCU-32S V1.1","diagnosticStorageHealthy":true,"scheduleHash":"0"}',
     ]);
 
     harness.publishCommand("discover");
@@ -29,12 +29,20 @@ describe("independent fake ESP actor commands", () => {
 
     expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
       {
-        id: DEVICE_ID,
+        protocolVersion: 1,
+        deviceId: DEVICE_ID,
         name: "Alpha",
         requestId: "operation_1",
-        responses: [
-          { index: 0, response: "o" },
-          { index: 1, response: "s 4 128 1" },
+        results: [
+          { index: 0, kind: "ping", ok: true },
+          {
+            index: 1,
+            kind: "set_pwm",
+            ok: true,
+            pin: 4,
+            value: 128,
+            overwrite: true,
+          },
         ],
       },
     ]);
@@ -53,20 +61,31 @@ describe("independent fake ESP actor commands", () => {
       `${DEVICE_ID} p;B1C2D3E4 p;Other p;${DEVICE_ID} s 4 128 1;${DEVICE_ID} r 34`,
     );
 
-    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
+    expect(allJsonActorResponses(harness)).toEqual([
       {
-        id: DEVICE_ID,
+        protocolVersion: 1,
+        deviceId: DEVICE_ID,
         name: "Alpha",
-        responses: [
-          { index: 0, response: "o" },
-          { index: 3, response: "s 4 128 1" },
-          { index: 4, response: "r 34 321" },
+        requestId: "harness-1",
+        results: [
+          { index: 0, kind: "ping", ok: true },
+          {
+            index: 1,
+            kind: "set_pwm",
+            ok: true,
+            pin: 4,
+            value: 128,
+            overwrite: true,
+          },
+          { index: 2, kind: "analog_read", ok: true, pin: 34, value: 321 },
         ],
       },
       {
-        id: "B1C2D3E4",
+        protocolVersion: 1,
+        deviceId: "B1C2D3E4",
         name: "Beta",
-        responses: [{ index: 1, response: "o" }],
+        requestId: "harness-2",
+        results: [{ index: 0, kind: "ping", ok: true }],
       },
     ]);
     expect(harness.actor("alpha").pinSnapshot(4)).toMatchObject({
@@ -85,17 +104,18 @@ describe("independent fake ESP actor commands", () => {
       `${DEVICE_ID} e Alpha 5000 12;${DEVICE_ID} s 4 0 0;${DEVICE_ID} s 12 128 1;${DEVICE_ID} s 13 255 0`,
     );
 
-    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
+    expect(allCommandResults(harness)).toEqual([
       {
-        id: DEVICE_ID,
+        index: 0,
+        kind: "edit_configuration",
+        ok: true,
         name: "Alpha",
-        responses: [
-          { index: 0, response: "Alpha 5000 12" },
-          { index: 1, response: "s 4 0 0" },
-          { index: 2, response: "s 12 128 1" },
-          { index: 3, response: "s 13 255 0" },
-        ],
+        pwmFrequencyHz: 5000,
+        pwmResolutionBits: 12,
       },
+      { index: 1, kind: "set_pwm", ok: true, pin: 4, value: 0, overwrite: false },
+      { index: 2, kind: "set_pwm", ok: true, pin: 12, value: 128, overwrite: true },
+      { index: 0, kind: "set_pwm", ok: true, pin: 13, value: 255, overwrite: false },
     ]);
     expect(harness.actor("alpha").pinSnapshot(4).outputValue).toBe(0);
     expect(harness.actor("alpha").pinSnapshot(12)).toMatchObject({
@@ -106,124 +126,62 @@ describe("independent fake ESP actor commands", () => {
     expect(harness.actor("alpha").pinSnapshot(13).outputValue).toBe(4_095);
   });
 
-  it("implements command, configuration, synchronization, and analog errors", () => {
+  it("returns typed device errors without preventing valid commands", () => {
     const harness = createConnectedHarness();
     harness.actor("alpha").setAnalogValue(34, 777);
     harness.bus.clearPublications();
 
-    harness.publishCommand(
-      [
-        `${DEVICE_ID} s nope`,
-        `${DEVICE_ID} s 4 256 0`,
-        `${DEVICE_ID} s 4 1 2`,
-        `${DEVICE_ID} r nope`,
-        `${DEVICE_ID} r 34 metadata`,
-        `${DEVICE_ID} sc {`,
-        `${DEVICE_ID} sync 0`,
-        `${DEVICE_ID} sync -1`,
-        `${DEVICE_ID} sync 1735689600 extra`,
-        `${DEVICE_ID} sync 2147483648`,
-        `${DEVICE_ID} mystery`,
-      ].join(";"),
-    );
-
-    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
+    publishRawRequest(harness, [
+      { index: 0, kind: "set_pwm", pin: 34, value: 255, overwrite: true },
       {
-        id: DEVICE_ID,
-        name: "Alpha",
-        responses: [
-          { index: 0, response: "E: Invalid arguments" },
-          { index: 1, response: "E: Invalid value or overwrite parameter" },
-          { index: 2, response: "E: Invalid value or overwrite parameter" },
-          { index: 3, response: "E: Invalid arguments" },
-          { index: 4, response: "E: Metadata not supported" },
-          { index: 5, response: "E: Invalid JSON" },
-          { index: 6, response: "E: Invalid time value" },
-          { index: 7, response: "E: Invalid time value" },
-          { index: 8, response: "E: Invalid time value" },
-          { index: 9, response: "E: Invalid time value" },
-          { index: 10, response: "E: Invalid command" },
-        ],
+        index: 1,
+        kind: "edit_configuration",
+        name: "Renamed",
+        pwmFrequencyHz: 40_000,
+        pwmResolutionBits: 16,
       },
+      { index: 2, kind: "analog_read", pin: 34 },
     ]);
 
-    harness.bus.clearPublications();
-    harness.publishCommand(
-      `${DEVICE_ID} r 34 metadata extra;${DEVICE_ID} r 34metadata;${DEVICE_ID} r 34`,
-    );
-    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
+    expect(allCommandResults(harness)).toEqual([
       {
-        id: DEVICE_ID,
-        name: "Alpha",
-        responses: [
-          { index: 0, response: "E: Metadata not supported" },
-          { index: 1, response: "E: Metadata not supported" },
-          { index: 2, response: "r 34 777" },
-        ],
+        index: 0,
+        kind: "set_pwm",
+        ok: false,
+        error: { code: "invalid_pin", message: "Invalid pin" },
       },
-    ]);
-
-    harness.bus.clearPublications();
-    harness.publishCommand(
-      [
-        `${DEVICE_ID} e Renamed 0 17`,
-        `${DEVICE_ID} e Renamed -1 8`,
-        `${DEVICE_ID} e Renamed 5000 8 extra`,
-        `${DEVICE_ID} e ${"x".repeat(32)} 5000 8`,
-        `${DEVICE_ID} e Renamed 40000 16`,
-      ].join(";"),
-    );
-    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
       {
-        id: DEVICE_ID,
-        name: "Alpha",
-        responses: [
-          { index: 0, response: "E: Invalid configuration" },
-          { index: 1, response: "E: Invalid configuration" },
-          { index: 2, response: "E: Invalid configuration" },
-          { index: 3, response: "E: Invalid configuration" },
-          { index: 4, response: "E: Invalid configuration" },
-        ],
+        index: 1,
+        kind: "edit_configuration",
+        ok: false,
+        error: { code: "invalid_configuration", message: "Invalid configuration" },
       },
+      { index: 2, kind: "analog_read", ok: true, pin: 34, value: 777 },
     ]);
-    expect(harness.actor("alpha").identity()).toEqual({
+    expect(harness.actor("alpha").identity()).toMatchObject({
       deviceName: "Alpha",
-      deviceId: DEVICE_ID,
       frequency: 5_000,
       resolution: 8,
     });
   });
 
-  it("rejects out-of-range pins without creating actuator state", () => {
+  it("rejects an invalid structured request before changing actuator state", () => {
     const harness = createConnectedHarness();
     harness.bus.clearPublications();
 
-    harness.publishCommand(
-      `${DEVICE_ID} s -1 255 1;${DEVICE_ID} s 64 255 1;${DEVICE_ID} r -1;${DEVICE_ID} r 64;${DEVICE_ID} s 32 1 0 extra;${DEVICE_ID} s 999999999999999999999 1 0;${DEVICE_ID} s 32 128 0;${DEVICE_ID} r 32;${DEVICE_ID} r 999999999999999999999`,
-    );
-
-    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
-      {
-        id: DEVICE_ID,
-        name: "Alpha",
-        responses: [
-          { index: 0, response: "E: Invalid pin" },
-          { index: 1, response: "E: Invalid pin" },
-          { index: 2, response: "E: Invalid pin" },
-          { index: 3, response: "E: Invalid pin" },
-          { index: 4, response: "E: Invalid arguments" },
-          { index: 5, response: "E: Invalid arguments" },
-          { index: 6, response: "s 32 128 0" },
-          { index: 7, response: "E: Pin is configured as output" },
-          { index: 8, response: "E: Invalid arguments" },
-        ],
-      },
+    publishRawRequest(harness, [
+      { index: 0, kind: "set_pwm", pin: -1, value: 255, overwrite: true },
     ]);
+
+    expect(allJsonActorResponses(harness)).toEqual([]);
     expect(harness.actor("alpha").pinSnapshot(-1).attached).toBe(false);
-    expect(harness.actor("alpha").pinSnapshot(64).attached).toBe(false);
-    expect(harness.actor("alpha").pinSnapshot(32)).toMatchObject({
-      attached: true,
-      outputValue: 128,
+    expect(harness.actor("alpha").persistenceSnapshot().lastError).toEqual({
+      code: "invalid_mqtt_request",
+      severity: "warning",
+      message: "Invalid or misaddressed MQTT command request",
+      sequence: 1,
+      active: true,
+      at: 0,
     });
   });
 
@@ -371,23 +329,19 @@ describe("independent fake ESP actor commands", () => {
     });
   });
 
-  it("ignores bare clear and rejects targeted clear without erasing state", () => {
+  it("ignores legacy broadcasts and rejects unknown structured commands without erasing state", () => {
     const harness = createConnectedHarness();
     harness.publishCommand(`${DEVICE_ID} sc ${FIRMWARE_FLAT_DOCUMENT_JSON}`);
     harness.publishCommand(`${DEVICE_ID} e Renamed 6000 10`);
     harness.bus.clearPublications();
 
-    harness.publishCommand(`${DEVICE_ID} clear`);
-    expect(jsonActorPayloads(harness, harness.topics.response)).toEqual([
-      {
-        id: DEVICE_ID,
-        name: "Renamed",
-        responses: [{ index: 0, response: "E: Invalid command" }],
-      },
-    ]);
+    publishRawRequest(harness, [{ index: 0, kind: "clear" }]);
+    expect(allJsonActorResponses(harness)).toEqual([]);
 
     harness.bus.clearPublications();
-    harness.publishCommand("clear");
+    expect(() =>
+      harness.bus.publishFromHost("test/aquarium/command", "clear"),
+    ).toThrow(/structured test namespace/iu);
     expect(actorPayloads(harness, harness.topics.response)).toEqual([]);
     expect(harness.actor("alpha").identity()).toEqual({
       deviceName: "Renamed",
@@ -408,7 +362,9 @@ describe("independent fake ESP actor commands", () => {
     harness.connectAll();
     harness.bus.clearPublications();
 
-    harness.publishCommand("clear");
+    expect(() =>
+      harness.bus.publishFromHost("test/aquarium/command", "clear"),
+    ).toThrow(/structured test namespace/iu);
     expect(actorPayloads(harness, harness.topics.response)).toEqual([]);
     expect(harness.actor("alpha").identity().deviceName).toBe("Alpha");
     expect(harness.actor("beta").identity().deviceName).toBe("Beta");
@@ -423,7 +379,7 @@ describe("independent fake ESP actor commands", () => {
     expect(actorPayloads(harness, harness.topics.response)).toEqual([]);
 
     harness.setResponseFaults("alpha", {
-      dropNextResponseForCommand: "e",
+      dropNextResponseForCommand: "edit_configuration",
     });
     harness.publishCommand(`${DEVICE_ID} p`);
     expect(actorPayloads(harness, harness.topics.response)).toHaveLength(1);
@@ -433,7 +389,7 @@ describe("independent fake ESP actor commands", () => {
     expect(actorPayloads(harness, harness.topics.response)).toHaveLength(2);
     expect(() =>
       harness.setResponseFaults("alpha", {
-        dropNextResponseForCommand: "edit configuration",
+        dropNextResponseForCommand: "edit configuration!",
       }),
     ).toThrow(/one-shot response fault command/iu);
 
@@ -498,5 +454,36 @@ function jsonActorPayloads(
 ): readonly object[] {
   return actorPayloads(harness, topic).map(
     (payload) => JSON.parse(payload) as object,
+  );
+}
+
+function allJsonActorResponses(harness: FakeEspHarness): readonly object[] {
+  return harness.bus
+    .publications()
+    .filter(
+      ({ origin, topic }) => origin === "actor" && topic.endsWith("/response"),
+    )
+    .map(({ payload }) => JSON.parse(payload) as object);
+}
+
+function allCommandResults(harness: FakeEspHarness): readonly object[] {
+  return allJsonActorResponses(harness).flatMap((response) => {
+    const typed = response as { readonly results?: readonly object[] };
+    return typed.results ?? [];
+  });
+}
+
+function publishRawRequest(
+  harness: FakeEspHarness,
+  commands: readonly object[],
+): void {
+  harness.bus.publishFromHost(
+    harness.topics.command,
+    JSON.stringify({
+      protocolVersion: 1,
+      deviceId: DEVICE_ID,
+      requestId: "raw-test",
+      commands,
+    }),
   );
 }

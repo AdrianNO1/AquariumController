@@ -70,6 +70,8 @@ const environmentSchema = z
       .default("development"),
     AQUARIUM_MQTT_ENABLED: z.enum(["true", "false"]).default("false"),
     AQUARIUM_MQTT_BROKER_URL: z.string().url().optional(),
+    AQUARIUM_MQTT_USERNAME: z.string().min(1).max(128).optional(),
+    AQUARIUM_MQTT_PASSWORD: z.string().min(1).max(512).optional(),
     AQUARIUM_MQTT_TOPIC_NAMESPACE: z.enum(["test", "production"]).optional(),
     AQUARIUM_MQTT_RESPONSE_TIMEOUT_MS: z.coerce
       .number()
@@ -180,6 +182,17 @@ const environmentSchema = z
       }
     }
 
+    if (
+      (environment.AQUARIUM_MQTT_USERNAME === undefined) !==
+      (environment.AQUARIUM_MQTT_PASSWORD === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "MQTT username and password must be configured together",
+        path: ["AQUARIUM_MQTT_USERNAME"],
+      });
+    }
+
     if (environment.AQUARIUM_MQTT_ENABLED === "false") {
       return;
     }
@@ -201,16 +214,23 @@ const environmentSchema = z
         message: "MQTT requires an explicit AQUARIUM_MQTT_BROKER_URL",
         path: ["AQUARIUM_MQTT_BROKER_URL"],
       });
-    } else if (
-      !["mqtt:", "mqtts:"].includes(
-        new URL(environment.AQUARIUM_MQTT_BROKER_URL).protocol,
-      )
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "MQTT broker URLs must use mqtt:// or mqtts://",
-        path: ["AQUARIUM_MQTT_BROKER_URL"],
-      });
+    } else {
+      const brokerUrl = new URL(environment.AQUARIUM_MQTT_BROKER_URL);
+      if (!["mqtt:", "mqtts:"].includes(brokerUrl.protocol)) {
+        context.addIssue({
+          code: "custom",
+          message: "MQTT broker URLs must use mqtt:// or mqtts://",
+          path: ["AQUARIUM_MQTT_BROKER_URL"],
+        });
+      }
+      if (brokerUrl.username.length > 0 || brokerUrl.password.length > 0) {
+        context.addIssue({
+          code: "custom",
+          message:
+            "MQTT credentials must use the dedicated username and password settings, not URL userinfo",
+          path: ["AQUARIUM_MQTT_BROKER_URL"],
+        });
+      }
     }
     if (environment.AQUARIUM_MQTT_TOPIC_NAMESPACE === undefined) {
       context.addIssue({
@@ -252,6 +272,16 @@ const environmentSchema = z
           path: ["AQUARIUM_RUNTIME_MODE"],
         });
       }
+      if (
+        environment.AQUARIUM_MQTT_USERNAME === undefined ||
+        environment.AQUARIUM_MQTT_PASSWORD === undefined
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Production MQTT requires explicit credentials",
+          path: ["AQUARIUM_MQTT_USERNAME"],
+        });
+      }
       return;
     }
 
@@ -290,6 +320,8 @@ export interface DisabledMqttConfiguration {
 export interface EnabledMqttConfiguration {
   readonly enabled: true;
   readonly brokerUrl: string;
+  readonly username?: string;
+  readonly password?: string;
   readonly topicNamespace: "test" | "production";
   readonly protocolVersion: 4;
   readonly qos: 0;
@@ -478,6 +510,13 @@ export function parseControllerConfiguration(
     mqtt: {
       enabled: true,
       brokerUrl: parsed.AQUARIUM_MQTT_BROKER_URL,
+      ...(parsed.AQUARIUM_MQTT_USERNAME !== undefined &&
+      parsed.AQUARIUM_MQTT_PASSWORD !== undefined
+        ? {
+            username: parsed.AQUARIUM_MQTT_USERNAME,
+            password: parsed.AQUARIUM_MQTT_PASSWORD,
+          }
+        : {}),
       topicNamespace: parsed.AQUARIUM_MQTT_TOPIC_NAMESPACE,
       protocolVersion: 4,
       qos: 0,

@@ -1,19 +1,35 @@
 # ESP32 firmware
 
 The supported source is `firmware/esp32/ESP32Code/ESP32Code.ino`. Firmware
-5.0.0 adds controller-managed pull OTA, output-state telemetry, and automatic
-rollback without depending on the legacy `.old` tree.
+6.0.0 uses the versioned per-device MQTT protocol while retaining
+controller-managed pull OTA, output-state telemetry, and automatic rollback
+without depending on the legacy `.old` tree.
 
 ## Initial USB bootstrap
 
 Copy `firmware-config.example.h` to the ignored `firmware-config.h`, enter the
-device's Wi-Fi, MQTT, and NTP settings, and flash firmware 5.0.0 once over USB.
-On its first 5.x boot the sketch stores those settings in the ESP32's NVS. Later
+device's Wi-Fi, MQTT, and NTP settings, and flash firmware 6.0.0 once over USB.
+On its first boot the sketch stores those settings in the ESP32's NVS. Later
 generic OTA images reuse the persisted settings, so each release does not need
 device-specific credentials compiled into it.
 
-Firmware older than 5.0.0 cannot pull an update and therefore needs this one
-USB bootstrap. The web UI identifies those devices as `USB required`.
+MQTT username and password must be supplied together. Production aquarium
+firmware uses the shared `nemo` account; its password remains only in this
+ignored header and the Pi's root-owned configuration.
+
+If firmware 5.x already persisted old or anonymous network settings, set
+`AQUARIUM_REPROVISION_NETWORK_CONFIG` to `true` only in that device-specific
+USB build. Firmware 6 then replaces the persisted Wi-Fi, broker, MQTT
+credentials, and NTP settings; it does not erase the labeled device ID or
+schedule.
+The generic release configuration keeps the switch `false`, and release tests
+enforce that default. Once the device reconnects with the intended network
+settings, future generic OTA releases continue using the persisted NVS values.
+
+Every firmware version below 6.0.0 requires USB bootstrap and receives no
+command from the protocol-v1 controller. The web UI identifies devices without
+pull OTA as `USB required`. Once firmware 6.x is installed, future 6.x releases
+use the structured per-device OTA path described below.
 
 ## Controller-managed OTA
 
@@ -65,7 +81,7 @@ firmware uses its last hourly EEPROM timestamp and continues the persisted local
 schedule. Schedule activation remains best-effort per pin, and physical output
 fault diagnostics remain wear-limited in SPIFFS.
 
-Firmware 5.0.6 also keeps the persisted local schedule running when network
+Firmware 6.0.0 also keeps the persisted local schedule running when network
 configuration is missing, verifies command-topic subscription and OTA probation
 confirmation before reporting success, and reports recoverable Wi-Fi, MQTT,
 NTP, EEPROM, schedule-restore, and response-publication failures to the Pi.
@@ -83,16 +99,21 @@ the controller, and waits for schedule reconciliation to restore the erased
 schedule. It will not format if the attempt counter cannot be persisted. The
 legacy bare MQTT `clear` broadcast is ignored and cannot erase EEPROM.
 
-Controller command batches use
-`request:<requestId>|<semicolon-separated commands>`. Responses echo the
-request ID so a delayed response cannot settle a newer operation.
+Protocol v1 publishes strict JSON requests to
+`aquarium/v1/devices/<device-id>/command`. Announcements and correlated typed
+responses use that device's `/announce` and `/response` topics. Discovery uses
+`aquarium/v1/discovery/request`. Test firmware uses the same hierarchy beneath
+`test/aquarium`. A request contains its protocol version, device ID, request ID,
+and at most three typed commands. The ESP validates the complete request before
+executing any command and echoes typed accepted values, so stale, malformed, or
+misrouted responses cannot settle newer operations.
 
-Firmware 5.0.6 carries each command batch in one MQTT publication. The command
-payload limit is 5,120 UTF-8 bytes, which covers the 4,095-byte schedule limit
-plus target and request-correlation metadata. PubSubClient uses a 6,144-byte
-packet buffer for MQTT framing and topic overhead. The earlier custom
-`chunk:index:total:isLast:data` protocol and its 50-slot reassembly buffer are
-no longer used.
+The command payload limit is 5,120 UTF-8 bytes, which covers the 4,095-byte
+schedule limit plus JSON metadata. PubSubClient uses a 6,144-byte packet buffer
+for MQTT framing and topic overhead. The earlier semicolon wire format and
+custom `chunk:index:total:isLast:data` protocol are no longer used. Legacy
+broadcast topics support passive discovery only; firmware 5 and earlier require
+a one-time USB upgrade. Firmware v6 never subscribes to the old command topic.
 
 ## Preparing a firmware release
 
@@ -114,7 +135,7 @@ Before releasing a new version:
 4. Prepare the generic OTA artifact from the repository root:
 
    ```sh
-   npm run firmware:release -- 5.0.7
+   npm run firmware:release -- 6.0.0
    ```
 
 The command builds with `firmware-config.example.h`, extracts the application
@@ -134,12 +155,12 @@ exact committed binary hash; CI independently proves that the source compiles.
 The current release can be rebuilt for investigation with:
 
 ```sh
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.0 .
 ```
 
 The build verifies Arduino CLI 1.5.0, installs ESP32 Arduino core 3.0.7,
 ArduinoJson 7.4.3, and PubSubClient 2.8, then compiles for the generic ESP32
 target using only the safe example configuration. This validation build does
 not replace the approved OTA artifact. The current application binary is
-`firmware/esp32/artifacts/ESP32Code-5.0.6.bin`; its exact size and SHA-256 are
+`firmware/esp32/artifacts/ESP32Code-6.0.0.bin`; its exact size and SHA-256 are
 pinned in `@aquarium/esp-protocol` and revalidated by the controller at startup.

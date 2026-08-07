@@ -10,6 +10,7 @@ import {
   startFakeEspLauncher,
 } from "./launcher.js";
 import type { FakeEspMqttClientPort } from "./mqtt-transport.js";
+import { encodeFakeEspCommandRequest } from "./structured-protocol.js";
 
 const encoder = new TextEncoder();
 const temporaryDirectories: string[] = [];
@@ -79,9 +80,18 @@ class AutoConnectedMqttClient implements FakeEspMqttClientPort {
 
   public async stop(): Promise<void> {}
 
-  public emitCommand(payload: string): void {
+  public emitCommand(deviceId: string): void {
     for (const handler of this.messageHandlers) {
-      handler("test/aquarium/command", encoder.encode(payload));
+      handler(
+        `test/aquarium/v1/devices/${deviceId}/command`,
+        encoder.encode(
+          encodeFakeEspCommandRequest({
+            deviceId,
+            requestId: "launcher-ping",
+            commands: [{ index: 0, kind: "ping" }],
+          }),
+        ),
+      );
     }
   }
 }
@@ -171,7 +181,7 @@ describe("fake ESP harness and launcher", () => {
     ).toBe(true);
 
     for (const client of clients) {
-      client.emitCommand("A1B2C3D4 p");
+      client.emitCommand("A1B2C3D4");
     }
     expect(
       clients

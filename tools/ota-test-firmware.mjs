@@ -47,7 +47,12 @@ const host = readStringConstant("mqtt_server");
 const port = readIntegerConstant("mqtt_port");
 const username = readStringConstant("mqtt_username");
 const password = readStringConstant("mqtt_password");
-const topic = (suffix) => `${namespace}/${suffix}`;
+const protocolRoot = `${namespace}/v1`;
+const discoveryTopic = `${protocolRoot}/discovery/request`;
+const announcementFilter = `${protocolRoot}/devices/+/announce`;
+const responseFilter = `${protocolRoot}/devices/+/response`;
+const deviceTopic = (deviceId, kind) =>
+  `${protocolRoot}/devices/${deviceId}/${kind}`;
 const client = mqtt.connect(`mqtt://${host}:${port}`, {
   username,
   password,
@@ -60,9 +65,9 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function publish(payload) {
+function publish(publishTopic, payload) {
   return new Promise((resolve, reject) => {
-    client.publish(topic("command"), payload, { qos: 0 }, (error) => {
+    client.publish(publishTopic, payload, { qos: 0 }, (error) => {
       if (error === undefined) {
         resolve();
       } else {
@@ -76,16 +81,16 @@ await new Promise((resolve, reject) => {
   client.once("connect", resolve);
   client.once("error", reject);
 });
-await client.subscribeAsync([topic("announce"), topic("response")], { qos: 0 });
+await client.subscribeAsync([announcementFilter, responseFilter], { qos: 0 });
 
 const announcements = [];
 const responses = [];
 client.on("message", (receivedTopic, payload) => {
   try {
     const value = JSON.parse(payload.toString("utf8"));
-    if (receivedTopic === topic("announce")) {
+    if (receivedTopic.endsWith("/announce")) {
       announcements.push(value);
-    } else if (receivedTopic === topic("response")) {
+    } else if (receivedTopic.endsWith("/response")) {
       responses.push(value);
     }
   } catch {
@@ -93,7 +98,10 @@ client.on("message", (receivedTopic, payload) => {
   }
 });
 
-await publish("discover");
+await publish(
+  discoveryTopic,
+  JSON.stringify({ protocolVersion: 1, kind: "discover" }),
+);
 await wait(2_000);
 const devices = new Map(
   announcements
@@ -115,19 +123,27 @@ if (device.version === artifactVersion) {
 }
 
 const requestId = `ota-test-${Date.now()}`;
-const command = [
-  `${device.id} ota`,
-  artifactVersion,
-  artifact.length,
-  artifactSha256,
-  artifactUrl,
-].join(" ");
+const command = JSON.stringify({
+  protocolVersion: 1,
+  deviceId: device.id,
+  requestId,
+  commands: [
+    {
+      index: 0,
+      kind: "firmware_update",
+      version: artifactVersion,
+      url: artifactUrl,
+      size: artifact.length,
+      sha256: artifactSha256,
+    },
+  ],
+});
 console.log(
   `Updating ${device.name} (${device.id}) from ${device.version} to ${artifactVersion}`,
 );
 announcements.length = 0;
 responses.length = 0;
-await publish(`request:${requestId}|${command}`);
+await publish(deviceTopic(device.id, "command"), command);
 
 const deadline = Date.now() + 120_000;
 let accepted = false;
@@ -136,11 +152,17 @@ let announcementCursor = 0;
 let observedCurrentAttempt = false;
 while (Date.now() < deadline) {
   const response = responses.find((value) => value.requestId === requestId);
-  const responseValue = response?.responses?.[0]?.response;
-  if (responseValue?.startsWith("E:")) {
-    throw new Error(`ESP rejected OTA request: ${responseValue}`);
+  const result = response?.results?.[0];
+  if (result?.ok === false) {
+    throw new Error(
+      `ESP rejected OTA request: ${result.error?.code}: ${result.error?.message}`,
+    );
   }
-  if (responseValue === "ota_accepted") {
+  if (
+    result?.ok === true &&
+    result?.kind === "firmware_update" &&
+    result?.status === "accepted"
+  ) {
     accepted = true;
   }
 

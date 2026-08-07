@@ -52,12 +52,13 @@ export function FirmwareUpdateDialog({
               aria-labelledby="firmware-update-targets-heading"
             >
               <h3 id="firmware-update-targets-heading">
-                Outdated ESPs ({targets.length})
+                Eligible outdated ESPs ({targets.length})
               </h3>
               {targets.length === 0 ? (
                 <p>
-                  No enabled ESP is currently outdated. The selected rollout
-                  mode will apply if an outdated ESP reconnects later.
+                  No enabled compatible ESP is currently outdated. The
+                  selected rollout mode will apply if a compatible outdated
+                  ESP reconnects later.
                 </p>
               ) : (
                 <ul>

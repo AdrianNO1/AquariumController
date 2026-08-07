@@ -58,11 +58,15 @@ export function OperationsPage(): React.JSX.Element {
     controller.status !== "connected" && controller.status !== "loading";
   const unresolved = controller.snapshot.unresolvedDeviceOperations;
   const currentFirmwareVersion = controller.snapshot.firmware.currentVersion;
-  const outdatedDevices = controller.snapshot.devices
+  const fleetEligibleOutdatedDevices = controller.snapshot.devices
     .filter(
       (device) =>
         device.enabled &&
-        device.reported.firmwareVersion !== currentFirmwareVersion,
+        device.reported.firmwareVersion !== currentFirmwareVersion &&
+        supportsFleetUpdate(
+          device.reported.firmwareVersion,
+          currentFirmwareVersion,
+        ),
     )
     .map((device) => ({
       id: device.id,
@@ -116,7 +120,8 @@ export function OperationsPage(): React.JSX.Element {
           <p>
             Current release: {controller.snapshot.firmware.currentVersion}. An
             update-all choice stays active for known or newly discovered
-            outdated ESPs that reconnect later.
+            firmware-6 ESPs that reconnect later. Firmware 5 updates remain an
+            explicit per-device action.
           </p>
           {controller.snapshot.firmware.fleetPolicy === null ? null : (
             <p className="firmware-fleet-policy" role="status">
@@ -125,7 +130,7 @@ export function OperationsPage(): React.JSX.Element {
               {controller.snapshot.firmware.fleetPolicy.mode === "when_off"
                 ? "update when outputs are off"
                 : "update immediately"}
-              . Currently outdated: {outdatedDevices.length}.
+              . Currently eligible: {fleetEligibleOutdatedDevices.length}.
             </p>
           )}
         </div>
@@ -156,7 +161,7 @@ export function OperationsPage(): React.JSX.Element {
         <FirmwareUpdateDialog
           subject="all ESP32 devices"
           targetVersion={controller.snapshot.firmware.currentVersion}
-          targets={outdatedDevices}
+          targets={fleetEligibleOutdatedDevices}
           immediateDanger
           pending={firmwareMutation.isPending}
           onConfirm={(mode) => firmwareMutation.mutate(mode)}
@@ -165,4 +170,26 @@ export function OperationsPage(): React.JSX.Element {
       ) : null}
     </main>
   );
+}
+
+function supportsFleetUpdate(
+  version: string | null,
+  currentVersion: string,
+): boolean {
+  if (version === null) return false;
+  const reportedMajor = firmwareMajor(version);
+  const currentMajor = firmwareMajor(currentVersion);
+  return (
+    reportedMajor !== null &&
+    currentMajor !== null &&
+    reportedMajor >= 6 &&
+    reportedMajor === currentMajor
+  );
+}
+
+function firmwareMajor(version: string): number | null {
+  const match = /^(\d+)(?:\.|$)/u.exec(version);
+  if (match?.[1] === undefined) return null;
+  const major = Number(match[1]);
+  return Number.isSafeInteger(major) ? major : null;
 }

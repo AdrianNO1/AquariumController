@@ -49,6 +49,8 @@ jobs:
           AQUARIUM_HTTP_PORT: "3001"
           AQUARIUM_FIRMWARE_BASE_URL: http://controller.invalid:3001
           AQUARIUM_MQTT_BROKER_URL: mqtt://broker.invalid:1883
+          AQUARIUM_MQTT_USERNAME: controller-ci
+          AQUARIUM_MQTT_PASSWORD: ci-placeholder-password
           AQUARIUM_PRODUCTION_MQTT_CONFIRMATION: ENABLE_PRODUCTION_AQUARIUM_MQTT
           AQUARIUM_STATE_HOST_DIRECTORY: /srv/aquarium/state
           AQUARIUM_EVENTS_HOST_DIRECTORY: /srv/aquarium/events
@@ -60,7 +62,11 @@ jobs:
           AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_NAME: Authorization
           AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE: ci-placeholder-secret
         run: |
-          bash -n deployment/pi-preflight.sh
+          bash -n \
+            deployment/pi-preflight.sh \
+            deployment/pi-backup-production.sh \
+            deployment/pi-deploy-production.sh \
+            deployment/pi-verify-production.sh
           docker compose --file compose.production.yaml config --quiet
           rendered="$(docker compose --file compose.production.yaml config --format json)"
           jq --exit-status '

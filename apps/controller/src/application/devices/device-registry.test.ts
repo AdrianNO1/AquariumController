@@ -256,18 +256,18 @@ describe("persistent device registry", () => {
     const registry = createRegistry(database);
 
     await registry.handleAnnouncement({
-      announcement: announcement({ version: "5.0.0" }),
+      announcement: announcement({ version: "6.0.1" }),
       receivedAtMs: 10_000,
     });
     expect(await readDevice(database)).toMatchObject({
       status: "online",
-      firmware_version: "5.0.0",
+      firmware_version: "6.0.1",
       last_error_code: null,
       last_error_message: null,
     });
   });
 
-  it("marks firmware below 5.0.0 unsupported until supported firmware announces", async () => {
+  it("marks firmware below 6.0.0 unsupported until supported firmware announces", async () => {
     const database = await openTestDatabase();
     const registry = createRegistry(database);
 
@@ -280,7 +280,7 @@ describe("persistent device registry", () => {
       firmware_version: "3.2w",
       last_error_code: "firmware_unsupported",
       last_error_message:
-        "Firmware 3.2w is unsupported; install 5.0.0 or newer",
+        "Firmware 3.2w is unsupported; install 6.0.0 or newer",
     });
 
     await expect(

@@ -36,7 +36,7 @@ describe("FirmwareUpdateService", () => {
     const database = await createDatabase();
     await seedDevice(database, {
       id: "device-a",
-      firmwareVersion: "5.0.0-beta.1",
+      firmwareVersion: "6.0.0-beta.1",
       outputsOff: false,
     });
     const operations = new RecordingFirmwareOperations(database);
@@ -126,7 +126,7 @@ describe("FirmwareUpdateService", () => {
     const database = await createDatabase();
     await seedDevice(database, {
       id: "device-a",
-      firmwareVersion: "5.0.0-beta.1",
+      firmwareVersion: "6.0.0-beta.1",
       outputsOff: true,
     });
     const operations = new RecordingFirmwareOperations(database);
@@ -183,7 +183,7 @@ describe("FirmwareUpdateService", () => {
     await service.drain();
     await seedDevice(database, {
       id: "late-device",
-      firmwareVersion: "5.0.0-beta.1",
+      firmwareVersion: "6.0.0-beta.1",
       outputsOff: true,
     });
     await service.signalDeviceAnnouncement("late-device");
@@ -205,6 +205,37 @@ describe("FirmwareUpdateService", () => {
       status: "accepted",
       mode: "when_off",
     });
+  });
+
+  it("requires USB for firmware 5 in both fleet and per-device requests", async () => {
+    const database = await createDatabase();
+    await seedDevice(database, {
+      id: "legacy-ota-device",
+      firmwareVersion: "5.0.6",
+      outputsOff: true,
+    });
+    const operations = new RecordingFirmwareOperations(database);
+    const service = createService(database, operations);
+
+    await service.requestFleetUpdate({
+      expectedRevision: 0,
+      mode: "immediate",
+    });
+    await service.drain();
+    await expect(
+      readUpdate(database, "legacy-ota-device"),
+    ).resolves.toMatchObject({ status: "usb_required" });
+    expect(operations.requests).toHaveLength(0);
+
+    await service.requestDeviceUpdate("legacy-ota-device", {
+      expectedRevision: await readCurrentStateRevision(database),
+      mode: "immediate",
+    });
+    await service.drain();
+    expect(operations.requests).toHaveLength(0);
+    await expect(
+      readUpdate(database, "legacy-ota-device"),
+    ).resolves.toMatchObject({ status: "usb_required" });
   });
 });
 

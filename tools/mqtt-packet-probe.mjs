@@ -40,7 +40,12 @@ const host = readStringConstant("mqtt_server");
 const port = readIntegerConstant("mqtt_port");
 const username = readStringConstant("mqtt_username");
 const password = readStringConstant("mqtt_password");
-const topic = (suffix) => `${namespace}/${suffix}`;
+const protocolRoot = `${namespace}/v1`;
+const discoveryTopic = `${protocolRoot}/discovery/request`;
+const announcementFilter = `${protocolRoot}/devices/+/announce`;
+const responseFilter = `${protocolRoot}/devices/+/response`;
+const deviceTopic = (deviceId, kind) =>
+  `${protocolRoot}/devices/${deviceId}/${kind}`;
 const client = mqtt.connect(`mqtt://${host}:${port}`, {
   username,
   password,
@@ -53,7 +58,7 @@ const announcements = new Map();
 const responseWaiters = new Map();
 
 client.on("message", (receivedTopic, payload) => {
-  if (receivedTopic === topic("announce")) {
+  if (receivedTopic.endsWith("/announce")) {
     try {
       const announcement = JSON.parse(payload.toString("utf8"));
       if (typeof announcement.id === "string") {
@@ -64,7 +69,7 @@ client.on("message", (receivedTopic, payload) => {
     }
     return;
   }
-  if (receivedTopic !== topic("response")) {
+  if (!receivedTopic.endsWith("/response")) {
     return;
   }
   try {
@@ -81,9 +86,9 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function publish(payload) {
+function publish(publishTopic, payload) {
   return new Promise((resolve, reject) => {
-    client.publish(topic("command"), payload, { qos: 0 }, (error) => {
+    client.publish(publishTopic, payload, { qos: 0 }, (error) => {
       if (error === undefined) {
         resolve();
       } else {
@@ -111,8 +116,11 @@ await new Promise((resolve, reject) => {
   client.once("connect", resolve);
   client.once("error", reject);
 });
-await client.subscribeAsync([topic("announce"), topic("response")], { qos: 0 });
-await publish("discover");
+await client.subscribeAsync([announcementFilter, responseFilter], { qos: 0 });
+await publish(
+  discoveryTopic,
+  JSON.stringify({ protocolVersion: 1, kind: "discover" }),
+);
 await wait(2_000);
 
 const devices = [...announcements.values()];
@@ -128,23 +136,28 @@ if (device === undefined) {
 }
 
 console.log(
-  `Probing ${device.name} (${device.id}), firmware ${device.version}, via ${namespace}/command`,
+  `Probing ${device.name} (${device.id}), firmware ${device.version}, via its v1 command topic`,
 );
 
 for (const size of [
   256, 512, 1_000, 1_500, 1_900, 2_000, 2_020, 2_048, 4_095, 5_120, 5_121,
 ]) {
   const requestId = `packet-probe-${size}`;
-  const prefix = `request:${requestId}|${device.id} p`;
-  if (prefix.length > size) {
-    throw new Error(`Probe prefix exceeds requested payload size ${size}`);
+  const request = JSON.stringify({
+    protocolVersion: 1,
+    deviceId: device.id,
+    requestId,
+    commands: [{ index: 0, kind: "ping" }],
+  });
+  if (request.length > size) {
+    throw new Error(`Probe request exceeds requested payload size ${size}`);
   }
-  const payload = prefix.padEnd(size, " ");
+  const payload = request.padEnd(size, " ");
   const responsePromise = awaitResponse(requestId);
-  await publish(payload);
+  await publish(deviceTopic(device.id, "command"), payload);
   const response = await responsePromise;
-  const accepted = response?.responses?.some(
-    (item) => item?.index === 0 && item?.response === "o",
+  const accepted = response?.results?.some(
+    (item) => item?.index === 0 && item?.kind === "ping" && item?.ok === true,
   );
   console.log(`${size} bytes: ${accepted ? "accepted" : "no response"}`);
 }

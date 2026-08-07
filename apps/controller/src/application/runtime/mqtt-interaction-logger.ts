@@ -1,8 +1,4 @@
-import {
-  parseEspErrorResponse,
-  utf8ByteLength,
-  type EspTopicSet,
-} from "@aquarium/esp-protocol";
+import { utf8ByteLength, type EspTopicSet } from "@aquarium/esp-protocol";
 
 import type {
   LegacyAnnouncementEvent,
@@ -36,6 +32,7 @@ export class MqttInteractionLogger {
   readonly #repository: InteractionRepository;
   readonly #topics: EspTopicSet;
   readonly #lastDiagnosticSignatures = new Map<string, string>();
+  readonly #lastDiagnosticStorageHealth = new Map<string, boolean>();
   readonly #lastOtaSignatures = new Map<string, string>();
   #announcementTail: Promise<void> = Promise.resolve();
 
@@ -67,7 +64,7 @@ export class MqttInteractionLogger {
           direction: "inbound",
           kind: "mqtt.device-diagnostic",
           severity: diagnostic.severity,
-          topic: this.#topics.announce,
+          topic: event.topic,
           deviceId: event.announcement.id,
           outcome: diagnostic.active ? "failed" : "succeeded",
           byteCount: event.payloadBytes,
@@ -86,6 +83,37 @@ export class MqttInteractionLogger {
         });
         this.#lastDiagnosticSignatures.set(event.announcement.id, signature);
       }
+    }
+
+    const diagnosticStorageHealthy =
+      event.announcement.diagnosticStorageHealthy;
+    if (diagnosticStorageHealthy !== undefined) {
+      const previous = this.#lastDiagnosticStorageHealth.get(
+        event.announcement.id,
+      );
+      if (
+        previous === undefined
+          ? !diagnosticStorageHealthy
+          : previous !== diagnosticStorageHealthy
+      ) {
+        await this.#repository.log({
+          occurredAtMs: event.receivedAtMs,
+          direction: "inbound",
+          kind: "mqtt.device-diagnostic-storage",
+          severity: diagnosticStorageHealthy ? "info" : "error",
+          topic: event.topic,
+          deviceId: event.announcement.id,
+          outcome: diagnosticStorageHealthy ? "succeeded" : "failed",
+          byteCount: event.payloadBytes,
+          retentionClass: diagnosticStorageHealthy ? "audit" : "critical",
+          payload: { healthy: diagnosticStorageHealthy },
+          payloadSchemaVersion: 1,
+        });
+      }
+      this.#lastDiagnosticStorageHealth.set(
+        event.announcement.id,
+        diagnosticStorageHealthy,
+      );
     }
 
     const ota = event.announcement.ota;
@@ -109,7 +137,7 @@ export class MqttInteractionLogger {
         direction: "inbound",
         kind: "mqtt.device-ota-status",
         severity: failed ? "error" : "info",
-        topic: this.#topics.announce,
+        topic: event.topic,
         deviceId: event.announcement.id,
         outcome: failed ? "failed" : "succeeded",
         byteCount: event.payloadBytes,
@@ -169,7 +197,7 @@ export class MqttInteractionLogger {
           : interaction.outcome === "ignored"
             ? "warning"
             : "error",
-      topic: this.#topics.command,
+      topic: this.#topics.command(interaction.deviceId),
       deviceId: interaction.deviceId,
       ...(interaction.correlationId === null
         ? {}
@@ -218,9 +246,11 @@ export class MqttInteractionLogger {
           direction: "outbound",
           kind: "mqtt.discovery",
           severity: "debug",
-          topic: this.#topics.command,
+          topic: this.#topics.discoveryRequest,
           outcome: "succeeded",
-          byteCount: utf8ByteLength("discover"),
+          byteCount: utf8ByteLength(
+            JSON.stringify({ protocolVersion: 1, kind: "discover" }),
+          ),
           retentionClass: "raw",
         };
       case "malformed_message":
@@ -261,7 +291,7 @@ export class MqttInteractionLogger {
           direction: "inbound",
           kind: "mqtt.ignored-response",
           severity: "warning",
-          topic: this.#topics.response,
+          topic: this.#topics.response(interaction.responderId),
           deviceId: interaction.responderId,
           outcome: "ignored",
           byteCount: interaction.payloadBytes,
@@ -279,7 +309,7 @@ export class MqttInteractionLogger {
           direction: "outbound",
           kind: "mqtt.command-batch",
           severity: "debug",
-          topic: this.#topics.command,
+          topic: this.#topics.command(interaction.targetId),
           deviceId: interaction.targetId,
           correlationId: interaction.requestId,
           operationId: interaction.operationId,
@@ -323,9 +353,11 @@ function commandOutcomeLogInput(
 ): InteractionLogInput {
   if (outcome.status === "succeeded" || outcome.status === "failed") {
     const deviceReportedError =
-      outcome.status === "failed"
-        ? parseEspErrorResponse(outcome.response)
+      outcome.status === "failed" && outcome.failure.kind === "device_error"
+        ? `${outcome.failure.code}: ${outcome.failure.message}`
         : null;
+    const protocolError =
+      outcome.status === "failed" && outcome.failure.kind === "protocol_error";
     return {
       occurredAtMs,
       direction: "inbound",
@@ -333,18 +365,18 @@ function commandOutcomeLogInput(
       severity:
         outcome.status === "succeeded"
           ? "debug"
-          : deviceReportedError === null
+          : protocolError
             ? "warning"
             : "error",
-      topic: topics.response,
+      topic: topics.response(outcome.targetId),
       deviceId: outcome.targetId,
       correlationId,
       outcome: outcome.status,
-      byteCount: utf8ByteLength(outcome.response),
+      byteCount: outcome.responseBytes,
       retentionClass:
         outcome.status === "succeeded"
           ? "raw"
-          : deviceReportedError === null
+          : protocolError
             ? "audit"
             : "critical",
       payload: {
@@ -362,7 +394,7 @@ function commandOutcomeLogInput(
       direction: "outbound",
       kind: "mqtt.command-outcome",
       severity: "error",
-      topic: topics.command,
+      topic: topics.command(outcome.targetId),
       deviceId: outcome.targetId,
       correlationId,
       outcome: "outcome_unknown",

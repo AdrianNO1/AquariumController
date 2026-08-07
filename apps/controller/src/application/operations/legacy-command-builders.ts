@@ -3,11 +3,11 @@ import {
   LEGACY_MAX_SYNC_TIME,
   legacyScheduleDocumentSchema,
   serializeLegacyScheduleDocument,
+  type EspCommandInput,
 } from "@aquarium/esp-protocol";
 
 import type {
   LegacyDeviceTarget,
-  LegacyExpectedResponse,
   LegacyWireCommand,
 } from "../../infrastructure/mqtt/legacy-mqtt-transport.js";
 import type { DeviceOperationRequest } from "./device-operation-types.js";
@@ -74,13 +74,18 @@ export function buildSetPwmCommand(
   assertIntegerInRange(value, MIN_PWM_VALUE, MAX_PWM_VALUE, "PWM value");
   const overwriteFlag = overwrite ? 1 : 0;
   const operation = `s ${pin} ${value} ${overwriteFlag}`;
-  return command(target, operation, exact(operation));
+  return command(target, operation, {
+    kind: "set_pwm",
+    pin,
+    value,
+    overwrite,
+  });
 }
 
 export function buildPingCommand(
   target: LegacyDeviceTarget,
 ): LegacyWireCommand {
-  return command(target, "p", exact("o"));
+  return command(target, "p", { kind: "ping" });
 }
 
 export function buildEditConfigurationCommand(
@@ -107,11 +112,12 @@ export function buildEditConfigurationCommand(
       "PWM frequency and resolution exceed the ESP32 LEDC source-clock limit",
     );
   }
-  return command(
-    target,
-    `e ${name} ${pwmFrequencyHz} ${pwmResolutionBits}`,
-    exact(`${name} ${pwmFrequencyHz} ${pwmResolutionBits}`),
-  );
+  return command(target, `e ${name} ${pwmFrequencyHz} ${pwmResolutionBits}`, {
+    kind: "edit_configuration",
+    name,
+    pwmFrequencyHz,
+    pwmResolutionBits,
+  });
 }
 
 export function buildScheduleCommand(
@@ -140,7 +146,10 @@ export function buildScheduleCommand(
       "Legacy schedule JSON must use canonical wire encoding",
     );
   }
-  return command(target, `sc ${canonicalJson}`, exact("schedule_ok"));
+  return command(target, `sc ${canonicalJson}`, {
+    kind: "schedule",
+    schedule: parsedSchedule.data,
+  });
 }
 
 export function buildSyncTimeCommand(
@@ -153,7 +162,10 @@ export function buildSyncTimeCommand(
     LEGACY_MAX_SYNC_TIME,
     "Sync epoch seconds",
   );
-  return command(target, `sync ${epochSeconds}`, exact(String(epochSeconds)));
+  return command(target, `sync ${epochSeconds}`, {
+    kind: "sync_time",
+    epochSeconds,
+  });
 }
 
 export function buildAnalogReadCommand(
@@ -173,9 +185,9 @@ export function buildFirmwareUpdateCommand(
 ): LegacyWireCommand {
   assertWireToken(version, "firmware version", 31);
   assertIntegerInRange(size, 100_000, 1_900_000, "firmware image size");
-  if (!/^http:\/\/[^\s;]+$/u.test(url) || url.length > 240) {
+  if (!/^http:\/\/\S+$/u.test(url) || url.length > 240) {
     throw new TypeError(
-      "Firmware URL must be a local HTTP URL without whitespace or semicolons",
+      "Firmware URL must be a local HTTP URL without whitespace",
     );
   }
   if (!/^[a-f0-9]{64}$/u.test(sha256)) {
@@ -184,14 +196,20 @@ export function buildFirmwareUpdateCommand(
   return command(
     target,
     `ota ${version} ${size} ${sha256} ${url}`,
-    exact("ota_accepted"),
+    {
+      kind: "firmware_update",
+      version,
+      url,
+      size,
+      sha256,
+    },
   );
 }
 
 function command(
   target: LegacyDeviceTarget,
   operation: string,
-  expectedResponse: LegacyExpectedResponse,
+  structuredOperation: EspCommandInput,
 ): LegacyWireCommand {
   assertWireToken(target.id, "target id");
   for (const alias of target.aliases ?? []) {
@@ -203,16 +221,21 @@ function command(
       id: target.id,
       ...(target.aliases === undefined ? {} : { aliases: [...target.aliases] }),
     },
-    expectedResponse,
+    operation: structuredOperation,
   };
 }
 
-function exact(value: string): LegacyExpectedResponse {
-  return { kind: "exact", value };
-}
-
 function assertDeviceName(name: string): void {
-  assertWireToken(name, "device name", MAX_DEVICE_NAME_BYTES);
+  const bytes = new TextEncoder().encode(name);
+  const printable = [...name].every((character) => {
+    const code = character.charCodeAt(0);
+    return code >= 33 && code <= 126;
+  });
+  if (name.length === 0 || !printable || bytes.byteLength > MAX_DEVICE_NAME_BYTES) {
+    throw new TypeError(
+      `device name must be a non-empty printable ASCII token up to ${MAX_DEVICE_NAME_BYTES} bytes`,
+    );
+  }
 }
 
 function assertWireToken(
@@ -233,7 +256,7 @@ function assertWireToken(
     const limit =
       maximumBytes === undefined ? "" : ` up to ${maximumBytes} bytes`;
     throw new TypeError(
-      `Legacy ${description} must be a non-empty printable ASCII wire token${limit}`,
+      `${description} must be a non-empty printable ASCII token${limit}`,
     );
   }
 }

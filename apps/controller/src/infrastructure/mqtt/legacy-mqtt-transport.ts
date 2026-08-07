@@ -1,17 +1,20 @@
 import { randomBytes } from "node:crypto";
 
 import {
-  batchLegacyCommands,
-  encodeCorrelatedLegacyRequest,
-  encodeLegacyMessage,
+  encodeEspCommandRequest,
+  encodeEspDiscoveryRequest,
+  espDeviceIdSchema,
+  espCommandSchema,
   espAnnouncementSchema,
   espCommandResponseSchema,
+  ESP_COMMANDS_PER_REQUEST,
+  matchEspCommandResult,
   utf8ByteLength,
 } from "@aquarium/esp-protocol";
 import type {
   EspAnnouncement,
+  EspCommandInput,
   EspTopicSet,
-  LegacyCommandBatch,
 } from "@aquarium/esp-protocol";
 
 import {
@@ -29,10 +32,7 @@ const DEFAULT_RESPONSE_TIMEOUT_MS = 5_000;
 const DEFAULT_MAX_CONCURRENT_DEVICE_LANES = 16;
 const MAX_CONCURRENT_DEVICE_LANES = 32;
 const MAX_RAW_PAYLOAD_PREVIEW = 2_048;
-const MIN_LEGACY_PIN = 0;
-const MAX_LEGACY_PIN = 63;
-const MIN_ANALOG_VALUE = 0;
-const MAX_ANALOG_VALUE = 4_095;
+const MAX_INBOUND_MQTT_PAYLOAD_BYTES = 8_192;
 const MAX_REQUEST_SESSION_ID_LENGTH = 24;
 
 export interface LegacyDeviceTarget {
@@ -42,20 +42,11 @@ export interface LegacyDeviceTarget {
   readonly aliases?: readonly string[];
 }
 
-export type LegacyExpectedResponse =
-  | {
-      readonly kind: "exact";
-      readonly value: string;
-    }
-  | {
-      readonly kind: "analog_read";
-      readonly pin: number;
-    };
-
 export interface LegacyWireCommand {
+  /** Human-readable metadata only; never placed on the MQTT wire. */
   readonly command: string;
   readonly target: LegacyDeviceTarget;
-  readonly expectedResponse: LegacyExpectedResponse;
+  readonly operation: EspCommandInput;
 }
 
 export type LegacyCommandPriority = "interactive" | "background";
@@ -73,13 +64,22 @@ interface OutcomeBase {
 export type LegacyCommandOutcome =
   | (OutcomeBase & {
       readonly status: "succeeded";
-      readonly response: string;
+      readonly responseBytes: number;
       readonly analogValue: number | null;
     })
   | (OutcomeBase & {
       readonly status: "failed";
-      readonly response: string;
-      readonly expectedResponse: LegacyExpectedResponse;
+      readonly responseBytes: number;
+      readonly failure:
+        | {
+            readonly kind: "device_error";
+            readonly code: string;
+            readonly message: string;
+          }
+        | {
+            readonly kind: "protocol_error";
+            readonly detail: string;
+          };
     })
   | (OutcomeBase & {
       readonly status: "outcome_unknown";
@@ -100,6 +100,7 @@ export interface LegacyWireOperationResult {
 
 export interface LegacyAnnouncementEvent {
   readonly announcement: EspAnnouncement;
+  readonly topic: string;
   readonly receivedAtMs: number;
   readonly payloadBytes: number;
 }
@@ -195,7 +196,11 @@ interface NormalizedCommand {
   readonly originalIndex: number;
   readonly command: string;
   readonly targetId: string;
-  readonly expectedResponse: LegacyExpectedResponse;
+  readonly operation: EspCommandInput;
+}
+
+interface EspCommandBatch {
+  readonly originalIndexes: readonly number[];
 }
 
 export type LegacyDiscoveryRequestResult = "published" | "skipped_busy";
@@ -458,7 +463,14 @@ export class LegacyMqttTransport {
           );
         }
         await client.publish(
-          this.topics.command,
+          this.topics.discoveryRequest,
+          encodeEspDiscoveryRequest(),
+          NON_RETAINED_QOS_ZERO,
+        );
+        // Legacy discovery keeps pre-v6 firmware visible as unsupported until
+        // it is replaced over USB. No operational command is sent here.
+        await client.publish(
+          this.topics.legacyCommand,
           "discover",
           NON_RETAINED_QOS_ZERO,
         );
@@ -491,7 +503,11 @@ export class LegacyMqttTransport {
   ): Promise<void> {
     try {
       await client.subscribe(
-        [this.topics.announce, this.topics.response],
+        [
+          this.topics.announcementFilter,
+          this.topics.responseFilter,
+          this.topics.legacyAnnouncement,
+        ],
         QOS_ZERO_SUBSCRIPTION,
       );
       if (!this.isCurrentConnection(client, generation)) {
@@ -505,7 +521,12 @@ export class LegacyMqttTransport {
             return false;
           }
           await client.publish(
-            this.topics.command,
+            this.topics.discoveryRequest,
+            encodeEspDiscoveryRequest(),
+            NON_RETAINED_QOS_ZERO,
+          );
+          await client.publish(
+            this.topics.legacyCommand,
             "discover",
             NON_RETAINED_QOS_ZERO,
           );
@@ -553,6 +574,16 @@ export class LegacyMqttTransport {
   }
 
   private handleMessage(topic: string, payload: Uint8Array): void {
+    if (payload.byteLength > MAX_INBOUND_MQTT_PAYLOAD_BYTES) {
+      this.emitMalformed(
+        topic,
+        "",
+        payload.byteLength,
+        true,
+        `MQTT payload exceeds ${MAX_INBOUND_MQTT_PAYLOAD_BYTES} bytes`,
+      );
+      return;
+    }
     const decoded = decodePayload(payload);
     if (!decoded.ok) {
       this.emitMalformed(
@@ -565,12 +596,28 @@ export class LegacyMqttTransport {
       return;
     }
 
-    if (topic === this.topics.announce) {
-      this.handleAnnouncement(decoded.value, payload.byteLength);
+    if (topic === this.topics.legacyAnnouncement) {
+      this.handleAnnouncement(topic, null, decoded.value, payload.byteLength);
       return;
     }
-    if (topic === this.topics.response) {
-      this.handleResponse(decoded.value, payload.byteLength);
+    const announcementDeviceId = this.topics.announcementDeviceId(topic);
+    if (announcementDeviceId !== null) {
+      this.handleAnnouncement(
+        topic,
+        announcementDeviceId,
+        decoded.value,
+        payload.byteLength,
+      );
+      return;
+    }
+    const responseDeviceId = this.topics.responseDeviceId(topic);
+    if (responseDeviceId !== null) {
+      this.handleResponse(
+        topic,
+        responseDeviceId,
+        decoded.value,
+        payload.byteLength,
+      );
       return;
     }
 
@@ -584,11 +631,16 @@ export class LegacyMqttTransport {
     });
   }
 
-  private handleAnnouncement(rawPayload: string, payloadBytes: number): void {
+  private handleAnnouncement(
+    topic: string,
+    topicDeviceId: string | null,
+    rawPayload: string,
+    payloadBytes: number,
+  ): void {
     const parsedJson = parseJson(rawPayload);
     if (!parsedJson.ok) {
       this.emitMalformed(
-        this.topics.announce,
+        topic,
         preview(rawPayload),
         payloadBytes,
         isPreviewTruncated(rawPayload),
@@ -601,7 +653,7 @@ export class LegacyMqttTransport {
     );
     if (!parsedAnnouncement.success) {
       this.emitMalformed(
-        this.topics.announce,
+        topic,
         preview(rawPayload),
         payloadBytes,
         isPreviewTruncated(rawPayload),
@@ -609,10 +661,27 @@ export class LegacyMqttTransport {
       );
       return;
     }
+    if (
+      (topicDeviceId === null &&
+        parsedAnnouncement.data.protocolVersion !== 0) ||
+      (topicDeviceId !== null &&
+        (parsedAnnouncement.data.protocolVersion !== 1 ||
+          parsedAnnouncement.data.id !== topicDeviceId))
+    ) {
+      this.emitMalformed(
+        topic,
+        preview(rawPayload),
+        payloadBytes,
+        isPreviewTruncated(rawPayload),
+        "Announcement topic and payload identity did not match",
+      );
+      return;
+    }
 
     try {
       this.callbacks.onAnnouncement?.({
         announcement: parsedAnnouncement.data,
+        topic,
         receivedAtMs: this.now(),
         payloadBytes,
       });
@@ -621,11 +690,16 @@ export class LegacyMqttTransport {
     }
   }
 
-  private handleResponse(rawPayload: string, payloadBytes: number): void {
+  private handleResponse(
+    topic: string,
+    topicDeviceId: string,
+    rawPayload: string,
+    payloadBytes: number,
+  ): void {
     const parsedJson = parseJson(rawPayload);
     if (!parsedJson.ok) {
       this.emitMalformed(
-        this.topics.response,
+        topic,
         preview(rawPayload),
         payloadBytes,
         isPreviewTruncated(rawPayload),
@@ -636,13 +710,32 @@ export class LegacyMqttTransport {
     const parsedResponse = espCommandResponseSchema.safeParse(parsedJson.value);
     if (!parsedResponse.success) {
       this.emitMalformed(
-        this.topics.response,
+        topic,
         preview(rawPayload),
         payloadBytes,
         isPreviewTruncated(rawPayload),
         parsedResponse.error.message,
       );
-      this.handleAttributableMalformedResponse(parsedJson.value, payloadBytes);
+      this.handleAttributableMalformedResponse(
+        parsedJson.value,
+        topicDeviceId,
+        payloadBytes,
+      );
+      return;
+    }
+    if (parsedResponse.data.deviceId !== topicDeviceId) {
+      this.emitMalformed(
+        topic,
+        preview(rawPayload),
+        payloadBytes,
+        isPreviewTruncated(rawPayload),
+        "Response topic and payload identity did not match",
+      );
+      this.handleAttributableMalformedResponse(
+        parsedJson.value,
+        topicDeviceId,
+        payloadBytes,
+      );
       return;
     }
 
@@ -650,48 +743,31 @@ export class LegacyMqttTransport {
     if (activeBatch === undefined) {
       const reason =
         this.activeBatches.size === 0 ? "no_active_batch" : "wrong_request";
-      if (parsedResponse.data.responses.length === 0) {
+      for (const response of parsedResponse.data.results) {
         this.emitIgnoredResponse(
           reason,
-          parsedResponse.data.id,
-          -1,
-          payloadBytes,
-        );
-      }
-      for (const response of parsedResponse.data.responses) {
-        this.emitIgnoredResponse(
-          reason,
-          parsedResponse.data.id,
+          parsedResponse.data.deviceId,
           response.index,
           payloadBytes,
         );
       }
       return;
     }
-    if (parsedResponse.data.responses.length === 0) {
-      this.handleEmptyCorrelatedResponse(
-        activeBatch,
-        parsedResponse.data.id,
-        payloadBytes,
-      );
-      return;
-    }
-
-    for (const response of parsedResponse.data.responses) {
+    for (const response of parsedResponse.data.results) {
       const expectation = activeBatch.expectations.get(response.index);
       if (expectation === undefined) {
         this.emitIgnoredResponse(
           "index_out_of_range",
-          parsedResponse.data.id,
+          parsedResponse.data.deviceId,
           response.index,
           payloadBytes,
         );
         continue;
       }
-      if (expectation.command.targetId !== parsedResponse.data.id) {
+      if (expectation.command.targetId !== parsedResponse.data.deviceId) {
         this.emitIgnoredResponse(
           "wrong_device",
-          parsedResponse.data.id,
+          parsedResponse.data.deviceId,
           response.index,
           payloadBytes,
         );
@@ -700,7 +776,7 @@ export class LegacyMqttTransport {
       if (!activeBatch.responsesEnabled()) {
         this.emitIgnoredResponse(
           "premature_response",
-          parsedResponse.data.id,
+          parsedResponse.data.deviceId,
           response.index,
           payloadBytes,
         );
@@ -709,85 +785,62 @@ export class LegacyMqttTransport {
       if (activeBatch.outcomes.has(response.index)) {
         this.emitIgnoredResponse(
           "duplicate",
-          parsedResponse.data.id,
+          parsedResponse.data.deviceId,
           response.index,
           payloadBytes,
         );
         continue;
       }
 
-      const responseMatch = matchExpectedResponse(
-        expectation.command.expectedResponse,
-        response.response,
-      );
-      const outcome: LegacyCommandOutcome = responseMatch.matched
-        ? {
-            index: expectation.originalIndex,
-            command: expectation.command.command,
-            targetId: expectation.command.targetId,
-            status: "succeeded",
-            response: response.response,
-            analogValue: responseMatch.analogValue,
-          }
-        : {
-            index: expectation.originalIndex,
-            command: expectation.command.command,
-            targetId: expectation.command.targetId,
-            status: "failed",
-            response: response.response,
-            expectedResponse: expectation.command.expectedResponse,
-          };
+      const expectedCommand = espCommandSchema.parse({
+        index: expectation.localIndex,
+        ...expectation.command.operation,
+      });
+      const responseMatch = matchEspCommandResult(expectedCommand, response);
+      const responseBytes = utf8ByteLength(JSON.stringify(response));
+      const outcome: LegacyCommandOutcome =
+        responseMatch.status === "succeeded"
+          ? {
+              index: expectation.originalIndex,
+              command: expectation.command.command,
+              targetId: expectation.command.targetId,
+              status: "succeeded",
+              responseBytes,
+              analogValue: responseMatch.analogValue,
+            }
+          : responseMatch.status === "device_error"
+            ? {
+                index: expectation.originalIndex,
+                command: expectation.command.command,
+                targetId: expectation.command.targetId,
+                status: "failed",
+                responseBytes,
+                failure: {
+                  kind: "device_error",
+                  code: responseMatch.code,
+                  message: responseMatch.message,
+                },
+              }
+            : {
+                index: expectation.originalIndex,
+                command: expectation.command.command,
+                targetId: expectation.command.targetId,
+                status: "failed",
+                responseBytes,
+                failure: {
+                  kind: "protocol_error",
+                  detail: responseMatch.detail,
+                },
+              };
       activeBatch.outcomes.set(response.index, outcome);
       this.emitCommandOutcome(activeBatch.operationId, outcome);
       activeBatch.settleIfComplete();
     }
   }
 
-  private handleEmptyCorrelatedResponse(
-    activeBatch: ActiveBatch,
-    responderId: string,
-    payloadBytes: number,
-  ): void {
-    if (!activeBatch.responsesEnabled()) {
-      this.emitIgnoredResponse(
-        "premature_response",
-        responderId,
-        -1,
-        payloadBytes,
-      );
-      return;
-    }
-    const matchingExpectations = [...activeBatch.expectations.values()].filter(
-      ({ command }) => command.targetId === responderId,
-    );
-    if (matchingExpectations.length === 0) {
-      this.emitIgnoredResponse("wrong_device", responderId, -1, payloadBytes);
-      return;
-    }
-    const unansweredExpectations = matchingExpectations.filter(
-      ({ localIndex }) => !activeBatch.outcomes.has(localIndex),
-    );
-    if (unansweredExpectations.length === 0) {
-      this.emitIgnoredResponse("duplicate", responderId, -1, payloadBytes);
-      return;
-    }
-    for (const expectation of unansweredExpectations) {
-      const outcome: LegacyCommandOutcome = {
-        index: expectation.originalIndex,
-        command: expectation.command.command,
-        targetId: expectation.command.targetId,
-        status: "failed",
-        response: "",
-        expectedResponse: expectation.command.expectedResponse,
-      };
-      activeBatch.outcomes.set(expectation.localIndex, outcome);
-      this.emitCommandOutcome(activeBatch.operationId, outcome);
-    }
-    activeBatch.settleIfComplete();
-  }
-
   private handleAttributableMalformedResponse(
     value: JsonValue,
+    topicDeviceId: string,
     payloadBytes: number,
   ): void {
     const identity = responseIdentity(value);
@@ -798,15 +851,21 @@ export class LegacyMqttTransport {
     if (
       identity === null ||
       activeBatch === undefined ||
+      identity.deviceId !== topicDeviceId ||
       !activeBatch.responsesEnabled()
     ) {
       return;
     }
     const matchingExpectations = [...activeBatch.expectations.values()].filter(
-      ({ command }) => command.targetId === identity.id,
+      ({ command }) => command.targetId === identity.deviceId,
     );
     if (matchingExpectations.length === 0) {
-      this.emitIgnoredResponse("wrong_device", identity.id, -1, payloadBytes);
+      this.emitIgnoredResponse(
+        "wrong_device",
+        identity.deviceId,
+        -1,
+        payloadBytes,
+      );
       return;
     }
     for (const expectation of matchingExpectations) {
@@ -818,8 +877,11 @@ export class LegacyMqttTransport {
         command: expectation.command.command,
         targetId: expectation.command.targetId,
         status: "failed",
-        response: "[malformed response envelope]",
-        expectedResponse: expectation.command.expectedResponse,
+        responseBytes: payloadBytes,
+        failure: {
+          kind: "protocol_error",
+          detail: "Malformed response envelope",
+        },
       };
       activeBatch.outcomes.set(expectation.localIndex, outcome);
       this.emitCommandOutcome(activeBatch.operationId, outcome);
@@ -1026,9 +1088,7 @@ export class LegacyMqttTransport {
     operation: QueuedDeviceOperation,
   ): Promise<DeviceWireOperationResult> {
     const startedAtMs = this.now();
-    const batches = batchLegacyCommands(
-      operation.commands.map((command) => command.command),
-    );
+    const batches = batchEspCommands(operation.commands);
     const outcomes = new Map<number, LegacyCommandOutcome>();
 
     for (const [batchIndex, batch] of batches.entries()) {
@@ -1075,7 +1135,7 @@ export class LegacyMqttTransport {
     operationId: string,
     targetId: string,
     batchIndex: number,
-    batch: LegacyCommandBatch,
+    batch: EspCommandBatch,
     commands: readonly NormalizedCommand[],
   ): Promise<readonly LegacyCommandOutcome[]> {
     const client = this.client;
@@ -1087,9 +1147,21 @@ export class LegacyMqttTransport {
       );
     }
     const requestId = this.nextRequestId();
-    const payload = encodeLegacyMessage(
-      encodeCorrelatedLegacyRequest(requestId, batch.payload),
-    );
+    const batchCommands = batch.originalIndexes.map((originalIndex) => {
+      const command = commands[originalIndex];
+      if (command === undefined) {
+        throw new RangeError("Protocol batch referenced a missing command");
+      }
+      return command;
+    });
+    const payload = encodeEspCommandRequest({
+      deviceId: targetId,
+      requestId,
+      commands: batchCommands.map((command, index) =>
+        espCommandSchema.parse({ index, ...command.operation }),
+      ),
+    });
+    const publishTopic = this.topics.command(targetId);
     let activeBatch: ActiveBatch | undefined;
     try {
       await this.withPublicationLock(generation, async () => {
@@ -1110,7 +1182,7 @@ export class LegacyMqttTransport {
         this.activeBatches.set(requestId, activeBatch);
         activeBatch.enableResponses();
         const publishResult = client
-          .publish(this.topics.command, payload, NON_RETAINED_QOS_ZERO)
+          .publish(publishTopic, payload, NON_RETAINED_QOS_ZERO)
           .then(
             () => ({ kind: "published" as const }),
             (error: Error) => ({
@@ -1177,7 +1249,7 @@ export class LegacyMqttTransport {
     operationId: string,
     requestId: string,
     batchIndex: number,
-    batch: LegacyCommandBatch,
+    batch: EspCommandBatch,
     commands: readonly NormalizedCommand[],
   ): ActiveBatch {
     const expectations = new Map<number, BatchExpectation>();
@@ -1452,32 +1524,27 @@ function normalizeCommand(
   command: LegacyWireCommand,
   originalIndex: number,
 ): NormalizedCommand {
-  assertTargetToken(command.target.id, "target id");
+  const targetId = espDeviceIdSchema.parse(command.target.id);
   for (const alias of command.target.aliases ?? []) {
     assertTargetToken(alias, "target alias");
   }
-
-  const trimmed = command.command.trim();
-  const separatorIndex = trimmed.search(/\s/);
-  if (separatorIndex <= 0) {
-    throw new TypeError("Legacy command requires a target and operation");
+  if (command.command.trim().length === 0 || command.command.includes("\0")) {
+    throw new TypeError("Command description must be non-empty text");
   }
-  const suppliedTarget = trimmed.slice(0, separatorIndex);
-  const acceptedTargets = new Set([
-    command.target.id,
-    ...(command.target.aliases ?? []),
-  ]);
-  if (!acceptedTargets.has(suppliedTarget)) {
-    throw new TypeError(
-      `Command target ${suppliedTarget} does not identify ${command.target.id}`,
-    );
+  const parsedOperation = espCommandSchema.parse({
+    index: 0,
+    ...command.operation,
+  });
+  const { index, ...operation } = parsedOperation;
+  if (index !== 0) {
+    throw new Error("Normalized command index must be zero");
   }
 
   return {
     originalIndex,
-    command: `${command.target.id}${trimmed.slice(separatorIndex)}`,
-    targetId: command.target.id,
-    expectedResponse: normalizeExpectedResponse(command.expectedResponse),
+    command: command.command,
+    targetId,
+    operation,
   };
 }
 
@@ -1499,6 +1566,29 @@ function partitionCommandsByDevice(
   }));
 }
 
+function batchEspCommands(
+  commands: readonly NormalizedCommand[],
+): readonly EspCommandBatch[] {
+  const batches: EspCommandBatch[] = [];
+  for (
+    let firstIndex = 0;
+    firstIndex < commands.length;
+    firstIndex += ESP_COMMANDS_PER_REQUEST
+  ) {
+    const endIndex = Math.min(
+      firstIndex + ESP_COMMANDS_PER_REQUEST,
+      commands.length,
+    );
+    batches.push({
+      originalIndexes: Array.from(
+        { length: endIndex - firstIndex },
+        (_, offset) => firstIndex + offset,
+      ),
+    });
+  }
+  return batches;
+}
+
 function normalizeCommandPriority(
   priority: LegacyCommandPriority | undefined,
 ): LegacyCommandPriority {
@@ -1511,79 +1601,24 @@ function normalizeCommandPriority(
   throw new TypeError("Unsupported legacy command priority");
 }
 
-function normalizeExpectedResponse(
-  expectedResponse: LegacyExpectedResponse,
-): LegacyExpectedResponse {
-  if (expectedResponse.kind === "exact") {
-    if (typeof expectedResponse.value !== "string") {
-      throw new TypeError("Exact legacy response value must be a string");
-    }
-    return { kind: "exact", value: expectedResponse.value };
-  }
-  if (expectedResponse.kind === "analog_read") {
-    assertIntegerInRange(
-      expectedResponse.pin,
-      MIN_LEGACY_PIN,
-      MAX_LEGACY_PIN,
-      "Analog-read pin",
-    );
-    return { kind: "analog_read", pin: expectedResponse.pin };
-  }
-  throw new TypeError("Unsupported legacy expected-response descriptor");
-}
-
-type ExpectedResponseMatch =
-  | { readonly matched: true; readonly analogValue: number | null }
-  | { readonly matched: false };
-
-function matchExpectedResponse(
-  expectedResponse: LegacyExpectedResponse,
-  response: string,
-): ExpectedResponseMatch {
-  if (expectedResponse.kind === "exact") {
-    return response === expectedResponse.value
-      ? { matched: true, analogValue: null }
-      : { matched: false };
-  }
-
-  const prefix = `r ${expectedResponse.pin} `;
-  if (!response.startsWith(prefix)) {
-    return { matched: false };
-  }
-  const valueText = response.slice(prefix.length);
-  const value = Number(valueText);
-  const valid =
-    valueText.length > 0 &&
-    Number.isInteger(value) &&
-    value >= MIN_ANALOG_VALUE &&
-    value <= MAX_ANALOG_VALUE &&
-    String(value) === valueText;
-  return valid ? { matched: true, analogValue: value } : { matched: false };
-}
-
-function assertIntegerInRange(
-  value: number,
-  minimum: number,
-  maximum: number,
-  description: string,
-): void {
-  if (!Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new RangeError(
-      `${description} must be an integer from ${minimum} to ${maximum}`,
-    );
-  }
-}
-
 function assertTargetToken(value: string, description: string): void {
-  if (value.length === 0 || /[;\s\0]/.test(value)) {
-    throw new TypeError(`Legacy ${description} must be a non-empty wire token`);
+  if (value.length === 0 || /[\s\0]/.test(value)) {
+    throw new TypeError(`${description} must be a non-empty wire token`);
   }
 }
 
 function assertTopicSet(topics: EspTopicSet): void {
-  const values = [topics.command, topics.announce, topics.response];
+  const sampleDeviceId = "topic-validation-device";
+  const explicitValues = [
+    topics.discoveryRequest,
+    topics.legacyCommand,
+    topics.legacyAnnouncement,
+    topics.command(sampleDeviceId),
+    topics.announcement(sampleDeviceId),
+    topics.response(sampleDeviceId),
+  ];
   if (
-    values.some(
+    explicitValues.some(
       (topic) =>
         topic.trim().length === 0 ||
         topic.includes("#") ||
@@ -1595,10 +1630,20 @@ function assertTopicSet(topics: EspTopicSet): void {
       "MQTT topics must be explicit non-wildcard topic names",
     );
   }
-  if (new Set(values).size !== values.length) {
+  if (new Set(explicitValues).size !== explicitValues.length) {
     throw new TypeError(
-      "MQTT command, announce, and response topics must differ",
+      "MQTT discovery, command, announcement, and response topics must differ",
     );
+  }
+  for (const filter of [topics.announcementFilter, topics.responseFilter]) {
+    if (
+      filter.trim().length === 0 ||
+      filter.includes("#") ||
+      filter.includes("\0") ||
+      filter.split("+").length !== 2
+    ) {
+      throw new TypeError("MQTT device filters must contain one + wildcard");
+    }
   }
 }
 
@@ -1669,14 +1714,14 @@ function parseJson(payload: string): ParsedJson {
 
 function responseIdentity(
   value: JsonValue,
-): { readonly id: string; readonly requestId: string } | null {
+): { readonly deviceId: string; readonly requestId: string } | null {
   if (!isJsonObject(value)) {
     return null;
   }
-  const id = value["id"];
+  const deviceId = value["deviceId"];
   const requestId = value["requestId"];
-  return typeof id === "string" && typeof requestId === "string"
-    ? { id, requestId }
+  return typeof deviceId === "string" && typeof requestId === "string"
+    ? { deviceId, requestId }
     : null;
 }
 

@@ -1,11 +1,22 @@
 export const FAKE_ESP_TEST_NAMESPACE = "test/aquarium";
 
-export type FakeEspTopicKind = "command" | "announce" | "response";
-
+export type FakeEspTopicKind =
+  | "discovery"
+  | "command"
+  | "announce"
+  | "response";
 export interface FakeEspTopics {
-  readonly command: string;
-  readonly announce: string;
-  readonly response: string;
+  readonly namespace: string;
+  readonly discoveryRequest: string;
+  readonly announcementFilter: string;
+  readonly responseFilter: string;
+  readonly legacyDiscoveryCommand: string;
+  readonly legacyAnnouncement: string;
+  command(deviceId: string): string;
+  announcement(deviceId: string): string;
+  response(deviceId: string): string;
+  announcementDeviceId(topic: string): string | null;
+  responseDeviceId(topic: string): string | null;
 }
 
 export type FakeEspMessageHandler = (topic: string, payload: string) => void;
@@ -42,10 +53,26 @@ export function createFakeEspTopics(
   namespace = FAKE_ESP_TEST_NAMESPACE,
 ): FakeEspTopics {
   assertFakeEspTestNamespace(namespace);
+  const protocolRoot = `${namespace}/v1`;
+  const deviceRoot = `${protocolRoot}/devices`;
+  const topicFor = (
+    deviceId: string,
+    kind: "command" | "announce" | "response",
+  ): string => `${deviceRoot}/${validDeviceId(deviceId)}/${kind}`;
   return {
-    command: `${namespace}/command`,
-    announce: `${namespace}/announce`,
-    response: `${namespace}/response`,
+    namespace,
+    discoveryRequest: `${protocolRoot}/discovery/request`,
+    announcementFilter: `${deviceRoot}/+/announce`,
+    responseFilter: `${deviceRoot}/+/response`,
+    legacyDiscoveryCommand: `${namespace}/command`,
+    legacyAnnouncement: `${namespace}/announce`,
+    command: (deviceId) => topicFor(deviceId, "command"),
+    announcement: (deviceId) => topicFor(deviceId, "announce"),
+    response: (deviceId) => topicFor(deviceId, "response"),
+    announcementDeviceId: (topic) =>
+      parseDeviceTopic(topic, deviceRoot, "announce"),
+    responseDeviceId: (topic) =>
+      parseDeviceTopic(topic, deviceRoot, "response"),
   };
 }
 
@@ -64,7 +91,7 @@ export function assertFakeEspTestNamespace(namespace: string): void {
   const segments = suffix.slice(1).split("/");
   if (
     segments.length === 0 ||
-    segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))
+    segments.some((segment) => !/^[A-Za-z0-9_-]+$/u.test(segment))
   ) {
     throw new Error(
       "Fake ESP test namespace segments may contain only letters, numbers, underscores, and hyphens",
@@ -76,15 +103,18 @@ export function assertFakeEspTestTopic(
   topic: string,
   expectedKind?: FakeEspTopicKind,
 ): void {
-  const segments = topic.split("/");
-  const kind = segments.at(-1);
-  const namespace = segments.slice(0, -1).join("/");
-  if (kind !== "command" && kind !== "announce" && kind !== "response") {
-    throw new Error(
-      "Fake ESP topic must end in command, announce, or response",
+  const match =
+    /^(test\/aquarium(?:\/[A-Za-z0-9_-]+)*)\/v1\/(?:(?:devices\/([A-Za-z0-9_-]+)\/(command|announce|response))|(discovery\/request))$/u.exec(
+      topic,
     );
+  if (match === null) {
+    throw new Error("Fake ESP topic is outside its structured test namespace");
   }
-  assertFakeEspTestNamespace(namespace);
+  assertFakeEspTestNamespace(match[1] ?? "");
+  const kind: FakeEspTopicKind =
+    match[4] === "discovery/request"
+      ? "discovery"
+      : (match[3] as "command" | "announce" | "response");
   if (expectedKind !== undefined && kind !== expectedKind) {
     throw new Error(`Expected a fake ESP ${expectedKind} topic`);
   }
@@ -99,7 +129,7 @@ export class InMemoryFakeEspBus {
   }
 
   public publishFromHost(topic: string, payload: string): void {
-    assertFakeEspTestTopic(topic, "command");
+    assertFakeEspHostTopic(topic);
     this.publish(topic, payload, "host");
   }
 
@@ -121,7 +151,7 @@ export class InMemoryFakeEspBus {
     topic: string,
     handler: FakeEspMessageHandler,
   ): () => void {
-    assertFakeEspTestTopic(topic, "command");
+    assertFakeEspHostTopic(topic);
     const subscription = { topic, handler };
     this.subscriptions.add(subscription);
     return () => {
@@ -141,4 +171,35 @@ export class InMemoryFakeEspBus {
       }
     }
   }
+}
+
+function assertFakeEspHostTopic(topic: string): void {
+  try {
+    assertFakeEspTestTopic(topic, "command");
+  } catch (commandError) {
+    try {
+      assertFakeEspTestTopic(topic, "discovery");
+    } catch {
+      throw commandError;
+    }
+  }
+}
+
+function validDeviceId(deviceId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,128}$/u.test(deviceId)) {
+    throw new TypeError("Fake ESP device ID is invalid");
+  }
+  return deviceId;
+}
+
+function parseDeviceTopic(
+  topic: string,
+  deviceRoot: string,
+  kind: "announce" | "response",
+): string | null {
+  const prefix = `${deviceRoot}/`;
+  const suffix = `/${kind}`;
+  if (!topic.startsWith(prefix) || !topic.endsWith(suffix)) return null;
+  const deviceId = topic.slice(prefix.length, -suffix.length);
+  return /^[A-Za-z0-9_-]{1,128}$/u.test(deviceId) ? deviceId : null;
 }

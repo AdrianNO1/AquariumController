@@ -40,6 +40,8 @@ services:
       - AQUARIUM_BACKUP_DIRECTORY=/var/lib/aquarium/backups
       - AQUARIUM_MQTT_ENABLED=true
       - AQUARIUM_MQTT_BROKER_URL=${AQUARIUM_MQTT_BROKER_URL:?Set the production MQTT broker URL explicitly}
+      - AQUARIUM_MQTT_USERNAME=${AQUARIUM_MQTT_USERNAME:?Set the production MQTT username explicitly}
+      - AQUARIUM_MQTT_PASSWORD=${AQUARIUM_MQTT_PASSWORD:?Set the production MQTT password explicitly}
       - AQUARIUM_MQTT_TOPIC_NAMESPACE=production
       - AQUARIUM_PRODUCTION_MQTT_CONFIRMATION=${AQUARIUM_PRODUCTION_MQTT_CONFIRMATION:?Set the production MQTT safety confirmation explicitly}
       - AQUARIUM_ALERT_WEBHOOK_URL

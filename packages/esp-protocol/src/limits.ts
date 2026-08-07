@@ -5,7 +5,7 @@ export const LEGACY_MAX_SYNC_TIME = 2_147_483_647;
 // currentSchedule is a 4096-byte C string buffer. One byte is required for the
 // terminating NUL written by strlcpy, leaving 4095 safe payload bytes.
 export const LEGACY_SCHEDULE_BYTES = 4095;
-export const LEGACY_COMMANDS_PER_DEVICE_PER_BATCH = 3;
+export const ESP_COMMANDS_PER_REQUEST = 3;
 export const ESP32_LEDC_SOURCE_CLOCK_HZ = 80_000_000;
 // The firmware keeps an overwrite active for this long before restoring the
 // scheduled output. Server reconciliation must not assume an unknown overwrite

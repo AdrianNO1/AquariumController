@@ -600,6 +600,12 @@ export function composeControllerRuntime(
     options.clientFactory ??
     createMqttJsClientFactory({
       brokerUrl: options.configuration.mqtt.brokerUrl,
+      ...(options.configuration.mqtt.username === undefined
+        ? {}
+        : {
+            username: options.configuration.mqtt.username,
+            password: options.configuration.mqtt.password,
+          }),
     });
   const runtime = new ControllerMqttRuntime({
     mqtt: options.configuration.mqtt,

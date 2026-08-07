@@ -12,6 +12,7 @@ import type {
   FakeEspMqttClientConfig,
   FakeEspMqttClientPort,
 } from "./mqtt-transport.js";
+import { encodeFakeEspCommandRequest } from "./structured-protocol.js";
 
 const encoder = new TextEncoder();
 const temporaryDirectories: string[] = [];
@@ -60,10 +61,31 @@ describe("managed fake ESP launcher", () => {
       ]);
 
       clients[0]?.emitMessage(
-        "test/aquarium/command",
-        "A1B2C3D4 e Renamed 6000 10",
+        "test/aquarium/v1/devices/A1B2C3D4/command",
+        encodeFakeEspCommandRequest({
+          deviceId: "A1B2C3D4",
+          requestId: "edit-alpha",
+          commands: [
+            {
+              index: 0,
+              kind: "edit_configuration",
+              name: "Renamed",
+              pwmFrequencyHz: 6_000,
+              pwmResolutionBits: 10,
+            },
+          ],
+        }),
       );
-      clients[0]?.emitMessage("test/aquarium/command", "A1B2C3D4 s 4 128 1");
+      clients[0]?.emitMessage(
+        "test/aquarium/v1/devices/A1B2C3D4/command",
+        encodeFakeEspCommandRequest({
+          deviceId: "A1B2C3D4",
+          requestId: "set-alpha",
+          commands: [
+            { index: 0, kind: "set_pwm", pin: 4, value: 128, overwrite: true },
+          ],
+        }),
+      );
       expect(launcher.snapshot().devices[0]).toMatchObject({
         deviceName: "Renamed",
         frequencyHz: 6_000,

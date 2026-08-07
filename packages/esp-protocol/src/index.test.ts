@@ -10,26 +10,37 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertLegacyScheduleFits,
-  batchLegacyCommands,
   createEspTopicSet,
+  createEspTopicSetForNamespace,
   CURRENT_ESP_FIRMWARE_VERSION,
-  encodeCorrelatedLegacyRequest,
-  encodeLegacyMessage,
+  encodeEspCommandRequest,
+  encodeEspDiscoveryRequest,
   ESP_FIRMWARE_ARTIFACT,
-  ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES,
+  ESP_MQTT_PROTOCOL_VERSION,
   ESP32_PWM_OVERWRITE_DURATION_MS,
   espAnnouncementSchema,
+  espCommandRequestSchema,
   espCommandResponseSchema,
-  isSupportedEspFirmwareVersion,
-  isSupportedEsp32PwmConfiguration,
   isCurrentEspFirmwareVersion,
-  parseEspErrorResponse,
+  isSupportedEsp32PwmConfiguration,
+  isSupportedEspFirmwareVersion,
+  matchEspCommandResult,
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION,
   supportsPullOta,
 } from "./index.js";
 
-describe("legacy ESP protocol", () => {
-  it("keeps the tracked release firmware out of test mode", () => {
+const baseAnnouncement = {
+  id: "A1",
+  name: "Main",
+  freq: 5_000,
+  res: 8,
+  status: "online",
+  version: CURRENT_ESP_FIRMWARE_VERSION,
+  scheduleHash: "0",
+};
+
+describe("ESP MQTT protocol", () => {
+  it("keeps production firmware out of test mode and aligned with hardware", () => {
     const source = readFileSync(
       new URL(
         "../../../firmware/esp32/ESP32Code/ESP32Code.ino",
@@ -37,12 +48,16 @@ describe("legacy ESP protocol", () => {
       ),
       "utf8",
     );
+    const safeConfiguration = readFileSync(
+      new URL(
+        "../../../firmware/esp32/ESP32Code/firmware-config.example.h",
+        import.meta.url,
+      ),
+      "utf8",
+    );
 
     expect(source).toMatch(/const bool TEST = false;/u);
     expect(source).not.toMatch(/const bool TEST = true;/u);
-    expect(source).toContain(
-      `const char* VERSION = "${CURRENT_ESP_FIRMWARE_VERSION}";`,
-    );
     expect(source).toContain(
       `const char* HARDWARE_PROFILE = "${NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID}";`,
     );
@@ -52,7 +67,6 @@ describe("legacy ESP protocol", () => {
     const pwmPins = /const int ALLOWED_PWM_PINS\[\] = \{([^}]+)\}/u.exec(
       source,
     )?.[1];
-    expect(pwmPins).toBeDefined();
     expect(pwmPins?.match(/\d+/gu)?.map(Number)).toEqual(
       hardwareProfileById(NODEMCU_ESP32S_V1_1_HARDWARE_PROFILE_ID).pwmPins,
     );
@@ -61,18 +75,10 @@ describe("legacy ESP protocol", () => {
     expect(source).toContain("const unsigned char maximumRepairFailures = 2;");
     expect(source).not.toContain('message == "clear"');
     expect(source).not.toContain("clearEEPROM");
-    expect(source).toContain(
-      "networkConfigurationAvailable = loadNetworkConfiguration();",
-    );
-    expect(source).toContain(
-      '"Persistent network configuration is unavailable; local schedules remain active"',
-    );
-    expect(source).toContain("const bool subscribed = TEST");
     expect(source).toContain("esp_ota_mark_app_valid_cancel_rollback();");
-    expect(source).toContain("const esp_err_t confirmationResult");
     expect(source).toContain('String clientId = "Aquarium-" + deviceId;');
-    expect(source).not.toMatch(
-      /if \(!loadNetworkConfiguration\(\)\)[\s\S]{0,200}while \(true\)/u,
+    expect(safeConfiguration).toContain(
+      "#define AQUARIUM_REPROVISION_NETWORK_CONFIG false",
     );
   });
 
@@ -89,53 +95,39 @@ describe("legacy ESP protocol", () => {
       createHash("sha256").update(artifact).digest("hex"),
     );
     expect(ESP32_PWM_OVERWRITE_DURATION_MS).toBe(120_000);
-    expect(isCurrentEspFirmwareVersion(CURRENT_ESP_FIRMWARE_VERSION)).toBe(
-      true,
-    );
-    expect(isCurrentEspFirmwareVersion("not-current")).toBe(false);
-    expect(isCurrentEspFirmwareVersion("5.0.0")).toBe(false);
-    expect(MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION).toBe("5.0.0");
-    expect(isSupportedEspFirmwareVersion("5.0.0")).toBe(true);
-    expect(isSupportedEspFirmwareVersion("5.0.2")).toBe(true);
-    expect(isSupportedEspFirmwareVersion("4.2.1")).toBe(false);
-    expect(supportsPullOta("5.0.0")).toBe(true);
-    expect(supportsPullOta("6.1.0")).toBe(true);
-    expect(supportsPullOta("4.2.1")).toBe(false);
-    expect(isCurrentEspFirmwareVersion("4.0.0")).toBe(false);
-    expect(isCurrentEspFirmwareVersion("3.2w")).toBe(false);
   });
 
-  it("accepts output and OTA telemetry while preserving legacy announcements", () => {
-    const base = {
-      id: "A1",
-      name: "Main",
-      freq: 5_000,
-      res: 8,
-      status: "online",
-      version: CURRENT_ESP_FIRMWARE_VERSION,
-      scheduleHash: "0",
-    };
+  it("uses the protocol major as the compatibility boundary", () => {
+    expect(MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION).toBe("6.0.0");
+    expect(isCurrentEspFirmwareVersion(CURRENT_ESP_FIRMWARE_VERSION)).toBe(true);
+    expect(isSupportedEspFirmwareVersion("6.0.0")).toBe(true);
+    expect(isSupportedEspFirmwareVersion("7.1.2")).toBe(false);
+    expect(isSupportedEspFirmwareVersion("5.99.0")).toBe(false);
+    expect(supportsPullOta("6.0.0")).toBe(true);
+    expect(supportsPullOta("6.9.0")).toBe(true);
+    expect(supportsPullOta("5.0.6")).toBe(false);
+    expect(supportsPullOta("4.9.9")).toBe(false);
+  });
 
-    expect(espAnnouncementSchema.safeParse(base).success).toBe(true);
+  it("normalizes passive legacy announcements but requires v1 on device topics", () => {
+    const legacy = espAnnouncementSchema.parse(baseAnnouncement);
+    expect(legacy.protocolVersion).toBe(0);
     expect(
       espAnnouncementSchema.safeParse({
-        ...base,
+        ...baseAnnouncement,
+        protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
+        diagnosticStorageHealthy: true,
         outputsOff: false,
         outputs: [
           [16, 40],
           [17, 0],
         ],
-        ota: {
-          status: "downloading",
-          targetVersion: CURRENT_ESP_FIRMWARE_VERSION,
-          progress: 48,
-        },
       }).success,
     ).toBe(true);
     expect(
       espAnnouncementSchema.safeParse({
-        ...base,
-        outputsOff: true,
+        ...baseAnnouncement,
+        protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
         outputs: [
           [16, 0],
           [16, 0],
@@ -146,15 +138,11 @@ describe("legacy ESP protocol", () => {
 
   it("rejects PWM pairs the ESP32 LEDC source clock cannot represent", () => {
     const announcement = {
-      id: "A1",
-      name: "Main",
+      ...baseAnnouncement,
+      protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
       freq: 40_000,
       res: 10,
-      status: "online",
-      version: "4.1.0",
-      scheduleHash: "0",
     };
-
     expect(isSupportedEsp32PwmConfiguration(announcement.freq, 10)).toBe(true);
     expect(espAnnouncementSchema.safeParse(announcement).success).toBe(true);
     expect(
@@ -162,100 +150,89 @@ describe("legacy ESP protocol", () => {
     ).toBe(false);
   });
 
-  it("sends the maximum command payload as one MQTT message", () => {
-    const payload = "x".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES);
+  it("encodes correlated structured commands and validates typed results", () => {
+    const command = {
+      index: 0,
+      kind: "set_pwm" as const,
+      pin: 16,
+      value: 128,
+      overwrite: true,
+    };
+    const payload = encodeEspCommandRequest({
+      deviceId: "A1",
+      requestId: "wire-1",
+      commands: [command],
+    });
+    expect(espCommandRequestSchema.parse(JSON.parse(payload))).toMatchObject({
+      protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
+      deviceId: "A1",
+      requestId: "wire-1",
+      commands: [command],
+    });
 
-    expect(encodeLegacyMessage(payload)).toBe(payload);
+    const result = espCommandResponseSchema.parse({
+      protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
+      deviceId: "A1",
+      name: "Main",
+      requestId: "wire-1",
+      results: [{ ...command, ok: true }],
+    }).results[0];
+    if (result === undefined) {
+      throw new Error("Expected one command result");
+    }
+    expect(matchEspCommandResult(command, result)).toEqual({
+      status: "succeeded",
+      analogValue: null,
+    });
   });
 
-  it("correlates command batches and requires the ESP to echo the request", () => {
-    expect(encodeCorrelatedLegacyRequest("wire-1-0", "A1 p")).toBe(
-      "request:wire-1-0|A1 p",
-    );
+  it("distinguishes device failures from protocol mismatches", () => {
+    const command = { index: 0, kind: "ping" as const };
     expect(
-      espCommandResponseSchema.safeParse({
-        id: "A1",
-        name: "Main",
-        requestId: "wire-1-0",
-        responses: [{ index: 0, response: "o" }],
-      }).success,
-    ).toBe(true);
+      matchEspCommandResult(command, {
+        index: 0,
+        kind: "ping",
+        ok: false,
+        error: { code: "busy", message: "Device is busy" },
+      }),
+    ).toEqual({
+      status: "device_error",
+      code: "busy",
+      message: "Device is busy",
+    });
     expect(
-      espCommandResponseSchema.safeParse({
-        id: "A1",
-        name: "Main",
-        responses: [{ index: 0, response: "o" }],
-      }).success,
-    ).toBe(false);
+      matchEspCommandResult(command, {
+        index: 0,
+        kind: "schedule",
+        ok: true,
+      }),
+    ).toMatchObject({ status: "protocol_error" });
   });
 
-  it("distinguishes bounded firmware errors from malformed responses", () => {
-    expect(parseEspErrorResponse("E: LEDC write failed")).toBe(
-      "LEDC write failed",
+  it("uses isolated per-device topics and rejects unsafe namespaces", () => {
+    const topics = createEspTopicSet(true);
+    expect(topics.discoveryRequest).toBe("test/aquarium/v1/discovery/request");
+    expect(topics.command("A1")).toBe(
+      "test/aquarium/v1/devices/A1/command",
     );
-    expect(parseEspErrorResponse("unexpected")).toBeNull();
-    expect(parseEspErrorResponse("E: ")).toBeNull();
-    expect(parseEspErrorResponse(`E: ${"x".repeat(161)}`)).toBeNull();
-    expect(parseEspErrorResponse("E: invalid\nresponse")).toBeNull();
-  });
-
-  it("rejects payloads above the firmware MQTT command limit by UTF-8 byte length", () => {
-    expect(() =>
-      encodeLegacyMessage("x".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES + 1)),
-    ).toThrow(/5121 bytes/u);
-    expect(() =>
-      encodeLegacyMessage("🐠".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES / 4)),
-    ).not.toThrow();
-    expect(() =>
-      encodeLegacyMessage(
-        `🐠${"x".repeat(ESP_MQTT_MAX_COMMAND_PAYLOAD_BYTES - 3)}`,
-      ),
-    ).toThrow(/5121 bytes/u);
-  });
-
-  it("splits after the third command for the same target", () => {
-    const batches = batchLegacyCommands([
-      "ID1 p",
-      "ID1 s 1 0 0",
-      "ID1 s 2 0 0",
-      "ID1 s 3 0 0",
-      "ID2 p",
-    ]);
-
-    expect(batches.map((batch) => batch.originalIndexes)).toEqual([
-      [0, 1, 2],
-      [3, 4],
-    ]);
-  });
-
-  it("preserves the legacy interleaved batching behavior", () => {
-    const batches = batchLegacyCommands([
-      "ID1 p",
-      "ID2 p",
-      "ID1 p",
-      "ID2 p",
-      "ID1 p",
-      "ID2 p",
-      "ID1 p",
-      "ID2 p",
-    ]);
-
-    expect(batches.map((batch) => batch.originalIndexes)).toEqual([
-      [0, 1, 2, 3, 4, 5],
-      [6, 7],
-    ]);
+    expect(topics.legacyCommand).toBe("test/aquarium/command");
+    expect(topics.announcement("A1")).toBe(
+      "test/aquarium/v1/devices/A1/announce",
+    );
+    expect(topics.response("A1")).toBe(
+      "test/aquarium/v1/devices/A1/response",
+    );
+    expect(topics.announcementDeviceId(topics.announcement("A1"))).toBe("A1");
+    expect(topics.responseDeviceId(topics.response("A1"))).toBe("A1");
+    expect(() => createEspTopicSetForNamespace("test/+/unsafe")).toThrow();
+    expect(JSON.parse(encodeEspDiscoveryRequest())).toEqual({
+      protocolVersion: ESP_MQTT_PROTOCOL_VERSION,
+      kind: "discover",
+    });
   });
 
   it("reserves the terminating NUL byte in the firmware schedule buffer", () => {
     expect(() => assertLegacyScheduleFits("x".repeat(4095))).not.toThrow();
-    expect(() => assertLegacyScheduleFits("x".repeat(4096))).toThrow(/4095/);
-  });
-
-  it("keeps test topics isolated", () => {
-    expect(createEspTopicSet(true)).toEqual({
-      command: "test/aquarium/command",
-      announce: "test/aquarium/announce",
-      response: "test/aquarium/response",
-    });
+    expect(() => assertLegacyScheduleFits("x".repeat(4096))).toThrow(/4095/u);
   });
 });

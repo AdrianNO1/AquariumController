@@ -171,6 +171,28 @@ describe("controller configuration safety", () => {
     ).toThrow(/mqtt:\/\/ or mqtts:\/\//i);
   });
 
+  it("keeps MQTT credentials paired and out of broker URLs", () => {
+    expect(() =>
+      parseControllerConfiguration({
+        AQUARIUM_RUNTIME_MODE: "test",
+        AQUARIUM_MQTT_ENABLED: "true",
+        AQUARIUM_MQTT_BROKER_URL: "mqtt://user:secret@127.0.0.1:1883",
+        AQUARIUM_MQTT_TOPIC_NAMESPACE: "test",
+        NODE_ENV: "test",
+      }),
+    ).toThrow(/dedicated username and password/i);
+    expect(() =>
+      parseControllerConfiguration({
+        AQUARIUM_RUNTIME_MODE: "test",
+        AQUARIUM_MQTT_ENABLED: "true",
+        AQUARIUM_MQTT_BROKER_URL: "mqtt://127.0.0.1:1883",
+        AQUARIUM_MQTT_TOPIC_NAMESPACE: "test",
+        AQUARIUM_MQTT_USERNAME: "controller",
+        NODE_ENV: "test",
+      }),
+    ).toThrow(/configured together/i);
+  });
+
   it("rejects every off-loopback development and test broker", () => {
     expect(() =>
       parseControllerConfiguration({
@@ -235,6 +257,8 @@ describe("controller configuration safety", () => {
       AQUARIUM_FIRMWARE_BASE_URL: "http://controller:3000",
       AQUARIUM_MQTT_ENABLED: "true",
       AQUARIUM_MQTT_BROKER_URL: "mqtt://broker:1883",
+      AQUARIUM_MQTT_USERNAME: "controller",
+      AQUARIUM_MQTT_PASSWORD: "test-password",
       AQUARIUM_MQTT_TOPIC_NAMESPACE: "production",
       AQUARIUM_PRODUCTION_MQTT_CONFIRMATION: "ENABLE_PRODUCTION_AQUARIUM_MQTT",
       NODE_ENV: "production",
@@ -247,6 +271,8 @@ describe("controller configuration safety", () => {
     expect(configuration.mqtt).toMatchObject({
       enabled: true,
       topicNamespace: "production",
+      username: "controller",
+      password: "test-password",
       protocolVersion: 4,
       qos: 0,
       retain: false,

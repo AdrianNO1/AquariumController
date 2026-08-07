@@ -1,28 +1,30 @@
 # Raspberry Pi production handoff
 
-Updated: 2026-08-02
+Updated: 2026-08-06
 
-This is the concise external-operator checklist for putting AquariumController
-into production. Repository implementation and validation did **not** contact,
-inspect, or change the Pi. Run the commands and detailed safety checks from
-[the full production deployment and rollback runbook](production-deployment.md);
-this checklist does not replace it.
+This is the concise external-operator checklist retained for first cutover,
+fleet upgrades, and incident recovery. The initial controller deployment on the
+Pi is complete; use `npm run production:deploy` for subsequent supervised
+upgrades. Its exact-CI-artifact, off-host-backup, typed-confirmation,
+verification, and automatic image-rollback behavior is documented in
+[the full production deployment and rollback runbook](production-deployment.md).
+This checklist does not replace that runbook.
 
 ## Current handoff state
 
-The repository contains firmware 5.0.6, correlated-request, per-device-lane,
-latest-only scheduler, and device-local failure implementation. Before this
-checklist becomes a deployment handoff, the branch must pass protected CI,
-merge, publish a new image, and record that image's exact digest.
+The repository contains firmware 6.0.0, structured per-device MQTT,
+per-device lanes, latest-only scheduler, and device-local failure
+implementation. Every subsequent release must pass protected CI, merge,
+publish a new image, and use that image's exact digest.
 
-Current firmware 5.0.6/per-device-lane local evidence:
+Current firmware 6.0.0/structured-protocol local evidence is:
 
 - lint, all workspace/E2E typechecks, and production builds: green;
-- unit: 111 files/775 tests;
-- critical: 88 files/656 tests;
+- unit: 111 files/761 tests;
+- critical: 88 files/639 tests;
 - real Mosquitto integration: 5/5;
 - production Playwright: 21/21 with zero retries; and
-- pinned firmware compile: 89% flash and 16% global RAM.
+- pinned firmware compile: 90% flash and 16% global RAM.
 
 These results have not yet been confirmed by the protected pull-request or
 default-branch workflows.
@@ -71,7 +73,9 @@ actuators are not claimed verified.
       returned multi-platform `sha256` manifest digest. Do not deploy a mutable
       tag or the historical pre-4.1 digest.
 
-There is deliberately no CI job that deploys to the Pi.
+There is deliberately no CI job that deploys to the Pi. A maintainer must run
+`npm run production:deploy` locally after the exact `master` CI publication
+succeeds.
 
 ## 2. Pi platform gaps
 
@@ -92,9 +96,14 @@ There is deliberately no CI job that deploys to the Pi.
 
 ## 3. Network, MQTT, and notifications
 
-- [ ] Provision a production MQTT account for the controller and a credential
-      for firmware 5.0.6.
-- [ ] Restrict the plaintext MQTT listener to the trusted aquarium LAN.
+- [ ] Install the `nemo` password-file entry and reviewed ACL: anonymous clients
+      retain non-v1 topics, anonymous `aquarium/v1/#` access is denied, and
+      authenticated `nemo` clients can use `aquarium/#`.
+- [x] Restrict the plaintext MQTT listener to the trusted aquarium LAN. The Pi
+      firewall permits ports 1883 and 3001 only from `192.168.1.0/24`, plus the
+      controller's narrow Docker bridge rule.
+- [ ] Keep `allow_anonymous true` for the unrelated legacy ESP. Do not narrow
+      its non-aquarium topic access until that project is separately migrated.
 - [ ] Record the explicit broker URL and the exact production MQTT confirmation
       interlock.
 - [ ] Verify firewall rules prevent unintended HTTP/MQTT exposure.
@@ -126,12 +135,18 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 5.0.6 with an ignored local configuration containing the
-      intended Wi-Fi, MQTT username/password, and NTP host.
+- [ ] Build firmware 6.0.0 with an ignored local configuration containing the
+      intended Wi-Fi, Pi broker, `nemo` credentials, and NTP host.
+- [ ] For a firmware-5 device with old settings already in NVS, set
+      `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` only in its one-time USB
+      build. Confirm reconnect with the intended settings, then use generic OTA images whose
+      release configuration keeps the switch `false`.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports firmware 5.0.6 and hardware profile
-      `nodemcu-esp32s-v1.1`; firmware older than 5.0.0 is intentionally marked
-      `firmware_unsupported` and receives no actuator work.
+- [ ] Confirm every device reports firmware 6.0.0 and hardware profile
+      `nodemcu-esp32s-v1.1`; other protocol majors are intentionally marked
+      `firmware_unsupported` and receive no actuator, configuration, schedule,
+      time-sync, or OTA work. Every pre-v6 version needs USB bootstrap. Future
+      firmware 6.x releases retain structured per-device OTA support.
 - [ ] Review each device's explicit mapping-profile selection after import.
       Names no longer select profiles. Investigate every GPIO12 warning and
       confirm the existing driver still does not pull that strapping pin high
@@ -172,8 +187,11 @@ delete and reuse a failed first-import target.
 - [ ] Load values from an operator-managed secret store outside the checkout;
       do not use or commit a repository `.env`.
 - [ ] Set the exact newly selected GHCR repository and 64-character digest, Pi
-      bind address, port, broker URL/interlock, and four storage paths.
+      bind address, port, ESP-reachable firmware base URL, broker
+      URL/username/password/interlock, and four storage paths.
 - [ ] Run `bash deployment/pi-preflight.sh compose.production.yaml` on the Pi.
+- [ ] Persist the exact validated values in root-owned mode-`0600`
+      `/etc/aquarium-controller/production.conf` using the full runbook.
 - [ ] Stop on any architecture, digest-pull, configuration, ownership, mode,
       nesting, free-space, or Compose-rendering failure.
 - [ ] Start only the immutable digest using the full runbook.

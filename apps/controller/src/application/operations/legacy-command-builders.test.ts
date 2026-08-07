@@ -47,32 +47,40 @@ describe("legacy command builders", () => {
       {
         command: "A1B2C3D4 s 12 128 1",
         target,
-        expectedResponse: { kind: "exact", value: "s 12 128 1" },
+        operation: { kind: "set_pwm", pin: 12, value: 128, overwrite: true },
       },
       {
         command: "A1B2C3D4 p",
         target,
-        expectedResponse: { kind: "exact", value: "o" },
+        operation: { kind: "ping" },
       },
       {
         command: "A1B2C3D4 e ReefTank 5000 8",
         target,
-        expectedResponse: { kind: "exact", value: "ReefTank 5000 8" },
+        operation: {
+          kind: "edit_configuration",
+          name: "ReefTank",
+          pwmFrequencyHz: 5_000,
+          pwmResolutionBits: 8,
+        },
       },
       {
         command: `A1B2C3D4 sc ${scheduleJson}`,
         target,
-        expectedResponse: { kind: "exact", value: "schedule_ok" },
+        operation: {
+          kind: "schedule",
+          schedule: JSON.parse(scheduleJson),
+        },
       },
       {
         command: "A1B2C3D4 sync 1752192000",
         target,
-        expectedResponse: { kind: "exact", value: "1752192000" },
+        operation: { kind: "sync_time", epochSeconds: 1_752_192_000 },
       },
       {
         command: "A1B2C3D4 r 7",
         target,
-        expectedResponse: { kind: "analog_read", pin: 7 },
+        operation: { kind: "analog_read", pin: 7 },
       },
     ]);
   });
@@ -110,9 +118,13 @@ describe("legacy command builders", () => {
     expect(
       buildEditConfigurationCommand(target, "Tank", 1_220, 16).command,
     ).toBe("A1B2C3D4 e Tank 1220 16");
+    expect(
+      buildEditConfigurationCommand(target, "semi;colon", 5_000, 8)
+        .operation,
+    ).toMatchObject({ kind: "edit_configuration", name: "semi;colon" });
     expect(CONTRACT_LEDC_SOURCE_CLOCK_HZ).toBe(PROTOCOL_LEDC_SOURCE_CLOCK_HZ);
 
-    for (const name of ["", "two words", "semi;colon", "å", "x".repeat(32)]) {
+    for (const name of ["", "two words", "å", "x".repeat(32)]) {
       expect(() =>
         buildEditConfigurationCommand(target, name, 5_000, 8),
       ).toThrow(/device name/);
@@ -135,7 +147,10 @@ describe("legacy command builders", () => {
   it("accepts only canonical, strictly validated schedule documents", () => {
     expect(buildScheduleCommand(target, scheduleJson)).toMatchObject({
       command: `A1B2C3D4 sc ${scheduleJson}`,
-      expectedResponse: { kind: "exact", value: "schedule_ok" },
+      operation: {
+        kind: "schedule",
+        schedule: JSON.parse(scheduleJson),
+      },
     });
 
     const extraFieldSchedule = JSON.stringify({

@@ -23,12 +23,15 @@ export function registerFirmwareRoutes(
         service: "firmware artifact",
       });
     }
-    return reply.code(200).send({
-      version: artifact.version,
-      sha256: artifact.sha256,
-      sizeBytes: artifact.data.byteLength,
-      downloadPath: "/api/firmware/esp32/current.bin",
-    });
+    return reply
+      .header("Cache-Control", "no-store")
+      .code(200)
+      .send({
+        version: artifact.version,
+        sha256: artifact.sha256,
+        sizeBytes: artifact.data.byteLength,
+        downloadPath: "/api/firmware/esp32/current.bin",
+      });
   });
 
   app.get("/api/firmware/esp32/current.bin", async (_request, reply) => {

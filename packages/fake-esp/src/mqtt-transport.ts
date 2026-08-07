@@ -3,7 +3,6 @@ import { connect, type IClientOptions, type MqttClient } from "mqtt";
 import { FakeEspActor, type FakeEspActorOptions } from "./fake-esp.js";
 import {
   assertFakeEspTestTopic,
-  createFakeEspTopics,
   type FakeEspMessageHandler,
   type FakeEspTopics,
   type FakeEspTransport,
@@ -128,44 +127,40 @@ class MqttJsFakeEspClient implements FakeEspMqttClientPort {
 }
 
 class MqttActorTransport implements FakeEspTransport {
-  private readonly handlers = new Set<FakeEspMessageHandler>();
+  private readonly handlers = new Set<{
+    readonly topic: string;
+    readonly handler: FakeEspMessageHandler;
+  }>();
 
-  public constructor(
-    private readonly client: FakeEspMqttClientPort,
-    private readonly topics: FakeEspTopics,
-  ) {}
+  public constructor(private readonly client: FakeEspMqttClientPort) {}
 
   public publish(topic: string, payload: string): void {
-    if (topic !== this.topics.announce && topic !== this.topics.response) {
-      throw new Error(
-        "Fake ESP MQTT actor attempted to publish an unsafe topic",
-      );
-    }
-    assertFakeEspTestTopic(
-      topic,
-      topic === this.topics.announce ? "announce" : "response",
-    );
+    const kind = topic.endsWith("/announce") ? "announce" : "response";
+    assertFakeEspTestTopic(topic, kind);
     this.client.publish(topic, payload, { qos: 0, retain: false });
   }
 
   public subscribe(topic: string, handler: FakeEspMessageHandler): () => void {
-    if (topic !== this.topics.command) {
-      throw new Error(
-        "Fake ESP MQTT actor attempted to subscribe to an unsafe topic",
-      );
+    try {
+      assertFakeEspTestTopic(topic, "command");
+    } catch (commandError) {
+      try {
+        assertFakeEspTestTopic(topic, "discovery");
+      } catch {
+        throw commandError;
+      }
     }
-    assertFakeEspTestTopic(topic, "command");
-    this.handlers.add(handler);
-    return () => this.handlers.delete(handler);
+    const subscription = { topic, handler };
+    this.handlers.add(subscription);
+    return () => this.handlers.delete(subscription);
   }
 
   public dispatch(topic: string, payload: Uint8Array): void {
-    if (topic !== this.topics.command) {
-      return;
-    }
     const text = decoder.decode(payload);
-    for (const handler of this.handlers) {
-      handler(topic, text);
+    for (const subscription of this.handlers) {
+      if (subscription.topic === topic) {
+        subscription.handler(topic, text);
+      }
     }
   }
 }
@@ -191,13 +186,12 @@ export class MqttFakeEspSession {
 
   public constructor(options: MqttFakeEspSessionOptions) {
     assertLoopbackMqttBrokerUrl(options.brokerUrl);
-    this.topics = createFakeEspTopics(options.namespace);
     const config = {
       brokerUrl: options.brokerUrl,
       clientId: options.clientId,
     };
     this.client = (options.clientFactory ?? createMqttJsFakeEspClient)(config);
-    this.transport = new MqttActorTransport(this.client, this.topics);
+    this.transport = new MqttActorTransport(this.client);
     this.onError = options.onError;
     this.networkEnabled = options.networkEnabled ?? true;
     this.actor = new FakeEspActor({
@@ -207,6 +201,7 @@ export class MqttFakeEspSession {
         ? {}
         : { namespace: options.namespace }),
     });
+    this.topics = this.actor.topics;
   }
 
   public start(): Promise<void> {
@@ -303,7 +298,13 @@ export class MqttFakeEspSession {
   }
 
   private async handleConnected(generation: number): Promise<void> {
-    await this.client.subscribe(this.topics.command, { qos: 0 });
+    await Promise.all([
+      this.client.subscribe(this.topics.discoveryRequest, { qos: 0 }),
+      this.client.subscribe(
+        this.topics.command(this.actor.identity().deviceId),
+        { qos: 0 },
+      ),
+    ]);
     if (this.stopped || generation !== this.connectionGeneration) {
       return;
     }

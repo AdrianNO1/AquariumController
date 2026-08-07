@@ -1,13 +1,14 @@
 # AquariumController remaining-work plan
 
-Updated: 2026-08-02
+Updated: 2026-08-06
 
 Purpose: execution record and handoff plan. R0-R14 repository implementation is
-complete, including firmware 5.0.6, correlated requests, bounded per-device lanes,
-latest-only routine PWM coalescing, and device-local failure handling. The
-current branch still needs protected CI, merge, default-branch validation, image
-publication, and immutable digest selection. Production migration, ESP32
-flashing, and Pi validation remain external.
+complete, including firmware 6.0.0, strict per-device JSON MQTT, bounded
+per-device lanes, latest-only routine PWM coalescing, and device-local failure
+handling. Legacy topics are passive discovery only; every pre-v6 device requires USB. The
+current branch still needs protected CI, merge, default-branch validation,
+image publication, and immutable digest selection. Fleet flashing and physical
+firmware-6 validation remain external.
 
 Exact counts, commit IDs, and image digests later in this document are
 historical pre-4.1 evidence unless explicitly described as current. They must
@@ -34,10 +35,11 @@ Repository work is complete only when the only remaining actions are:
 2. Confirm the exposed credential was revoked, have GitHub Support purge the
    unreachable historical object/cached view, resolve its open alert as
    `revoked`, and keep secret scanning and push protection enabled.
-3. Flash and identify firmware 5.0.6 on every production ESP32, then complete a
+3. Flash and identify firmware 6.0.0 on every production ESP32, then complete a
    controlled hardware/failover soak.
 4. Configure the Pi's production MQTT/database/archive/backup paths and
-   credentials outside the repository.
+   credentials outside the repository. The shared broker authenticates
+   `aquarium/v1/#` while retaining anonymous access to other topic namespaces.
 5. Preserve the legacy installation and an immutable JSON snapshot, repeat the
    importer dry-run on the Pi, record the newly calculated fingerprint, review
    the complete report, and commit only that exact snapshot into new storage
@@ -74,7 +76,7 @@ Every delegated task must follow these rules:
 - Treat legacy Python/templates and historical files under `.old/**` as
   read-only. The user explicitly promoted
   `.old/slaveCode/ESP32Code/ESP32Code.ino` into the refactor and authorized the
-  firmware 5.0.6 reliability changes. Do not flash hardware from repository
+  firmware 6.0.0 reliability/protocol changes. Do not flash hardware from repository
   implementation tasks.
 - Never read or modify `.env` files. Document variables by name and ask the
   operator to set values.
@@ -759,7 +761,7 @@ Acceptance (completed):
 - Old-firmware behavior is pinned by compatibility fixtures; corrected 4.1.0
   behavior is pinned separately and compiled from the real sketch.
 - Old/unexpected firmware is visible but excluded from actuator work until the
-  operator flashes the current 5.0.6 release.
+  operator flashes the current 6.0.0 release.
 
 ### R8 — Real pinned-Mosquitto integration suite
 
@@ -1026,7 +1028,7 @@ Six CI validation jobs:
    namespace-safety assertion.
 4. `browser`: install pinned Chromium, build/start full stack, Playwright + axe,
    upload failure artifacts.
-5. `firmware`: compile firmware 5.0.6 with the pinned Arduino toolchain.
+5. `firmware`: compile firmware 6.0.0 with the pinned Arduino toolchain.
 6. `container`: BuildKit build, local amd64 smoke, ARM64 build/emulation smoke,
    Compose health, non-root/read-only/volume checks.
 
@@ -1128,7 +1130,7 @@ Create `docs/readiness-report.md` containing:
 Execution status:
 
 1. R0-R14 repository implementation is complete on the current branch.
-2. Firmware 5.0.6 and focused transport/scheduler/compiler evidence pass locally.
+2. Firmware 6.0.0 and focused transport/scheduler/compiler evidence pass locally.
 3. The pre-4.1 baseline historically passed real-Mosquitto 5/5, Playwright
    18/18 in three retry-free runs, 97 files/638 unit tests, 82 files/571
    critical tests, and protected PR/default-branch validation.
@@ -1171,7 +1173,7 @@ npm run test:critical
 npm run test:integration
 npm run test:e2e
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:5.0.6 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.0 .
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory>
 npm exec -- tsx apps/controller/src/infrastructure/import/legacy-import-cli.ts --source <explicit-directory> --commit --state-db <explicit-state.db>
 npm run storage -- backup --state-db <existing-state.db> --events-db <existing-events.db> --destination <backup-parent-directory>

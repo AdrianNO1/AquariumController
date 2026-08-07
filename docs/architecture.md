@@ -3,8 +3,8 @@
 Status: implemented architecture, updated 2026-08-02. The protected evidence
 for source `886ed05be89a1abed8e076d91ce2802f5d5668dd` and its published digest is a
 historical pre-4.1 baseline recorded in the
-[readiness report](readiness-report.md). The current firmware 5.0.6 and
-per-device-lane branch requires its own protected CI run, merge, and immutable
+[readiness report](readiness-report.md). The current firmware 6.0.0 and
+structured-protocol branch requires its own protected CI run, merge, and immutable
 image selection. Physical ESP flashing, Raspberry Pi deployment,
 production-data migration, and production configuration remain operator-run
 release steps.
@@ -21,7 +21,7 @@ The dashboard is local-network software with no SEO or server-rendering need,
 while the MQTT queue, five-second refresh, daily jobs, state revision, and
 shutdown sequence need one predictable owner. The controller must not be
 horizontally scaled: per-device command queues, schedules, and state revisions
-need one predictable owner. Firmware 5.0.6 request identifiers allow bounded
+need one predictable owner. Firmware 6.0.0 request identifiers allow bounded
 concurrency inside that owner without making multiple controller processes
 safe.
 
@@ -153,6 +153,8 @@ substitute.
 | `AQUARIUM_ALERT_WEBHOOK_AUTH_HEADER_VALUE`         | unset                         | Secret value; must be non-empty, single-line, paired with the name, and supplied only through operator-managed configuration.                          |
 | `AQUARIUM_MQTT_ENABLED`                            | `false`                       | Exact string `true` or `false`. No broker client exists while false.                                                                                   |
 | `AQUARIUM_MQTT_BROKER_URL`                         | required when MQTT is enabled | Absolute `mqtt://` or `mqtts://` URL. Development/test require a loopback host.                                                                        |
+| `AQUARIUM_MQTT_USERNAME`                           | unset                         | Must be paired with `AQUARIUM_MQTT_PASSWORD`; both are required for production MQTT. Broker URL userinfo is rejected.                                  |
+| `AQUARIUM_MQTT_PASSWORD`                           | unset                         | Must be paired with `AQUARIUM_MQTT_USERNAME`; supply it through operator-managed configuration, never Git.                                             |
 | `AQUARIUM_MQTT_TOPIC_NAMESPACE`                    | required when MQTT is enabled | `test` or `production`. Development/test require `test`; production requires `production`.                                                             |
 | `AQUARIUM_MQTT_RESPONSE_TIMEOUT_MS`                | `5000`                        | Integer 100-60,000. Timeout produces an explicit unknown outcome, never a blind retry.                                                                 |
 | `AQUARIUM_MQTT_DISCOVERY_INTERVAL_MS`              | `60000`                       | Integer 1,000-3,600,000 and, when MQTT is enabled, shorter than the stale threshold.                                                                   |
@@ -175,36 +177,40 @@ the application:
 - MQTT 3.1.1, QoS 0, non-retained messages.
 - The ESP32 uses plaintext MQTT and supports either an explicit username/
   password pair or an intentionally anonymous listener. It does not support
-  `mqtts://`. Production must therefore use an authenticated plaintext listener
-  restricted to the trusted aquarium LAN unless a future TLS firmware is
-  implemented and physically validated.
-- Production topics are `aquarium/command`, `aquarium/announce`, and
-  `aquarium/response`; development and test clients may use only
-  `test/aquarium/*`.
-- Semicolon-separated batches use response indexes scoped to the batch and at
-  most three commands per physical device.
-- Each command batch is one MQTT publication of at most 5,120 UTF-8 bytes. The
+  `mqtts://`. The shared broker authenticates `aquarium/v1/#` while retaining
+  anonymous access outside that namespace for a non-aquarium legacy client.
+  Its plaintext listener is restricted to the trusted LAN.
+- Production protocol-v1 topics are
+  `aquarium/v1/discovery/request` and
+  `aquarium/v1/devices/<device-id>/{command,announce,response}`. Development
+  and test clients use only the equivalent `test/aquarium/*` hierarchy.
+- Strict JSON requests carry a protocol version, target device ID, request ID,
+  and at most three typed commands. Responses echo those identities and the
+  accepted values for each indexed result.
+- Each command request is one MQTT publication of at most 5,120 UTF-8 bytes. The
   firmware's 6,144-byte PubSubClient buffer leaves room for MQTT framing and
-  topic overhead without an application-level chunk protocol.
+  topic overhead without an application-level chunk protocol. The production
+  broker and controller reject inbound packets/payloads above 8,192 bytes.
 - The active firmware's 4096-byte C-string schedule buffer makes 4095 UTF-8
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `5.0.6` is the current release, while firmware `5.0.0` and newer is
-  controller-compatible. A supported older release remains online with an
-  update available. Firmware below `5.0.0` remains visible but is marked
-  `firmware_unsupported`, excluded from actuator work, and shown with a
-  USB-bootstrap message in the frontend.
+- Firmware `6.0.0` is the current release and the controller accepts only the
+  6.x protocol family. Newer unknown major versions are observed but not
+  commanded until compatibility is reviewed. Compatible legacy announcements
+  remain visible but all older firmware is marked `firmware_unsupported` and
+  excluded from actuator, configuration, schedule, and time-sync work.
+  No command, including OTA, is sent to firmware below 6. Those devices require
+  a one-time USB bootstrap; passive discovery exists only to show them as
+  unsupported until they are replaced.
 
-Firmware 5.0 accepts
-`request:<requestId>|<semicolon-separated commands>` and echoes the request ID
-in its structured response. The transport therefore maintains one FIFO lane
-per ESP, permits one response-waiting operation per ESP, and runs at most sixteen
-device lanes concurrently by default. Interactive configuration and override
-work is selected before queued background schedule, refresh, and time-sync
-work. Responses are routed by request ID and then checked against the expected
-device and local command index, so delayed or out-of-order responses cannot
-settle a newer operation.
+The transport maintains one FIFO lane per ESP, permits one response-waiting
+operation per ESP, and runs at most sixteen device lanes concurrently by
+default. Interactive configuration and override work is selected before queued
+background schedule, refresh, and time-sync work. Responses are routed by
+per-device topic and request ID, then checked against the expected device,
+command kind, local command index, and echoed accepted values. Delayed,
+misrouted, or out-of-order responses therefore cannot settle a newer operation.
 
 Firmware updates use the same discovery registry and correlated MQTT command
 lane. The controller sends an approved local HTTP URL, exact byte count, and
@@ -233,7 +239,7 @@ malformed, empty, or otherwise invalid response is attributable to that device
 and quarantines it as a protocol fault.
 
 The five-second host refresh and 120-second firmware overwrite are safety
-behavior. Firmware 5.0.6 uses rollover-safe elapsed-time expiry and invalidates
+behavior. Firmware 6.0.0 uses rollover-safe elapsed-time expiry and invalidates
 its scheduled-output cache after override expiry, PWM reattachment, and
 schedule replacement. The command wire continues to carry normalized 0-255 duty
 values. Firmware scales each value into the configured 1-16-bit LEDC range, and
@@ -280,7 +286,7 @@ that the saved schedule was lost, and lets the controller restore it. If the
 repair-attempt counter cannot be persisted, firmware refuses to format. The
 legacy unauthenticated bare MQTT `clear` command no longer erases fleet EEPROM.
 
-Independent fake tests pin these actuator semantics. Firmware 5.0.6 passes the
+Independent fake tests pin these actuator semantics. Firmware 6.0.0 passes the
 pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and PubSubClient
 2.8 build at 1,167,865 bytes of flash and 53,112 bytes of global RAM. Its
 single-message transport was physically verified at the 5,120-byte limit over
@@ -289,7 +295,7 @@ external release action.
 
 ## Unknown actuator outcomes and reconciliation
 
-Firmware 5.0.6 response IDs prevent stale-response misattribution, but a failure
+Firmware 6.0.0 response IDs prevent stale-response misattribution, but a failure
 after QoS 0 publication still cannot prove whether the addressed ESP applied
 the command. The controller therefore never retries that ambiguous operation
 as though it were safely unsent. It persists the operation as terminal
@@ -632,7 +638,7 @@ Executable CI separates failure domains into six validation jobs:
 - `browser`: pinned Chromium, production builds, Playwright/axe, and
   failure-only trace/screenshot/video artifacts;
 - `firmware`: cached pinned Arduino/ESP32 toolchain compilation of firmware
-  5.0.6;
+  6.0.0;
 - `container`: amd64 Compose health/restart/hardening plus an emulated ARM64
   HTTP/SQLite integrity smoke.
 
@@ -687,7 +693,7 @@ hex digest, so a mutable tag such as `latest` can never become the selected
 artifact. Docker rejects an invalid digest before starting the service. The
 template also requires an HTTP bind address/port, production
 broker URL, exact MQTT confirmation, and four host storage directories. It does
-not create an anonymous production broker or infer a database path. The image
+not create or reconfigure the separately managed broker or infer a database path. The image
 runs as UID/GID 1000 with all capabilities dropped, `no-new-privileges`, a
 read-only root filesystem, and explicit state/events/archive/backup mounts.
 The optional webhook URL, destination key, timeout, authentication header name,

@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import type { ControllerSnapshot } from "@aquarium/contracts";
-import { espCommandResponseSchema } from "@aquarium/esp-protocol";
+import {
+  espCommandRequestSchema,
+  espCommandResponseSchema,
+} from "@aquarium/esp-protocol";
 import {
   startFakeEspControlServer,
   startFakeEspLauncher,
@@ -233,7 +236,7 @@ class RunningProductionE2eStack implements ProductionE2eStack {
       () =>
         this.#broker
           .publications()
-          .filter(({ topic }) => topic === "test/aquarium/announce").length >=
+          .filter(({ topic }) => topic.endsWith("/announce")).length >=
         fakeDevices.length,
       "both fake ESP devices to announce after broker restart",
       15_000,
@@ -264,8 +267,20 @@ class RunningProductionE2eStack implements ProductionE2eStack {
 
   public async restartFakeDevices(): Promise<void> {
     this.assertRunning();
+    const priorAnnouncementCount = this.#broker
+      .publications()
+      .filter(({ topic }) => topic.endsWith("/announce")).length;
     await this.stopFakeDevices();
     await this.resumeFakeDevices();
+    await waitUntil(
+      () =>
+        this.#broker
+          .publications()
+          .filter(({ topic }) => topic.endsWith("/announce")).length >=
+        priorAnnouncementCount + fakeDevices.length,
+      "both restarted fake ESP actors to publish fresh announcements",
+      snapshotWaitTimeoutMs,
+    );
   }
 
   public setFakeResponseFaults(
@@ -716,17 +731,25 @@ export function countCompletedScheduledPwmExchanges(
   const requestIds = new Set<string>();
   const responseIds = new Set<string>();
   for (const publication of publications) {
-    if (publication.topic === "test/aquarium/command") {
-      const request = correlatedRequest(publication.payload);
-      if (
-        request !== null &&
-        scheduledPwmCommandPattern.test(request.command)
-      ) {
-        requestIds.add(request.id);
+    if (publication.topic.endsWith("/command")) {
+      try {
+        const request = espCommandRequestSchema.safeParse(
+          JSON.parse(publication.payload) as object,
+        );
+        if (
+          request.success &&
+          request.data.commands.some(
+            (command) => command.kind === "set_pwm" && command.overwrite,
+          )
+        ) {
+          requestIds.add(request.data.requestId);
+        }
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error;
       }
       continue;
     }
-    if (publication.topic !== "test/aquarium/response") {
+    if (!publication.topic.endsWith("/response")) {
       continue;
     }
     try {
@@ -744,21 +767,6 @@ export function countCompletedScheduledPwmExchanges(
   }
   return [...requestIds].filter((requestId) => responseIds.has(requestId))
     .length;
-}
-
-const scheduledPwmCommandPattern = /^[^;\s]+ s \d{1,2} \d{1,3} 1$/u;
-
-function correlatedRequest(
-  payload: string,
-): { readonly id: string; readonly command: string } | null {
-  const prefix = "request:";
-  const separator = payload.indexOf("|");
-  if (!payload.startsWith(prefix) || separator <= prefix.length) {
-    return null;
-  }
-  const id = payload.slice(prefix.length, separator);
-  const command = payload.slice(separator + 1);
-  return id.length > 0 && command.length > 0 ? { id, command } : null;
 }
 
 async function reserveLoopbackPort(): Promise<number> {
