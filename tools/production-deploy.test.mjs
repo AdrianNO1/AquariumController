@@ -122,3 +122,22 @@ test("backs up the verified currently running release before an upgrade", () => 
   );
   assert.doesNotMatch(script, /release_commit|image_digest/);
 });
+
+test("deployment scripts read the root-owned production configuration through sudo", () => {
+  for (const fileName of [
+    "pi-backup-production.sh",
+    "pi-deploy-production.sh",
+    "pi-verify-production.sh",
+  ]) {
+    const script = readFileSync(
+      new URL(`../deployment/${fileName}`, import.meta.url),
+      "utf8",
+    );
+    assert.match(script, /sudo -n test -r "\$\{configuration_file\}"/);
+    assert.match(
+      script,
+      /source <\(sudo -n cat -- "\$\{configuration_file\}"\)/,
+    );
+    assert.doesNotMatch(script, /source "\$\{configuration_file\}"/);
+  }
+});

@@ -16,7 +16,7 @@ readonly configuration_file=/etc/aquarium-controller/production.conf
   exit 1
 }
 
-test -r "${configuration_file}"
+sudo -n test -r "${configuration_file}"
 systemctl is-active --quiet docker.service
 systemctl is-enabled --quiet docker.service
 systemctl is-active --quiet mosquitto.service
@@ -39,7 +39,7 @@ test -z "$(git -C "${checkout}" status --porcelain)"
 
 set -a
 # shellcheck disable=SC1090
-source "${configuration_file}"
+source <(sudo -n cat -- "${configuration_file}")
 set +a
 export COMPOSE_DISABLE_ENV_FILE=1
 unset AQUARIUM_ALERT_WEBHOOK_URL AQUARIUM_ALERT_WEBHOOK_KEY

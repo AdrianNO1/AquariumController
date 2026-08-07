@@ -6,10 +6,10 @@ readonly checkout=/home/adrian/AquariumController-v2
 readonly configuration_file=/etc/aquarium-controller/production.conf
 readonly script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-test -r "${configuration_file}"
+sudo -n test -r "${configuration_file}"
 set -a
 # shellcheck disable=SC1090
-source "${configuration_file}"
+source <(sudo -n cat -- "${configuration_file}")
 set +a
 export COMPOSE_DISABLE_ENV_FILE=1
 unset AQUARIUM_ALERT_WEBHOOK_URL AQUARIUM_ALERT_WEBHOOK_KEY
