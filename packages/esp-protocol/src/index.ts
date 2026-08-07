@@ -121,10 +121,18 @@ const currentAnnouncementSchema = z.strictObject({
   protocolVersion: z.literal(ESP_MQTT_PROTOCOL_VERSION),
   ...announcementFields,
 });
+const normalizedLegacyAnnouncementSchema = z.strictObject({
+  protocolVersion: z.literal(0),
+  ...announcementFields,
+});
 const legacyAnnouncementSchema = z.strictObject(announcementFields);
 
 export const espAnnouncementSchema = z
-  .union([currentAnnouncementSchema, legacyAnnouncementSchema])
+  .union([
+    currentAnnouncementSchema,
+    normalizedLegacyAnnouncementSchema,
+    legacyAnnouncementSchema,
+  ])
   .transform((announcement) =>
     "protocolVersion" in announcement
       ? announcement

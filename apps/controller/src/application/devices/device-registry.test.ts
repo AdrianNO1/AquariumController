@@ -8,6 +8,7 @@ import {
 } from "@aquarium/contracts";
 import {
   CURRENT_ESP_FIRMWARE_VERSION,
+  espAnnouncementSchema,
   type EspAnnouncement,
 } from "@aquarium/esp-protocol";
 import type { Kysely } from "kysely";
@@ -270,9 +271,12 @@ describe("persistent device registry", () => {
   it("marks firmware below 6.0.0 unsupported until supported firmware announces", async () => {
     const database = await openTestDatabase();
     const registry = createRegistry(database);
+    const normalizedLegacyAnnouncement = espAnnouncementSchema.parse({
+      ...announcement({ version: "3.2w" }),
+    });
 
     await registry.handleAnnouncement({
-      announcement: announcement({ version: "3.2w" }),
+      announcement: normalizedLegacyAnnouncement,
       receivedAtMs: 10_000,
     });
     expect(await readDevice(database)).toMatchObject({

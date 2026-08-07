@@ -112,6 +112,7 @@ describe("ESP MQTT protocol", () => {
   it("normalizes passive legacy announcements but requires v1 on device topics", () => {
     const legacy = espAnnouncementSchema.parse(baseAnnouncement);
     expect(legacy.protocolVersion).toBe(0);
+    expect(espAnnouncementSchema.parse(legacy)).toEqual(legacy);
     expect(
       espAnnouncementSchema.safeParse({
         ...baseAnnouncement,
