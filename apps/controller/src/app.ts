@@ -110,8 +110,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
           imgSrc: ["'self'", "data:"],
           scriptSrc: ["'self'"],
           styleSrc: ["'self'"],
+          upgradeInsecureRequests: null,
         },
       },
+      strictTransportSecurity: false,
     });
   }
 

@@ -731,6 +731,47 @@ describe("MappingProfilesDialog", () => {
       }),
     ).toBeNull();
   });
+
+  it("uses an accepted save revision for another profile before refreshed props arrive", async () => {
+    const revisions: number[] = [];
+    server.use(
+      http.put(
+        "http://localhost/api/mapping-profiles/:profileId",
+        async ({ request }) => {
+          const body = (await request.json()) as {
+            readonly expectedRevision: number;
+          };
+          revisions.push(body.expectedRevision);
+          return HttpResponse.json({
+            changed: false,
+            revision: body.expectedRevision + 1,
+            event: null,
+          });
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    renderDialog({ refresh: vi.fn() });
+
+    const name = screen.getByRole("textbox", { name: "Profile name" });
+    await user.clear(name);
+    await user.type(name, "Updated main rack");
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
+    await waitFor(() => expect(revisions).toEqual([8]));
+
+    const newProfile = screen.getByRole("button", { name: "New profile" });
+    await waitFor(() =>
+      expect((newProfile as HTMLButtonElement).disabled).toBe(false),
+    );
+    await user.click(newProfile);
+    await user.type(
+      screen.getByRole("textbox", { name: "Profile name" }),
+      "Immediate second profile",
+    );
+    await user.click(screen.getByRole("button", { name: "Save profile" }));
+
+    await waitFor(() => expect(revisions).toEqual([8, 9]));
+  });
 });
 
 function renderDialog(overrides: Partial<MappingProfilesDialogProps> = {}) {
