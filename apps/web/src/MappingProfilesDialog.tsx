@@ -17,6 +17,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { deleteMappingProfile, replaceMappingProfile } from "./api.js";
+import { createClientId } from "./client-id.js";
 import {
   configurationErrorMessage,
   currentRevisionFromError,
@@ -1146,7 +1147,7 @@ function createHiddenIdentifier(
 ): string {
   let id: string;
   do {
-    id = `${prefix}-${globalThis.crypto.randomUUID()}`;
+    id = createClientId(prefix);
   } while (existingIds.has(id));
   return id;
 }

@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { replaceControlAreas } from "./api.js";
+import { createClientId } from "./client-id.js";
 import {
   configurationErrorMessage,
   currentRevisionFromError,
@@ -88,7 +89,7 @@ export function AreaManagementDialog({
     setDrafts((current) => [
       ...current,
       {
-        key: `new-area-${crypto.randomUUID()}`,
+        key: createClientId("new-area"),
         slug: null,
         typeKey: null,
         label,
