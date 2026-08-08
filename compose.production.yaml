@@ -26,6 +26,11 @@ services:
         host_ip: ${AQUARIUM_HTTP_BIND_ADDRESS:?Set AQUARIUM_HTTP_BIND_ADDRESS explicitly}
         published: ${AQUARIUM_HTTP_PORT:?Set AQUARIUM_HTTP_PORT explicitly}
         protocol: tcp
+      - name: http-legacy
+        target: 3001
+        host_ip: ${AQUARIUM_HTTP_BIND_ADDRESS:?Set AQUARIUM_HTTP_BIND_ADDRESS explicitly}
+        published: 2389
+        protocol: tcp
     environment:
       - NODE_ENV=production
       - AQUARIUM_RUNTIME_MODE=production

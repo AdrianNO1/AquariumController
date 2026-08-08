@@ -66,13 +66,16 @@ test("combined schedule, exact point time, channel color, and schedule multiplie
   // not, so 12:03 proves the operator can retain an exact minute.
   await page.getByLabel("Accent blue selected point local time").fill("12:03");
   await page.getByLabel("Accent blue selected point output").fill("35");
-  await page.getByRole("button", { name: "Apply point" }).click();
   await expect(page.getByLabel("Accent blue schedule points")).toContainText(
     "12:03 · 35%",
   );
 
   const multiplier = page.getByLabel("Lights schedule multiplier");
   await multiplier.fill("72");
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(multiplier).toHaveValue("80");
+  await page.getByRole("button", { name: "Redo" }).click();
+  await expect(multiplier).toHaveValue("72");
   await page.getByRole("button", { name: "Save configuration" }).click();
 
   settled = await stack.waitForSettled();
@@ -524,7 +527,6 @@ test("a stale combined schedule draft cannot overwrite newer controller state", 
   await page
     .getByLabel(`${channelBefore.name} selected point output`)
     .fill("10");
-  await page.getByRole("button", { name: "Apply point" }).click();
 
   const currentSnapshot = await stack.fetchSnapshot();
   const competingEdit = await fetch(

@@ -207,6 +207,35 @@ describe("FirmwareUpdateService", () => {
     });
   });
 
+  it("defers devices discovered after an immediate fleet request until their outputs are off", async () => {
+    const database = await createDatabase();
+    const operations = new RecordingFirmwareOperations(database);
+    const service = createService(database, operations);
+
+    await service.requestFleetUpdate({
+      expectedRevision: 0,
+      mode: "immediate",
+      transitionSeconds: 7,
+    });
+    await service.drain();
+    await seedDevice(database, {
+      id: "late-running-device",
+      firmwareVersion: "6.0.1",
+      outputsOff: false,
+    });
+    await service.signalDeviceAnnouncement("late-running-device");
+
+    await expect(
+      readUpdate(database, "late-running-device"),
+    ).resolves.toMatchObject({
+      mode: "when_off",
+      transition_seconds: 7,
+      status: "waiting_for_off",
+    });
+    expect(operations.requests).toEqual([]);
+
+  });
+
   it("requires USB for firmware 5 in both fleet and per-device requests", async () => {
     const database = await createDatabase();
     await seedDevice(database, {

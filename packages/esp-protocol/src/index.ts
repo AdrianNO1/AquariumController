@@ -13,16 +13,17 @@ import { legacyScheduleDocumentSchema } from "./schedule.js";
 export * from "./limits.js";
 export * from "./schedule.js";
 
-export const CURRENT_ESP_FIRMWARE_VERSION = "6.0.1";
+export const CURRENT_ESP_FIRMWARE_VERSION = "6.0.2";
 export const MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION = "6.0.0";
 export const MINIMUM_PULL_OTA_FIRMWARE_VERSION =
   MINIMUM_SUPPORTED_ESP_FIRMWARE_VERSION;
+export const MINIMUM_SMOOTH_OTA_FIRMWARE_VERSION = "6.0.2";
 export const ESP_MQTT_PROTOCOL_VERSION = 1 as const;
 export const ESP_FIRMWARE_ARTIFACT = {
   version: CURRENT_ESP_FIRMWARE_VERSION,
-  fileName: "ESP32Code-6.0.1.bin",
-  sizeBytes: 1_192_720,
-  sha256: "55868c9dab1d70792b46c8dc1aabe46d647e6dd1f676ca451cf2d9984f72c5c2",
+  fileName: "ESP32Code-6.0.2.bin",
+  sizeBytes: 1_196_416,
+  sha256: "e76cf82f407ce51e9a6d442332481945dad93e72716432f8b32916ddbd51e041",
 } as const;
 
 export function isCurrentEspFirmwareVersion(version: string): boolean {
@@ -36,6 +37,17 @@ export function isSupportedEspFirmwareVersion(version: string): boolean {
 
 export function supportsPullOta(version: string): boolean {
   return isSupportedEspFirmwareVersion(version);
+}
+
+export function supportsSmoothOta(version: string): boolean {
+  if (!isSupportedEspFirmwareVersion(version)) return false;
+  const match = /^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$/u.exec(
+    version,
+  );
+  if (match?.groups === undefined) return false;
+  const minor = Number(match.groups.minor);
+  const patch = Number(match.groups.patch);
+  return minor > 0 || (minor === 0 && patch >= 2);
 }
 
 export const espDeviceIdSchema = z
@@ -115,6 +127,7 @@ const announcementFields = {
   ota: espOtaStatusSchema.optional(),
   lastError: espFirmwareDiagnosticSchema.optional(),
   diagnosticStorageHealthy: z.boolean().optional(),
+  startupHold: z.boolean().optional(),
 } as const;
 
 const currentAnnouncementSchema = z.strictObject({
@@ -196,6 +209,10 @@ const analogReadCommandSchema = z.strictObject({
   kind: z.literal("analog_read"),
   pin: z.number().int().min(0).max(63),
 });
+const releaseStartupHoldCommandSchema = z.strictObject({
+  index: commandIndexSchema,
+  kind: z.literal("release_startup_hold"),
+});
 const firmwareUpdateCommandSchema = z.strictObject({
   index: commandIndexSchema,
   kind: z.literal("firmware_update"),
@@ -205,6 +222,7 @@ const firmwareUpdateCommandSchema = z.strictObject({
   }),
   size: z.number().int().min(100_000).max(1_900_000),
   sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  transitionSeconds: z.number().int().min(0).max(60).optional(),
 });
 
 export const espCommandSchema = z.discriminatedUnion("kind", [
@@ -214,6 +232,7 @@ export const espCommandSchema = z.discriminatedUnion("kind", [
   scheduleCommandSchema,
   syncTimeCommandSchema,
   analogReadCommandSchema,
+  releaseStartupHoldCommandSchema,
   firmwareUpdateCommandSchema,
 ]);
 export type EspCommand = z.infer<typeof espCommandSchema>;
@@ -281,8 +300,13 @@ const successfulResultSchemas = [
   }),
   z.strictObject({
     ...resultBase,
+    kind: z.literal("release_startup_hold"),
+  }),
+  z.strictObject({
+    ...resultBase,
     kind: z.literal("firmware_update"),
     status: z.literal("accepted"),
+    transitionSeconds: z.number().int().min(0).max(60).optional(),
   }),
 ] as const;
 
@@ -299,6 +323,7 @@ const failedResultSchema = z.strictObject({
     "schedule",
     "sync_time",
     "analog_read",
+    "release_startup_hold",
     "firmware_update",
   ]),
   ok: z.literal(false),
@@ -396,8 +421,14 @@ export function matchEspCommandResult(
       return result.kind === command.kind && result.pin === command.pin
         ? { status: "succeeded", analogValue: result.value }
         : mismatchedResult(command.kind);
+    case "release_startup_hold":
+      return result.kind === command.kind
+        ? { status: "succeeded", analogValue: null }
+        : mismatchedResult(command.kind);
     case "firmware_update":
-      return result.kind === command.kind && result.status === "accepted"
+      return result.kind === command.kind &&
+        result.status === "accepted" &&
+        result.transitionSeconds === command.transitionSeconds
         ? { status: "succeeded", analogValue: null }
         : mismatchedResult(command.kind);
   }

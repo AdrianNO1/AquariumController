@@ -578,6 +578,7 @@ describe("operations route", () => {
         fleetPolicy: {
           targetVersion: "6.0.1",
           mode: "when_off",
+          transitionSeconds: 5,
           requestedAt: "2026-07-13T09:55:00.000Z",
         },
       },
@@ -615,7 +616,7 @@ describe("operations route", () => {
 
     await waitFor(() =>
       expect(requestBodies).toEqual([
-        { expectedRevision: 8, mode: "immediate" },
+        { expectedRevision: 8, mode: "immediate", transitionSeconds: 5 },
       ]),
     );
     expect(refresh).toHaveBeenCalledOnce();

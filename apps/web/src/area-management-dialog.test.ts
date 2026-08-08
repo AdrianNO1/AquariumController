@@ -102,18 +102,27 @@ describe("area management dialog", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("prevents deleting an area that still owns channels or outputs", () => {
+  it("allows an area deletion to include its unreferenced channels and outputs", async () => {
+    const user = userEvent.setup();
     renderDialog(vi.fn(), vi.fn());
 
     const lightsRow = screen
       .getByDisplayValue("Lights")
       .closest<HTMLElement>(".area-management-row");
     if (lightsRow === null) throw new Error("Missing Lights area row");
+    const deleteButton = within(lightsRow).getByRole("button", {
+      name: "Delete",
+    });
+    expect(deleteButton.hasAttribute("disabled")).toBe(false);
+    expect(deleteButton.getAttribute("title")).toBe(
+      "Delete area with 1 channel and 0 outputs",
+    );
     expect(
-      within(lightsRow)
-        .getByRole("button", { name: "Delete" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
+      screen.getByText(/removes its unreferenced channels, schedules, and outputs atomically/u),
+    ).toBeTruthy();
+
+    await user.click(deleteButton);
+    expect(screen.queryByDisplayValue("Lights")).toBeNull();
   });
 });
 

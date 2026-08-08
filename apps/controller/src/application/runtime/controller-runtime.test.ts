@@ -111,9 +111,24 @@ describe("controller MQTT runtime composition", () => {
         status: "online",
         version: CURRENT_ESP_FIRMWARE_VERSION,
         scheduleHash: "0",
+        startupHold: true,
       }),
     );
 
+    await vi.waitFor(() =>
+      expect(publishedCommand(client, "A1 release")).toBeDefined(),
+    );
+    const releaseCallIndex = executeDeviceOperation.mock.calls.findIndex(
+      ([, request]) => request.kind === "release_startup_hold",
+    );
+    const releaseOperation =
+      executeDeviceOperation.mock.results[releaseCallIndex]?.value;
+    if (releaseOperation === undefined) {
+      throw new Error("Expected the startup-hold release operation");
+    }
+    expect(publishedCommand(client, "A1 sync 10")).toBeUndefined();
+    emitCommandResponse(client, "A1 release", "A1", "released");
+    await releaseOperation;
     await vi.waitFor(() =>
       expect(signalDeviceAvailable).toHaveBeenCalledTimes(1),
     );
@@ -517,7 +532,12 @@ function publishedCommand(
   command: string,
 ): PublishRecord | undefined {
   const [deviceId, operation, argument] = command.split(" ");
-  const expectedKind = operation === "p" ? "ping" : "sync_time";
+  const expectedKind =
+    operation === "p"
+      ? "ping"
+      : operation === "release"
+        ? "release_startup_hold"
+        : "sync_time";
   return client.publishes.find(({ topic, payload }) => {
     if (topic !== `test/aquarium/v1/devices/${deviceId}/command`) return false;
     try {
@@ -525,7 +545,8 @@ function publishedCommand(
       return request.commands.some(
         (candidate) =>
           candidate.kind === expectedKind &&
-          (candidate.kind !== "sync_time" ||
+          (expectedKind !== "sync_time" ||
+            candidate.kind !== "sync_time" ||
             candidate.epochSeconds === Number(argument)),
       );
     } catch {
@@ -557,7 +578,13 @@ function emitCommandResponse(
           ok: true,
           epochSeconds: Number(response),
         }
-      : { index: requestCommand.index, kind: "ping", ok: true };
+      : requestCommand.kind === "release_startup_hold"
+        ? {
+            index: requestCommand.index,
+            kind: "release_startup_hold",
+            ok: true,
+          }
+        : { index: requestCommand.index, kind: "ping", ok: true };
   client.emitText(
     `test/aquarium/v1/devices/${deviceId}/response`,
     JSON.stringify({

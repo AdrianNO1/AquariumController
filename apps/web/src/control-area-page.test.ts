@@ -205,7 +205,6 @@ describe("control area routes", () => {
       screen.getByLabelText("Main light selected point local time"),
       { target: { value: "00:07" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
     fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
       target: { value: "75" },
     });
@@ -237,6 +236,36 @@ describe("control area routes", () => {
       throttlePercentage: 75,
     });
     expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it("undoes and redoes schedule and multiplier edits in one history", async () => {
+    const user = renderControlArea(
+      "/control/lights",
+      controllerState(createTestControlSnapshot(), vi.fn()),
+    );
+    const output = screen.getByLabelText(
+      "Main light selected point output",
+    ) as HTMLInputElement;
+    const multiplier = screen.getByLabelText(
+      "Lights schedule multiplier",
+    ) as HTMLInputElement;
+
+    fireEvent.change(output, { target: { value: "65" } });
+    fireEvent.blur(output);
+    fireEvent.change(multiplier, { target: { value: "75" } });
+    fireEvent.blur(multiplier);
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(output.value).toBe("65");
+    expect(multiplier.value).toBe("80");
+
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(output.value).toBe("0");
+
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    expect(output.value).toBe("65");
+    await user.click(screen.getByRole("button", { name: "Redo" }));
+    expect(multiplier.value).toBe("75");
   });
 
   it("protects unsaved configuration from route changes and page unloads", async () => {
@@ -284,7 +313,7 @@ describe("control area routes", () => {
 
   it("keeps revision-protected configuration saves available while live state is stale", async () => {
     const snapshot = createTestControlSnapshot();
-    const user = renderControlArea(
+    renderControlArea(
       "/control/lights",
       controllerState(snapshot, vi.fn(), true),
     );
@@ -293,7 +322,6 @@ describe("control area routes", () => {
       screen.getByLabelText("Main light selected point local time"),
       { target: { value: "00:07" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
 
     expect(
       (
@@ -334,7 +362,7 @@ describe("control area routes", () => {
     vi.setSystemTime(new Date("2026-07-13T10:00:00.000Z"));
     try {
       const snapshot = createTestControlSnapshot();
-      const user = renderControlArea(
+      renderControlArea(
         "/control/lights",
         controllerState({ ...snapshot, overrides: [] }, vi.fn()),
       );
@@ -347,7 +375,6 @@ describe("control area routes", () => {
         screen.getByLabelText("Main light selected point output"),
         { target: { value: "100" } },
       );
-      await user.click(screen.getByRole("button", { name: "Apply point" }));
 
       await waitFor(() => expect(overrideSlider).toHaveProperty("value", "53"));
     } finally {
@@ -368,7 +395,6 @@ describe("control area routes", () => {
       screen.getByLabelText("Main light selected point output"),
       { target: { value: "65" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
     fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
       target: { value: "73" },
     });
@@ -500,7 +526,6 @@ describe("control area routes", () => {
       screen.getByLabelText("Main light selected point output"),
       { target: { value: "65" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
     fireEvent.change(screen.getByLabelText("Lights schedule multiplier"), {
       target: { value: "73" },
     });
@@ -547,7 +572,6 @@ describe("control area routes", () => {
       screen.getByLabelText("Main light selected point output"),
       { target: { value: "65" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
 
     const advanced: ControllerSnapshot = {
       ...snapshot,

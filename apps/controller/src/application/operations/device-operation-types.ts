@@ -118,6 +118,10 @@ const analogReadRequestSchema = z.strictObject({
   pin: z.number().int().min(0).max(63),
 });
 
+const releaseStartupHoldRequestSchema = z.strictObject({
+  kind: z.literal("release_startup_hold"),
+});
+
 const firmwareUpdateRequestSchema = z.strictObject({
   kind: z.literal("firmware_update"),
   version: z
@@ -134,6 +138,7 @@ const firmwareUpdateRequestSchema = z.strictObject({
     }),
   size: z.number().int().min(100_000).max(1_900_000),
   sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  transitionSeconds: z.number().int().min(0).max(60).optional(),
 });
 
 export const deviceOperationRequestSchema = z.discriminatedUnion("kind", [
@@ -143,6 +148,7 @@ export const deviceOperationRequestSchema = z.discriminatedUnion("kind", [
   scheduleRequestSchema,
   syncTimeRequestSchema,
   analogReadRequestSchema,
+  releaseStartupHoldRequestSchema,
   firmwareUpdateRequestSchema,
 ]);
 

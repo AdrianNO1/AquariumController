@@ -1,4 +1,5 @@
 import type { FirmwareUpdateMode } from "@aquarium/contracts";
+import { useState } from "react";
 
 import { ModalBackdrop } from "./ModalBackdrop.js";
 import { ModalDialog } from "./ModalDialog.js";
@@ -17,9 +18,20 @@ export function FirmwareUpdateDialog({
   readonly targets?: readonly FirmwareUpdateTarget[];
   readonly immediateDanger?: boolean;
   readonly pending: boolean;
-  readonly onConfirm: (mode: FirmwareUpdateMode) => void;
+  readonly onConfirm: (
+    mode: FirmwareUpdateMode,
+    transitionSeconds: number,
+  ) => void;
   readonly onClose: () => void;
 }): React.JSX.Element {
+  const [transitionSeconds, setTransitionSeconds] = useState("5");
+  const parsedTransitionSeconds = Number(transitionSeconds);
+  const transitionIsValid =
+    transitionSeconds.length > 0 &&
+    Number.isInteger(parsedTransitionSeconds) &&
+    parsedTransitionSeconds >= 0 &&
+    parsedTransitionSeconds <= 60;
+
   return (
     <ModalBackdrop onClose={onClose}>
       <ModalDialog
@@ -77,11 +89,33 @@ export function FirmwareUpdateDialog({
               )}
             </section>
           )}
+          <label className="field firmware-transition-field">
+            <span>Restart transition</span>
+            <span className="input-with-suffix">
+              <input
+                aria-label="OTA restart transition seconds"
+                type="number"
+                min="0"
+                max="60"
+                step="1"
+                value={transitionSeconds}
+                disabled={pending}
+                onChange={(event) =>
+                  setTransitionSeconds(event.currentTarget.value)
+                }
+              />
+              <span>seconds</span>
+            </span>
+            <small>
+              Fade outputs down before restart and back up afterward. Zero
+              disables the transition.
+            </small>
+          </label>
           <button
             className={immediateDanger ? "danger-button" : "primary-button"}
             type="button"
-            disabled={pending}
-            onClick={() => onConfirm("immediate")}
+            disabled={pending || !transitionIsValid}
+            onClick={() => onConfirm("immediate", parsedTransitionSeconds)}
           >
             Update now (restart)
             <small>Download immediately, then restart.</small>
@@ -89,8 +123,8 @@ export function FirmwareUpdateDialog({
           <button
             className="secondary-button"
             type="button"
-            disabled={pending}
-            onClick={() => onConfirm("when_off")}
+            disabled={pending || !transitionIsValid}
+            onClick={() => onConfirm("when_off", parsedTransitionSeconds)}
           >
             Update when outputs are off
             <small>Wait until every reported pin is at 0%, then update.</small>

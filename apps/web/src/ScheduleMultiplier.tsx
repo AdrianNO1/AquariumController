@@ -1,4 +1,5 @@
 import type { Throttle } from "@aquarium/contracts";
+import { useRef } from "react";
 
 export interface ScheduleMultiplierProps {
   readonly areaLabel: string;
@@ -9,6 +10,7 @@ export interface ScheduleMultiplierProps {
   readonly conflictRevision: number | null;
   readonly conflictReady: boolean;
   readonly onAcceptConflict: () => void;
+  readonly onHistoryCheckpoint?: () => void;
   readonly onChange: (value: number) => void;
 }
 
@@ -21,8 +23,11 @@ export function ScheduleMultiplier({
   conflictRevision,
   conflictReady,
   onAcceptConflict,
+  onHistoryCheckpoint,
   onChange,
 }: ScheduleMultiplierProps): React.JSX.Element {
+  const checkpointedRef = useRef(false);
+
   return (
     <section
       className="schedule-multiplier"
@@ -56,7 +61,25 @@ export function ScheduleMultiplier({
               step="1"
               value={value}
               disabled={disabled}
-              onChange={(event) => onChange(event.currentTarget.valueAsNumber)}
+              onChange={(event) => {
+                if (!checkpointedRef.current) {
+                  checkpointedRef.current = true;
+                  onHistoryCheckpoint?.();
+                }
+                onChange(event.currentTarget.valueAsNumber);
+              }}
+              onPointerUp={() => {
+                checkpointedRef.current = false;
+              }}
+              onPointerCancel={() => {
+                checkpointedRef.current = false;
+              }}
+              onKeyUp={() => {
+                checkpointedRef.current = false;
+              }}
+              onBlur={() => {
+                checkpointedRef.current = false;
+              }}
             />
           </label>
           {conflictRevision === null ? null : (

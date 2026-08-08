@@ -84,6 +84,7 @@ export interface FirmwareUpdateRequestsTable {
   device_id: string;
   target_version: string;
   mode: FirmwareUpdateMode;
+  transition_seconds: InsertOptional<number>;
   status: FirmwareUpdateStatus;
   progress: InsertOptional<number>;
   operation_id: OptionalNullable<string>;
@@ -96,6 +97,7 @@ export interface FirmwareRolloutPolicyTable {
   singleton_key: 1;
   target_version: string;
   mode: FirmwareUpdateMode;
+  transition_seconds: InsertOptional<number>;
   enabled: SqliteBoolean;
   requested_at_ms: number;
   updated_at_ms: number;

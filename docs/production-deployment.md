@@ -9,7 +9,7 @@ commands are run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
 [Pi production handoff checklist](pi-production-handoff.md). The current
-firmware 6.0.1 and structured per-device protocol are the release candidate. Every
+firmware 6.0.2 and structured per-device protocol are the release candidate. Every
 future candidate must still pass protected CI, merge, publish, and receive a
 newly selected immutable digest before its deployment. Historical pre-4.1
 validation is recorded in the
@@ -169,6 +169,12 @@ export AQUARIUM_ARCHIVE_HOST_DIRECTORY=/srv/aquarium/archives
 export AQUARIUM_BACKUP_HOST_DIRECTORY=/srv/aquarium/backups
 ```
 
+Production publishes the same controller on both the canonical configured port
+(`3001` above) and the fixed legacy compatibility port `2389`. Keep firmware,
+health checks, and new bookmarks on the canonical port; `2389` exists only so
+older local links continue to work. Both publications use the same explicit LAN
+bind address and must remain restricted to the trusted aquarium network.
+
 The historical GHCR package was public and anonymously pullable when its
 evidence was recorded. Verify the newly selected digest the same way; the Pi
 preflight must prove it can pull that exact digest. If package visibility later
@@ -247,6 +253,8 @@ configure the firewall for a `192.168.1.0/24` aquarium LAN:
 
 ```sh
 sudo ufw allow from 192.168.1.0/24 to any port 1883 proto tcp
+sudo ufw allow from 192.168.1.0/24 to any port 2389 proto tcp
+sudo ufw allow from 192.168.1.0/24 to any port 3001 proto tcp
 sudo ufw allow in on br-aquarium from 172.30.188.0/29 \
   to 172.30.188.1 port 1883 proto tcp
 ```
@@ -697,7 +705,7 @@ docker compose --file compose.production.yaml exec -T controller \
   --events-db /var/lib/aquarium/events/events.db
 ```
 
-Confirm the snapshot and UI, firmware version 6.0.1 for every ESP32, MQTT
+Confirm the snapshot and UI, firmware version 6.0.2 for every ESP32, MQTT
 discovery, schedules, overrides, alert history, notification destination,
 storage-health readings, and the latest verified backup. Confirm a
 nonresponding ESP becomes offline without stopping healthy device lanes, and

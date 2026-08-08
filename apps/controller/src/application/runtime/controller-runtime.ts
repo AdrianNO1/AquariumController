@@ -195,7 +195,8 @@ export class ControllerMqttRuntime
             if (update.reason === "connection_recovered") {
               this.#timeSync.signalDeviceUnavailable(update.deviceId);
             }
-            await this.#firmwareUpdates.signalDeviceAnnouncement(
+            const firmwareHoldingOutputs =
+              await this.#firmwareUpdates.signalDeviceAnnouncement(
               update.deviceId,
             );
             if (this.#stopping) {
@@ -203,6 +204,19 @@ export class ControllerMqttRuntime
             }
             if (!(await this.#registry.isCommandEligible(update.deviceId))) {
               return;
+            }
+            if (
+              event.announcement.startupHold === true &&
+              !firmwareHoldingOutputs
+            ) {
+              const release = await this.#deviceOperations.executeDeviceOperation(
+                update.deviceId,
+                { kind: "release_startup_hold" },
+                { priority: "interactive" },
+              );
+              if (release.status !== "succeeded") {
+                return;
+              }
             }
             this.#deviceOperations.signalDeviceAvailable(update.deviceId);
             this.#outputRefresh.signalDeviceAvailable(update.deviceId);

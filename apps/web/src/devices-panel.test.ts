@@ -371,6 +371,7 @@ describe("DevicesPanel", () => {
           firmwareUpdate: {
             targetVersion: firmware.currentVersion,
             mode: "immediate",
+            transitionSeconds: 5,
             status: "succeeded",
             progress: 100,
             operationId: "operation-firmware-online",
@@ -423,6 +424,7 @@ describe("DevicesPanel", () => {
       expect(requestBody).toEqual({
         expectedRevision: 8,
         mode: "when_off",
+        transitionSeconds: 5,
       }),
     );
     expect(refresh).toHaveBeenCalledOnce();

@@ -43,11 +43,16 @@ export type FakeEspCommand =
     }
   | {
       readonly index: number;
+      readonly kind: "release_startup_hold";
+    }
+  | {
+      readonly index: number;
       readonly kind: "firmware_update";
       readonly version: string;
       readonly url: string;
       readonly size: number;
       readonly sha256: string;
+      readonly transitionSeconds?: number;
     };
 
 export interface FakeEspCommandRequest {
@@ -97,9 +102,15 @@ export type FakeEspCommandResult =
     })
   | ({
       readonly index: number;
+      readonly kind: "release_startup_hold";
+      readonly ok: true;
+    })
+  | ({
+      readonly index: number;
       readonly kind: "firmware_update";
       readonly ok: true;
       readonly status: "accepted";
+      readonly transitionSeconds?: number;
     });
 
 export function parseFakeEspDiscoveryRequest(payload: string): boolean {
@@ -229,6 +240,10 @@ function parseCommand(value: JsonValue, expectedIndex: number): FakeEspCommand |
         integerInRange(value.pin, 0, 63)
         ? { index: expectedIndex, kind: value.kind, pin: value.pin }
         : undefined;
+    case "release_startup_hold":
+      return hasExactKeys(value, ["index", "kind"])
+        ? { index: expectedIndex, kind: value.kind }
+        : undefined;
     case "firmware_update":
       return hasExactKeys(value, [
         "index",
@@ -237,6 +252,9 @@ function parseCommand(value: JsonValue, expectedIndex: number): FakeEspCommand |
         "url",
         "size",
         "sha256",
+        ...(value.transitionSeconds === undefined
+          ? []
+          : ["transitionSeconds"]),
       ]) &&
         typeof value.version === "string" &&
         /^[A-Za-z0-9._-]{1,31}$/u.test(value.version) &&
@@ -246,7 +264,9 @@ function parseCommand(value: JsonValue, expectedIndex: number): FakeEspCommand |
         !/\s/u.test(value.url) &&
         integerInRange(value.size, 100_000, 1_900_000) &&
         typeof value.sha256 === "string" &&
-        /^[a-f0-9]{64}$/u.test(value.sha256)
+        /^[a-f0-9]{64}$/u.test(value.sha256) &&
+        (value.transitionSeconds === undefined ||
+          integerInRange(value.transitionSeconds, 0, 60))
         ? {
             index: expectedIndex,
             kind: value.kind,
@@ -254,6 +274,9 @@ function parseCommand(value: JsonValue, expectedIndex: number): FakeEspCommand |
             url: value.url,
             size: value.size,
             sha256: value.sha256,
+            ...(value.transitionSeconds === undefined
+              ? {}
+              : { transitionSeconds: value.transitionSeconds }),
           }
         : undefined;
   }

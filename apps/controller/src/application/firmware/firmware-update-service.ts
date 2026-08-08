@@ -8,6 +8,7 @@ import {
   CURRENT_ESP_FIRMWARE_VERSION,
   MINIMUM_PULL_OTA_FIRMWARE_VERSION,
   supportsPullOta,
+  supportsSmoothOta,
 } from "@aquarium/esp-protocol";
 import { sql, type Kysely, type Selectable } from "kysely";
 
@@ -104,6 +105,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
   ): Promise<MutationResult> {
     this.#assertAccepting();
     const parsed = requestFirmwareUpdateSchema.parse(request);
+    const transitionSeconds = parsed.transitionSeconds ?? 5;
     const nowMs = this.#now();
     const committed = await commitConditionalStateChange(
       this.#database,
@@ -120,6 +122,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
           schemaVersion: 1,
           targetVersion: this.#artifact.version,
           mode: parsed.mode,
+          transitionSeconds,
         }),
         payloadSchemaVersion: 1,
       },
@@ -139,6 +142,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
             device_id: device.id,
             target_version: this.#artifact.version,
             mode: parsed.mode,
+            transition_seconds: transitionSeconds,
             status,
             progress: 0,
             operation_id: null,
@@ -153,6 +157,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
             conflict.column("device_id").doUpdateSet({
               target_version: this.#artifact.version,
               mode: parsed.mode,
+              transition_seconds: transitionSeconds,
               status,
               progress: 0,
               operation_id: null,
@@ -195,6 +200,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
   ): Promise<MutationResult> {
     this.#assertAccepting();
     const parsed = requestFirmwareUpdateSchema.parse(request);
+    const transitionSeconds = parsed.transitionSeconds ?? 5;
     const nowMs = this.#now();
     const committed = await commitConditionalStateChange(
       this.#database,
@@ -211,6 +217,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
           schemaVersion: 1,
           targetVersion: this.#artifact.version,
           mode: parsed.mode,
+          transitionSeconds,
         }),
         payloadSchemaVersion: 1,
       },
@@ -220,6 +227,7 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
           .set({
             target_version: this.#artifact.version,
             mode: parsed.mode,
+            transition_seconds: transitionSeconds,
             enabled: 1,
             requested_at_ms: nowMs,
             updated_at_ms: nowMs,
@@ -233,13 +241,15 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
           .execute();
         for (const device of devices) {
           if (device.firmware_version === this.#artifact.version) continue;
-          const status = initialStatus(device, parsed.mode, this.#artifact.version);
+          const mode = fleetDeviceMode(device, parsed.mode);
+          const status = initialStatus(device, mode, this.#artifact.version);
           await transaction
             .insertInto("firmware_update_requests")
             .values({
               device_id: device.id,
               target_version: this.#artifact.version,
-              mode: parsed.mode,
+              mode,
+              transition_seconds: transitionSeconds,
               status,
               progress: 0,
               operation_id: null,
@@ -253,7 +263,8 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
             .onConflict((conflict) =>
               conflict.column("device_id").doUpdateSet({
                 target_version: this.#artifact.version,
-                mode: parsed.mode,
+                mode,
+                transition_seconds: transitionSeconds,
                 status,
                 progress: 0,
                 operation_id: null,
@@ -290,12 +301,18 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
     });
   }
 
-  signalDeviceAnnouncement(deviceId: string): Promise<void> {
-    if (!this.#accepting) return Promise.resolve();
-    return this.#schedule(async () => {
+  async signalDeviceAnnouncement(deviceId: string): Promise<boolean> {
+    if (!this.#accepting) return false;
+    await this.#schedule(async () => {
       await this.#ensureFleetRequest(deviceId);
       await this.#reconcileDevice(deviceId);
     });
+    const record = await this.#readDeviceUpdate(deviceId);
+    return (
+      record !== null &&
+      record.update.target_version === this.#artifact.version &&
+      !["failed", "usb_required", "succeeded"].includes(record.update.status)
+    );
   }
 
   #schedule(task: () => Promise<void>): Promise<void> {
@@ -355,7 +372,8 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
     if (existing?.target_version === this.#artifact.version) return;
 
     const nowMs = this.#now();
-    const status = initialStatus(device, policy.mode, this.#artifact.version);
+    const mode = policy.mode === "immediate" ? "when_off" : policy.mode;
+    const status = initialStatus(device, mode, this.#artifact.version);
     await commitConditionalStateChange(
       this.#database,
       {
@@ -370,7 +388,8 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
         payloadJson: JSON.stringify({
           schemaVersion: 1,
           targetVersion: this.#artifact.version,
-          mode: policy.mode,
+          mode,
+          transitionSeconds: policy.transition_seconds,
         }),
         payloadSchemaVersion: 1,
       },
@@ -380,7 +399,8 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
           .values({
             device_id: device.id,
             target_version: this.#artifact.version,
-            mode: policy.mode,
+            mode,
+            transition_seconds: policy.transition_seconds,
             status,
             progress: 0,
             operation_id: null,
@@ -504,6 +524,9 @@ export class FirmwareUpdateService implements FirmwareUpdateCommandService {
         url: this.#artifact.url,
         size: this.#artifact.sizeBytes,
         sha256: this.#artifact.sha256,
+        ...(supportsSmoothOta(device.firmware_version)
+          ? { transitionSeconds: update.transition_seconds }
+          : {}),
       },
       { priority: "interactive" },
     );
@@ -640,6 +663,16 @@ function initialStatus(
     return "waiting_for_off";
   }
   return "pending";
+}
+
+function fleetDeviceMode(
+  device: DeviceRow,
+  requestedMode: RequestFirmwareUpdate["mode"],
+): RequestFirmwareUpdate["mode"] {
+  return requestedMode === "immediate" &&
+    !["online", "error"].includes(device.status)
+    ? "when_off"
+    : requestedMode;
 }
 
 function parseReportedOta(source: string | null): {

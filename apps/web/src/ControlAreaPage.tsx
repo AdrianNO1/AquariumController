@@ -38,6 +38,22 @@ interface ConfigurationSaveResult {
   readonly savedMultiplierValue: number | null;
 }
 
+interface ConfigurationHistorySnapshot {
+  readonly pointsByChannel: CombinedScheduleDraftPoints;
+  readonly multiplier: number;
+}
+
+interface ConfigurationHistory {
+  readonly past: readonly ConfigurationHistorySnapshot[];
+  readonly future: readonly ConfigurationHistorySnapshot[];
+}
+
+const EMPTY_CONFIGURATION_HISTORY: ConfigurationHistory = {
+  past: [],
+  future: [],
+};
+const CONFIGURATION_HISTORY_LIMIT = 100;
+
 export function ControlAreaPage({
   slug,
 }: ControlAreaPageProps): React.JSX.Element {
@@ -161,6 +177,10 @@ function LoadedControlArea({
   );
   const [draftPointsByChannel, setDraftPointsByChannel] =
     useState<CombinedScheduleDraftPoints>({});
+  const [configurationHistory, setConfigurationHistory] =
+    useState<ConfigurationHistory>(EMPTY_CONFIGURATION_HISTORY);
+  const draftPointsRef = useRef<CombinedScheduleDraftPoints>({});
+  const multiplierValueRef = useRef(authoritativeMultiplier);
   const [overrideBusy, setOverrideBusy] = useState(false);
   const [pendingOverrideRevision, setPendingOverrideRevision] = useState<
     number | null
@@ -173,6 +193,9 @@ function LoadedControlArea({
     multiplierState,
     authoritativeMultiplier,
   );
+  useEffect(() => {
+    multiplierValueRef.current = multiplier.value;
+  }, [multiplier.value]);
   const {
     revision: pinnedSaveRevision,
     pin: pinSaveRevision,
@@ -304,6 +327,7 @@ function LoadedControlArea({
         }));
       }
       setMultiplierConflictRevision(null);
+      setConfigurationHistory(EMPTY_CONFIGURATION_HISTORY);
       resetSaveRevision();
       refresh();
     },
@@ -351,6 +375,67 @@ function LoadedControlArea({
     });
   };
 
+  const checkpointConfigurationHistory = useCallback((): void => {
+    const snapshot: ConfigurationHistorySnapshot = {
+      pointsByChannel: draftPointsRef.current,
+      multiplier: multiplierValueRef.current,
+    };
+    setConfigurationHistory((current) => ({
+      past: [...current.past, snapshot].slice(-CONFIGURATION_HISTORY_LIMIT),
+      future: [],
+    }));
+  }, []);
+
+  const applyHistorySnapshot = (
+    snapshot: ConfigurationHistorySnapshot,
+  ): void => {
+    draftPointsRef.current = snapshot.pointsByChannel;
+    setDraftPointsByChannel(snapshot.pointsByChannel);
+    editorRef.current?.restoreDraftPoints(
+      snapshot.pointsByChannel,
+      model.revision,
+    );
+    multiplierValueRef.current = snapshot.multiplier;
+    setMultiplierState((current) => ({
+      ...synchronizeMultiplierDraft(current, authoritativeMultiplier),
+      value: snapshot.multiplier,
+      acceptedValue: null,
+    }));
+    if (snapshot.multiplier === authoritativeMultiplier) {
+      setMultiplierConflictRevision(null);
+    }
+  };
+
+  const undoConfigurationChange = (): void => {
+    const target = configurationHistory.past.at(-1);
+    if (target === undefined) return;
+    const current: ConfigurationHistorySnapshot = {
+      pointsByChannel: draftPointsRef.current,
+      multiplier: multiplierValueRef.current,
+    };
+    applyHistorySnapshot(target);
+    setConfigurationHistory({
+      past: configurationHistory.past.slice(0, -1),
+      future: [current, ...configurationHistory.future],
+    });
+  };
+
+  const redoConfigurationChange = (): void => {
+    const target = configurationHistory.future[0];
+    if (target === undefined) return;
+    const current: ConfigurationHistorySnapshot = {
+      pointsByChannel: draftPointsRef.current,
+      multiplier: multiplierValueRef.current,
+    };
+    applyHistorySnapshot(target);
+    setConfigurationHistory({
+      past: [...configurationHistory.past, current].slice(
+        -CONFIGURATION_HISTORY_LIMIT,
+      ),
+      future: configurationHistory.future.slice(1),
+    });
+  };
+
   return (
     <main className="page control-page">
       <div className="control-area-heading">
@@ -375,6 +460,22 @@ function LoadedControlArea({
             onClick={() => setChannelsOpen(true)}
           >
             Manage channels
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={configurationHistory.past.length === 0 || saving}
+            onClick={undoConfigurationChange}
+          >
+            Undo
+          </button>
+          <button
+            className="secondary-button"
+            type="button"
+            disabled={configurationHistory.future.length === 0 || saving}
+            onClick={redoConfigurationChange}
+          >
+            Redo
           </button>
           <button
             className="primary-button"
@@ -429,8 +530,12 @@ function LoadedControlArea({
             replaceControlAreaScheduleConfiguration(model.area.slug, request)
           }
           onDirtyChange={setScheduleDirty}
-          onDraftPointsChange={setDraftPointsByChannel}
+          onDraftPointsChange={(points) => {
+            draftPointsRef.current = points;
+            setDraftPointsByChannel(points);
+          }}
           onSavingChange={setScheduleSaving}
+          onHistoryCheckpoint={checkpointConfigurationHistory}
           onAcceptRevisionConflict={() => {
             if (multiplierDirty) {
               rebaseSaveRevision();
@@ -459,7 +564,9 @@ function LoadedControlArea({
             rebaseSaveRevision();
             setMultiplierConflictRevision(null);
           }}
+          onHistoryCheckpoint={checkpointConfigurationHistory}
           onChange={(value) => {
+            multiplierValueRef.current = value;
             pinSaveRevision();
             if (value === authoritativeMultiplier) {
               setMultiplierConflictRevision(null);

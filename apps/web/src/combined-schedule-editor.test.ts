@@ -111,7 +111,6 @@ describe("CombinedScheduleEditor", () => {
       screen.getByLabelText("Main light selected point output"),
       { target: { value: "65" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
 
     let pendingSave: Promise<number> | undefined;
     act(() => {
@@ -123,7 +122,6 @@ describe("CombinedScheduleEditor", () => {
       screen.getByLabelText("Main light selected point output"),
       { target: { value: "72" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
 
     await act(async () => {
       resolveFirstSave?.({ revision: 9 });
@@ -171,14 +169,12 @@ describe("CombinedScheduleEditor", () => {
           return { revision: request.expectedRevision + 1 };
         },
       });
-    const user = userEvent.setup();
     const rendered = render(renderEditor(8));
 
     fireEvent.change(
       screen.getByLabelText("Main light selected point output"),
       { target: { value: "65" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
     rendered.rerender(renderEditor(12));
 
     await act(async () => {
@@ -228,7 +224,6 @@ describe("CombinedScheduleEditor", () => {
       screen.getByLabelText("Main light selected point output"),
       { target: { value: "65" } },
     );
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
     await user.click(
       within(screen.getByRole("list", { name: "Schedule channels" })).getByRole(
         "button",
@@ -238,7 +233,6 @@ describe("CombinedScheduleEditor", () => {
     fireEvent.change(screen.getByLabelText("UV light selected point output"), {
       target: { value: "45" },
     });
-    await user.click(screen.getByRole("button", { name: "Apply point" }));
 
     await act(async () => {
       await expect(editorRef.current?.saveAll(8)).rejects.toThrow(

@@ -76,10 +76,17 @@ export function DevicesPanel({
     mutationFn: ({
       deviceId,
       mode,
+      transitionSeconds,
     }: {
       readonly deviceId: string;
       readonly mode: FirmwareUpdateMode;
-    }) => requestDeviceFirmwareUpdate(deviceId, { expectedRevision, mode }),
+      readonly transitionSeconds: number;
+    }) =>
+      requestDeviceFirmwareUpdate(deviceId, {
+        expectedRevision,
+        mode,
+        transitionSeconds,
+      }),
     onSuccess: () => {
       setUpdateDevice(null);
       refresh();
@@ -309,8 +316,12 @@ export function DevicesPanel({
           subject={updateDevice.desired.name}
           targetVersion={firmware.currentVersion}
           pending={firmwareMutation.isPending}
-          onConfirm={(mode) =>
-            firmwareMutation.mutate({ deviceId: updateDevice.id, mode })
+          onConfirm={(mode, transitionSeconds) =>
+            firmwareMutation.mutate({
+              deviceId: updateDevice.id,
+              mode,
+              transitionSeconds,
+            })
           }
           onClose={() => setUpdateDevice(null)}
         />

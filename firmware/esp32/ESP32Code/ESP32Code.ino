@@ -49,7 +49,7 @@ const int ALLOWED_ANALOG_INPUT_PINS[] = {32, 33, 34, 35, 36, 39};
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "6.0.1";
+const char* VERSION = "6.0.2";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset
@@ -69,6 +69,8 @@ const unsigned int OTA_MAX_PROBATION_BOOTS = 3;
 const size_t OTA_DOWNLOAD_BUFFER_SIZE = 4096;
 const size_t OTA_MINIMUM_IMAGE_SIZE = 100000;
 const size_t OTA_MAXIMUM_IMAGE_SIZE = 1900000;
+const unsigned long STARTUP_OUTPUT_HOLD_MS = 15000;
+const unsigned int MAX_OTA_TRANSITION_SECONDS = 60;
 
 std::atomic<bool> ntpTimeAvailable(false);
 bool ntpSyncInProgress = false;
@@ -123,6 +125,7 @@ struct OtaRequest {
     String url;
     String sha256;
     size_t size;
+    unsigned int transitionSeconds;
     bool pending;
 };
 
@@ -133,7 +136,7 @@ struct OtaReport {
     unsigned int progress;
 };
 
-OtaRequest otaRequest = {"", "", "", 0, false};
+OtaRequest otaRequest = {"", "", "", 0, 0, false};
 OtaReport otaReport = {"idle", "", "", 0};
 bool otaProbationActive = false;
 unsigned long otaProbationStartedAt = 0;
@@ -148,6 +151,13 @@ unsigned long wifiDisconnectedAt = 0;
 
 bool attachedPins[64] = {false};
 int lastPinValues[64] = {0};
+int startupFadeTargets[64] = {0};
+bool startupFadeTargetKnown[64] = {false};
+bool startupOutputHoldActive = false;
+unsigned long startupOutputHoldStartedAt = 0;
+bool startupFadeActive = false;
+unsigned long startupFadeStartedAt = 0;
+unsigned long startupFadeDurationMs = 0;
 
 String deviceName;
 String deviceId;
@@ -1600,6 +1610,7 @@ void clearOtaMarker(Preferences& preferences) {
     preferences.remove("otaTarget");
     preferences.remove("otaPrev");
     preferences.remove("otaBoots");
+    preferences.remove("otaFade");
 }
 
 bool selectPreviousOtaPartition() {
@@ -1654,6 +1665,14 @@ void initializeOtaBootState() {
     }
 
     const String targetVersion = preferences.getString("otaTarget", "");
+    const uint32_t storedTransitionSeconds =
+        preferences.getUInt("otaFade", 0);
+    const unsigned int transitionSeconds = min(
+        storedTransitionSeconds,
+        static_cast<uint32_t>(MAX_OTA_TRANSITION_SECONDS)
+    );
+    startupFadeDurationMs =
+        static_cast<unsigned long>(transitionSeconds) * 1000UL;
     otaPreviousPartitionSubtype = static_cast<esp_partition_subtype_t>(
         preferences.getUChar(
             "otaPrev",
@@ -1825,6 +1844,68 @@ void publishOtaProgress(const String& status, unsigned int progress) {
     }
 }
 
+void restoreOutputsAfterFailedOta(const int initialValues[MAX_PIN + 1]) {
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        if (!attachedPins[pin]) {
+            continue;
+        }
+        if (ledcWrite(pin, initialValues[pin])) {
+            lastPinValues[pin] = initialValues[pin];
+        }
+    }
+    queueOutputAnnouncement();
+}
+
+bool windDownOutputsForOta(
+    unsigned int transitionSeconds,
+    int initialValues[MAX_PIN + 1]
+) {
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        initialValues[pin] = lastPinValues[pin];
+    }
+    if (transitionSeconds == 0 || allOutputsAreOff()) {
+        return true;
+    }
+    const unsigned long durationMs =
+        static_cast<unsigned long>(transitionSeconds) * 1000UL;
+    const unsigned long startedAt = millis();
+    while (millis() - startedAt < durationMs) {
+        const unsigned long elapsed = millis() - startedAt;
+        for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+            if (!attachedPins[pin] || initialValues[pin] == 0) {
+                continue;
+            }
+            const int value = static_cast<int>(
+                (static_cast<uint64_t>(initialValues[pin]) *
+                 (durationMs - elapsed)) /
+                durationMs
+            );
+            if (value == lastPinValues[pin]) {
+                continue;
+            }
+            if (!ledcWrite(pin, value)) {
+                restoreOutputsAfterFailedOta(initialValues);
+                return false;
+            }
+            lastPinValues[pin] = value;
+        }
+        client.loop();
+        delay(20);
+    }
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        if (!attachedPins[pin] || lastPinValues[pin] == 0) {
+            continue;
+        }
+        if (!ledcWrite(pin, 0)) {
+            restoreOutputsAfterFailedOta(initialValues);
+            return false;
+        }
+        lastPinValues[pin] = 0;
+    }
+    queueOutputAnnouncement();
+    return true;
+}
+
 void performOtaUpdate() {
     otaRequest.pending = false;
     publishOtaProgress("downloading", 0);
@@ -1942,11 +2023,27 @@ void performOtaUpdate() {
         preferences.putString("otaTarget", otaRequest.targetVersion) > 0 &&
         preferences.putUChar("otaPrev", static_cast<uint8_t>(running->subtype)) > 0 &&
         preferences.putUInt("otaBoots", 0) > 0 &&
+        preferences.putUInt("otaFade", otaRequest.transitionSeconds) > 0 &&
         preferences.putBool("otaPending", true) > 0;
     preferences.end();
     if (!markerStored) {
         Update.abort();
         setOtaFailure("probation_marker_write_failed");
+        return;
+    }
+    publishOtaProgress("rebooting", 100);
+    int preRestartValues[MAX_PIN + 1] = {0};
+    if (!windDownOutputsForOta(
+            otaRequest.transitionSeconds,
+            preRestartValues
+        )) {
+        Preferences cleanup;
+        if (cleanup.begin("aquarium", false)) {
+            clearOtaMarker(cleanup);
+            cleanup.end();
+        }
+        Update.abort();
+        setOtaFailure("output_wind_down_failed");
         return;
     }
     if (!Update.end(true)) {
@@ -1955,11 +2052,11 @@ void performOtaUpdate() {
             clearOtaMarker(cleanup);
             cleanup.end();
         }
+        restoreOutputsAfterFailedOta(preRestartValues);
         setOtaFailure("update_finalize_failed_" + String(Update.getError()));
         return;
     }
 
-    publishOtaProgress("rebooting", 100);
     Serial.println("OTA image installed; rebooting into probation");
     Serial.flush();
     delay(250);
@@ -2042,6 +2139,69 @@ bool allOutputsAreOff() {
 	return true;
 }
 
+int startupFadeValue(int pin, int targetValue) {
+    if (!startupFadeActive || startupFadeDurationMs == 0) {
+        return targetValue;
+    }
+    startupFadeTargets[pin] = targetValue;
+    startupFadeTargetKnown[pin] = true;
+    const unsigned long elapsed = min(
+        millis() - startupFadeStartedAt,
+        startupFadeDurationMs
+    );
+    return static_cast<int>(
+        (static_cast<uint64_t>(targetValue) * elapsed) /
+        startupFadeDurationMs
+    );
+}
+
+void serviceStartupOutputTransition() {
+    if (startupOutputHoldActive &&
+        millis() - startupOutputHoldStartedAt >= STARTUP_OUTPUT_HOLD_MS) {
+        startupOutputHoldActive = false;
+        telemetryAnnouncementPending = true;
+        Serial.println("Startup output hold expired; resuming local schedule");
+    }
+    if (!startupFadeActive) {
+        return;
+    }
+    const unsigned long elapsed = min(
+        millis() - startupFadeStartedAt,
+        startupFadeDurationMs
+    );
+    bool changed = false;
+    for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
+        if (!attachedPins[pin] || !startupFadeTargetKnown[pin]) {
+            continue;
+        }
+        const int value = static_cast<int>(
+            (static_cast<uint64_t>(startupFadeTargets[pin]) * elapsed) /
+            startupFadeDurationMs
+        );
+        if (value == lastPinValues[pin]) {
+            continue;
+        }
+        if (!ledcWrite(pin, value)) {
+            recordLastError(
+                "pin_write_failed",
+                "error",
+                "LEDC write failed on pin " + String(pin)
+            );
+            continue;
+        }
+        lastPinValues[pin] = value;
+        changed = true;
+        resolveLastErrorForPin("pin_write_failed", pin);
+    }
+    if (changed) {
+        queueOutputAnnouncement();
+    }
+    if (elapsed >= startupFadeDurationMs) {
+        startupFadeActive = false;
+        Serial.println("OTA startup output transition complete");
+    }
+}
+
 String buildPresenceMessage() {
 	JsonDocument doc;
 	doc["protocolVersion"] = MQTT_PROTOCOL_VERSION;
@@ -2056,6 +2216,7 @@ String buildPresenceMessage() {
 	doc["diagnosticStorageHealthy"] =
 		spiffsAvailable && !lastErrorPersistenceFailed;
 	doc["outputsOff"] = allOutputsAreOff();
+	doc["startupHold"] = startupOutputHoldActive;
 	JsonArray outputs = doc["outputs"].to<JsonArray>();
 	for (int pin = MIN_PIN; pin <= MAX_PIN; pin++) {
 		if (!attachedPins[pin]) {
@@ -2270,6 +2431,7 @@ String handleCommand(String command, String args) {
 				response = "E: Invalid pin";
 			} else if (value >= 0 && value <= 255 && (overwrite == 0 || overwrite == 1)) {
 				const int pwmValue = scaleNormalizedPwmValue(value, resolution);
+				const int physicalPwmValue = startupFadeValue(pin, pwmValue);
 				bool newlyAttached = false;
 				if (!attachedPins[pin]) {
 					if (ledcAttach(pin, freq, resolution)) {
@@ -2286,8 +2448,8 @@ String handleCommand(String command, String args) {
 				}
 				if (attachedPins[pin]) {
 					const bool outputStateChanged =
-						newlyAttached || lastPinValues[pin] != pwmValue;
-					if (!ledcWrite(pin, pwmValue)) {
+						newlyAttached || lastPinValues[pin] != physicalPwmValue;
+					if (!ledcWrite(pin, physicalPwmValue)) {
 						if (newlyAttached) {
 							if (ledcDetach(pin)) {
 								attachedPins[pin] = false;
@@ -2309,7 +2471,7 @@ String handleCommand(String command, String args) {
 						);
 						response = "E: LEDC write failed";
 					} else {
-						lastPinValues[pin] = pwmValue;
+						lastPinValues[pin] = physicalPwmValue;
 						if (outputStateChanged) {
 							queueOutputAnnouncement();
 						}
@@ -2335,7 +2497,7 @@ String handleCommand(String command, String args) {
 	}
 	
 	else if (command == "ota") {
-		OtaRequest parsedRequest = {"", "", "", 0, false};
+		OtaRequest parsedRequest = {"", "", "", 0, 0, false};
 		if (!parseOtaArguments(args, parsedRequest)) {
 			response = "E: Invalid OTA request";
 		} else if (otaProbationActive || otaRequest.pending) {
@@ -2351,6 +2513,13 @@ String handleCommand(String command, String args) {
 			);
 			response = "ota_accepted";
 		}
+	}
+
+	else if (command == "release") {
+		startupOutputHoldActive = false;
+		telemetryAnnouncementPending = true;
+		Serial.println("Controller released the startup output hold");
+		response = "released";
 	}
 
 	else if (command == "p" || command == "e") {
@@ -2895,6 +3064,20 @@ void setup() {
 	}
 	client.setKeepAlive(15);
 	client.setCallback(callback);
+
+	if (startupFadeDurationMs > 0) {
+		startupFadeActive = true;
+		startupFadeStartedAt = millis();
+		startupOutputHoldActive = false;
+		Serial.println(
+			"Starting OTA output ramp over " +
+			String(startupFadeDurationMs / 1000UL) + " seconds"
+		);
+	} else {
+		startupOutputHoldActive = true;
+		startupOutputHoldStartedAt = millis();
+		Serial.println("Holding outputs briefly for the controller boot decision");
+	}
 	
 	Serial.println("Setup complete");
 }
@@ -3002,8 +3185,10 @@ void loop() {
 		lastOverwriteCheck = millis();
 	}
 
-	// Process schedule if active
-	if (strlen(currentSchedule) > 0) {
+	serviceStartupOutputTransition();
+
+	// Process schedule if active and the bounded boot hold has been released.
+	if (!startupOutputHoldActive && strlen(currentSchedule) > 0) {
 		unsigned long currentMillis = millis();
 		if (currentMillis - lastScheduleAttachRetry >= SCHEDULE_ATTACH_RETRY_INTERVAL) {
 			lastScheduleAttachRetry = currentMillis;
@@ -3055,19 +3240,21 @@ void loop() {
 							int targetValue = getScheduledValue(links, currentMinute);
 							
 							// Only update if value has changed
-							if (activeChannels[j].currentValue != targetValue) {
+							if (activeChannels[j].currentValue != targetValue ||
+								startupFadeActive) {
 								int pwmValue = (targetValue * ((1 << resolution) - 1)) / 100;
+								int physicalPwmValue = startupFadeValue(pin, pwmValue);
 								Serial.println("Schedule: Setting pin " + String(pin) + " to " + String(pwmValue) + 
 											  " (" + String(targetValue) + "%) at minute " + String(currentMinute) +
 											  " [Type: " + (type == 112 ? "pump" : "light") + "]");
-								if (!ledcWrite(pin, pwmValue)) {
+								if (!ledcWrite(pin, physicalPwmValue)) {
 									if (firstFailedWritePin < 0) {
 										firstFailedWritePin = pin;
 									}
 									failedWriteCount++;
 									break;
 								}
-								lastPinValues[pin] = pwmValue;
+								lastPinValues[pin] = physicalPwmValue;
 								queueOutputAnnouncement();
 								resolveLastErrorForPin("pin_write_failed", pin);
 								auto scheduledPinState = pinStates.find(pin);
@@ -3263,15 +3450,30 @@ bool validateStructuredCommand(JsonObject command, size_t expectedIndex) {
         return jsonObjectHasExactlyFields(command, fields, 3) &&
             command["pin"].is<int>();
     }
+    if (kind == "release_startup_hold") {
+        const char* fields[] = {"index", "kind"};
+        return jsonObjectHasExactlyFields(command, fields, 2);
+    }
     if (kind == "firmware_update") {
-        const char* fields[] = {
+        const bool hasTransition = !command["transitionSeconds"].isNull();
+        const char* legacyFields[] = {
             "index", "kind", "version", "url", "size", "sha256"
         };
-        return jsonObjectHasExactlyFields(command, fields, 6) &&
+        const char* transitionFields[] = {
+            "index", "kind", "version", "url", "size", "sha256",
+            "transitionSeconds"
+        };
+        return (hasTransition
+                ? jsonObjectHasExactlyFields(command, transitionFields, 7)
+                : jsonObjectHasExactlyFields(command, legacyFields, 6)) &&
             command["version"].is<const char*>() &&
             command["url"].is<const char*>() &&
             command["size"].is<unsigned long>() &&
-            command["sha256"].is<const char*>();
+            command["sha256"].is<const char*>() &&
+            (!hasTransition ||
+             (command["transitionSeconds"].is<unsigned int>() &&
+              command["transitionSeconds"].as<unsigned int>() <=
+                  MAX_OTA_TRANSITION_SECONDS));
     }
     return false;
 }
@@ -3341,8 +3543,14 @@ void addStructuredCommandResult(
         result["value"] = separator < 0
             ? 0
             : response.substring(separator + 1).toInt();
+    } else if (kind == "release_startup_hold") {
+        return;
     } else if (kind == "firmware_update") {
         result["status"] = "accepted";
+        if (!command["transitionSeconds"].isNull()) {
+            result["transitionSeconds"] =
+                command["transitionSeconds"].as<unsigned int>();
+        }
     }
 }
 
@@ -3377,12 +3585,21 @@ String executeStructuredCommand(JsonObject command) {
     if (kind == "analog_read") {
         return handleCommand("r", String(command["pin"].as<int>()));
     }
+    if (kind == "release_startup_hold") {
+        return handleCommand("release", "");
+    }
     if (kind == "firmware_update") {
         const String args = command["version"].as<String>() + " " +
             String(command["size"].as<unsigned long>()) + " " +
             command["sha256"].as<String>() + " " +
             command["url"].as<String>();
-        return handleCommand("ota", args);
+        const String response = handleCommand("ota", args);
+        if (!response.startsWith("E:")) {
+            otaRequest.transitionSeconds = command["transitionSeconds"].isNull()
+                ? 0
+                : command["transitionSeconds"].as<unsigned int>();
+        }
+        return response;
     }
     return "E: Invalid command";
 }

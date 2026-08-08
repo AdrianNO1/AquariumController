@@ -73,6 +73,7 @@ export interface CombinedScheduleEditorProps {
   ) => void;
   readonly onSavingChange?: (saving: boolean) => void;
   readonly onAcceptRevisionConflict?: () => void;
+  readonly onHistoryCheckpoint?: () => void;
   /** UTC minute used by deterministic tests and previews. */
   readonly currentMinuteOfDay?: number;
   /** JavaScript local-to-UTC timezone offset used by deterministic tests. */
@@ -87,6 +88,10 @@ export interface CombinedScheduleEditorHandle {
     throttlePercentage?: number,
   ) => Promise<number>;
   readonly discardAll: () => void;
+  readonly restoreDraftPoints: (
+    pointsByChannel: CombinedScheduleDraftPoints,
+    currentRevision: number,
+  ) => void;
 }
 
 export const CombinedScheduleEditor = forwardRef<
@@ -101,6 +106,7 @@ export const CombinedScheduleEditor = forwardRef<
     onDraftPointsChange,
     onSavingChange,
     onAcceptRevisionConflict,
+    onHistoryCheckpoint,
     currentMinuteOfDay: suppliedCurrentMinute,
     timezoneOffsetMinutes: suppliedTimezoneOffset,
   },
@@ -263,6 +269,8 @@ export const CombinedScheduleEditor = forwardRef<
       isSaving,
       saveAll,
       discardAll: () => dispatch({ type: "discard_all" }),
+      restoreDraftPoints: (pointsByChannel, currentRevision) =>
+        dispatch({ type: "restore_points", pointsByChannel, currentRevision }),
     }),
     [dirty, isSaving, saveAll],
   );
@@ -332,6 +340,7 @@ export const CombinedScheduleEditor = forwardRef<
       percentageGrabOffset: point.percentage - plotYToPercentage(coordinate.y),
       captureElement: event.currentTarget,
     };
+    onHistoryCheckpoint?.();
     event.currentTarget.setPointerCapture(event.pointerId);
     dispatch({
       type: "select_point",
@@ -397,6 +406,7 @@ export const CombinedScheduleEditor = forwardRef<
       editorX: null,
       editorY: null,
     };
+    onHistoryCheckpoint?.();
     dispatch({
       type: "add_point",
       channelId: selectedChannel.channel.id,
@@ -699,6 +709,7 @@ export const CombinedScheduleEditor = forwardRef<
                 }
                 onClick={() => {
                   if (selectedPoint === null) return;
+                  onHistoryCheckpoint?.();
                   dispatch({
                     type: "remove_point",
                     channelId: selectedDraft.channelId,
@@ -763,7 +774,7 @@ export const CombinedScheduleEditor = forwardRef<
 
           {addPointMode || selectedPoint === null ? null : (
             <SelectedPointForm
-              key={`${selectedPoint.id}:${selectedPoint.minuteOfDay}:${selectedPoint.percentage}`}
+              key={selectedPoint.id}
               channelName={selectedChannel.channel.name}
               point={{
                 ...selectedPoint,
@@ -780,6 +791,9 @@ export const CombinedScheduleEditor = forwardRef<
                 });
                 setInteractionError(null);
               }}
+              {...(onHistoryCheckpoint === undefined
+                ? {}
+                : { onHistoryCheckpoint })}
             />
           )}
 
@@ -845,6 +859,7 @@ interface SelectedPointFormProps {
   readonly channelName: string;
   readonly point: SchedulePoint;
   readonly onCommit: (minuteOfDay: number, percentage: number) => void;
+  readonly onHistoryCheckpoint?: () => void;
 }
 
 interface NewPointFormProps {
@@ -924,29 +939,55 @@ function SelectedPointForm({
   channelName,
   point,
   onCommit,
+  onHistoryCheckpoint,
 }: SelectedPointFormProps): React.JSX.Element {
   const [time, setTime] = useState(minuteToTime(point.minuteOfDay));
   const [percentage, setPercentage] = useState(String(point.percentage));
   const [error, setError] = useState<string | null>(null);
+  const editingRef = useRef(false);
+  const checkpointedRef = useRef(false);
 
-  function commit(event: React.FormEvent<HTMLFormElement>): void {
-    event.preventDefault();
-    const minuteOfDay = timeToMinute(time);
-    const parsedPercentage = Number(percentage);
+  useEffect(() => {
+    if (editingRef.current) return;
+    setTime(minuteToTime(point.minuteOfDay));
+    setPercentage(String(point.percentage));
+  }, [point.minuteOfDay, point.percentage]);
+
+  function commitDraft(nextTime: string, nextPercentage: string): void {
+    const minuteOfDay = timeToMinute(nextTime);
+    const parsedPercentage = Number(nextPercentage);
     if (minuteOfDay === null || !Number.isFinite(parsedPercentage)) {
-      setError("Enter a complete local time and numeric percentage.");
+      setError(
+        nextTime.length === 0 || nextPercentage.length === 0
+          ? null
+          : "Enter a complete local time and numeric percentage.",
+      );
       return;
     }
     if (parsedPercentage < 0 || parsedPercentage > 100) {
       setError("Output percentage must be between 0 and 100.");
       return;
     }
+    if (!checkpointedRef.current) {
+      checkpointedRef.current = true;
+      onHistoryCheckpoint?.();
+    }
     onCommit(minuteOfDay, parsedPercentage);
     setError(null);
   }
 
   return (
-    <form className="combined-schedule-selected-point-form" onSubmit={commit}>
+    <div
+      className="combined-schedule-selected-point-form"
+      onFocus={() => {
+        editingRef.current = true;
+      }}
+      onBlur={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        editingRef.current = false;
+        checkpointedRef.current = false;
+      }}
+    >
       <label>
         Local time
         <input
@@ -954,7 +995,11 @@ function SelectedPointForm({
           type="time"
           step="60"
           value={time}
-          onChange={(event) => setTime(event.currentTarget.value)}
+          onChange={(event) => {
+            const nextTime = event.currentTarget.value;
+            setTime(nextTime);
+            commitDraft(nextTime, percentage);
+          }}
           required
         />
       </label>
@@ -968,21 +1013,22 @@ function SelectedPointForm({
             max="100"
             step="1"
             value={percentage}
-            onChange={(event) => setPercentage(event.currentTarget.value)}
+            onChange={(event) => {
+              const nextPercentage = event.currentTarget.value;
+              setPercentage(nextPercentage);
+              commitDraft(time, nextPercentage);
+            }}
             required
           />
           <span aria-hidden="true">%</span>
         </span>
       </label>
-      <button className="secondary-button" type="submit">
-        Apply point
-      </button>
       {error === null ? null : (
         <p className="field-error" role="alert">
           {error}
         </p>
       )}
-    </form>
+    </div>
   );
 }
 

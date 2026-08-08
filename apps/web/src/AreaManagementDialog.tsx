@@ -102,14 +102,6 @@ export function AreaManagementDialog({
     setDrafts((current) => current.filter((area) => area.key !== draft.key));
   }
 
-  function areaHasConfiguration(draft: AreaDraft): boolean {
-    if (draft.typeKey === null) return false;
-    return (
-      channels.some((channel) => channel.typeKey === draft.typeKey) ||
-      outputs.some((output) => output.typeKey === draft.typeKey)
-    );
-  }
-
   function requestClose(): void {
     if (dirty) {
       setCloseRequested(true);
@@ -143,7 +135,12 @@ export function AreaManagementDialog({
         <div className="dialog-body">
           <div className="area-management-list">
             {drafts.map((draft) => {
-              const hasConfiguration = areaHasConfiguration(draft);
+              const channelCount = channels.filter(
+                (channel) => channel.typeKey === draft.typeKey,
+              ).length;
+              const outputCount = outputs.filter(
+                (output) => output.typeKey === draft.typeKey,
+              ).length;
               return (
                 <div className="area-management-row" key={draft.key}>
                   <label className="field">
@@ -162,12 +159,7 @@ export function AreaManagementDialog({
                   <button
                     className="danger-button compact-button"
                     type="button"
-                    disabled={hasConfiguration}
-                    title={
-                      hasConfiguration
-                        ? "Remove this area's channels and outputs first"
-                        : "Delete area"
-                    }
+                    title={`Delete area with ${channelCount} channel${channelCount === 1 ? "" : "s"} and ${outputCount} output${outputCount === 1 ? "" : "s"}`}
                     onClick={() => removeArea(draft)}
                   >
                     Delete
@@ -202,8 +194,10 @@ export function AreaManagementDialog({
             </button>
           </div>
           <p className="muted-copy area-forensics-note">
-            Area changes are retained in the audit history. Populated areas must
-            be emptied before deletion.
+            Saving an area deletion also removes its unreferenced channels,
+            schedules, and outputs atomically. Mappings and retained operational
+            history still block deletion and are reported without partial
+            changes.
           </p>
           {save.error === null ? null : (
             <p className="field-error" role="alert">
