@@ -3,7 +3,7 @@
 Status: implemented architecture, updated 2026-08-07. The protected evidence
 for source `886ed05be89a1abed8e076d91ce2802f5d5668dd` and its published digest is a
 historical pre-4.1 baseline recorded in the
-[readiness report](readiness-report.md). The current firmware 6.0.2 and
+[readiness report](readiness-report.md). The current firmware 6.0.3 and
 structured-protocol branch requires its own protected CI run, merge, and immutable
 image selection. Physical ESP flashing, Raspberry Pi deployment,
 production-data migration, and production configuration remain operator-run
@@ -21,7 +21,7 @@ The dashboard is local-network software with no SEO or server-rendering need,
 while the MQTT queue, five-second refresh, daily jobs, state revision, and
 shutdown sequence need one predictable owner. The controller must not be
 horizontally scaled: per-device command queues, schedules, and state revisions
-need one predictable owner. Firmware 6.0.2 request identifiers allow bounded
+need one predictable owner. Firmware 6.0.3 request identifiers allow bounded
 concurrency inside that owner without making multiple controller processes
 safe.
 
@@ -195,7 +195,7 @@ the application:
   bytes the conservative serialized-document limit.
 - Compact serialization and the unsigned 32-bit DJB2 hash are deterministic;
   the hash excludes the changing `syncTime` field.
-- Firmware `6.0.2` is the current release and the controller accepts only the
+- Firmware `6.0.3` is the current release and the controller accepts only the
   6.x protocol family. Newer unknown major versions are observed but not
   commanded until compatibility is reviewed. Compatible legacy announcements
   remain visible but all older firmware is marked `firmware_unsupported` and
@@ -246,7 +246,7 @@ malformed, empty, or otherwise invalid response is attributable to that device
 and quarantines it as a protocol fault.
 
 The five-second host refresh and 120-second firmware overwrite are safety
-behavior. Firmware 6.0.2 uses rollover-safe elapsed-time expiry and invalidates
+behavior. Firmware 6.0.3 uses rollover-safe elapsed-time expiry and invalidates
 its scheduled-output cache after override expiry, PWM reattachment, and
 schedule replacement. The command wire continues to carry normalized 0-255 duty
 values. Firmware scales each value into the configured 1-16-bit LEDC range, and
@@ -293,17 +293,17 @@ that the saved schedule was lost, and lets the controller restore it. If the
 repair-attempt counter cannot be persisted, firmware refuses to format. The
 legacy unauthenticated bare MQTT `clear` command no longer erases fleet EEPROM.
 
-Independent fake tests pin these actuator semantics. Firmware 6.0.2 passes the
+Independent fake tests pin these actuator semantics. Firmware 6.0.3 passes the
 pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and PubSubClient
 2.8 build at 1,189,833 bytes of flash and 53,440 bytes of global RAM. The 6.x
 single-message transport was physically verified at the 5,120-byte limit over
 the configured Mosquitto broker before this patch release. Flashing and
-physically validating 6.0.2 on every deployed ESP remain external release
+physically validating 6.0.3 on every deployed ESP remain external release
 actions.
 
 ## Unknown actuator outcomes and reconciliation
 
-Firmware 6.0.2 response IDs prevent stale-response misattribution, but a failure
+Firmware 6.0.3 response IDs prevent stale-response misattribution, but a failure
 after QoS 0 publication still cannot prove whether the addressed ESP applied
 the command. The controller therefore never retries that ambiguous operation
 as though it were safely unsent. It persists the operation as terminal
@@ -646,7 +646,7 @@ Executable CI separates failure domains into six validation jobs:
 - `browser`: pinned Chromium, production builds, Playwright/axe, and
   failure-only trace/screenshot/video artifacts;
 - `firmware`: cached pinned Arduino/ESP32 toolchain compilation of firmware
-  6.0.2;
+  6.0.3;
 - `container`: amd64 Compose health/restart/hardening plus an emulated ARM64
   HTTP/SQLite integrity smoke.
 

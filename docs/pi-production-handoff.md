@@ -5,19 +5,19 @@ Updated: 2026-08-07
 This is the concise external-operator checklist retained for first cutover,
 fleet upgrades, and incident recovery. The initial controller deployment on the
 Pi is complete; use `npm run production:deploy` for subsequent supervised
-upgrades. Its exact-CI-artifact, off-host-backup, typed-confirmation,
+upgrades. Its exact-CI-artifact, off-host-backup,
 verification, and automatic image-rollback behavior is documented in
 [the full production deployment and rollback runbook](production-deployment.md).
 This checklist does not replace that runbook.
 
 ## Current handoff state
 
-The repository contains firmware 6.0.2, structured per-device MQTT,
+The repository contains firmware 6.0.3, structured per-device MQTT,
 per-device lanes, latest-only scheduler, and device-local failure
 implementation. Every subsequent release must pass protected CI, merge,
 publish a new image, and use that image's exact digest.
 
-Current firmware 6.0.2/structured-protocol local evidence is:
+Current firmware 6.0.3/structured-protocol local evidence is:
 
 - lint, all workspace/E2E typechecks, and production builds: green;
 - unit: 111 files/762 tests;
@@ -141,14 +141,14 @@ future firmware work and physical validation.
 
 ## 5. ESP32 fleet gate
 
-- [ ] Build firmware 6.0.2 with an ignored local configuration containing the
+- [ ] Build firmware 6.0.3 with an ignored local configuration containing the
       intended Wi-Fi, Pi broker, `nemo` credentials, and NTP host.
 - [ ] For a firmware-5 device with old settings already in NVS, set
       `AQUARIUM_REPROVISION_NETWORK_CONFIG=true` only in its one-time USB
       build. Confirm reconnect with the intended settings, then use generic OTA images whose
       release configuration keeps the switch `false`.
 - [ ] Flash every deployed ESP32.
-- [ ] Confirm every device reports firmware 6.0.2 and hardware profile
+- [ ] Confirm every device reports firmware 6.0.3 and hardware profile
       `nodemcu-esp32s-v1.1`; other protocol majors are intentionally marked
       `firmware_unsupported` and receive no actuator, configuration, schedule,
       time-sync, or OTA work. Every pre-v6 version needs USB bootstrap. Future

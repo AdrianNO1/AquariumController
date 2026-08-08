@@ -3,7 +3,6 @@ import { createReadStream, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { createInterface } from "node:readline/promises";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const githubRepository = "AdrianNO1/AquariumController";
@@ -126,10 +125,6 @@ export function parseBackupResult(output, username) {
   return { bundle, sha256 };
 }
 
-export function confirmationMatches(answer, headSha) {
-  return answer === `DEPLOY ${headSha.slice(0, 12)}`;
-}
-
 function run(command, args, options = {}) {
   const capture = options.capture === true;
   const result = spawnSync(command, args, {
@@ -214,8 +209,8 @@ function printHelp() {
   console.log(`Usage: npm run production:deploy [-- --dry-run]
 
 Deploys the exact successful master CI image to the configured Raspberry Pi.
-The command creates and verifies an off-host backup, requires typed confirmation,
-and verifies or automatically rolls back the controller update.
+The command creates and verifies an off-host backup and verifies or automatically
+rolls back the controller update.
 
 Options:
   --dry-run  Resolve and display the exact release without contacting the Pi
@@ -327,14 +322,7 @@ async function deploy() {
   const credentials = readCredentials();
   const target = `${credentials.username}@${credentials.host}`;
   console.log(`  Target: ${target}`);
-  console.log("\nThis will create an off-host backup, then restart the production controller.");
-  const expectedConfirmation = `DEPLOY ${release.headSha.slice(0, 12)}`;
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await prompt.question(`Type ${expectedConfirmation} to continue: `);
-  prompt.close();
-  if (!confirmationMatches(answer, release.headSha)) {
-    throw new Error("Deployment confirmation did not match; nothing was changed on the Pi.");
-  }
+  console.log("\nCreating an off-host backup, then restarting the production controller.");
 
   const environment = createSshEnvironment(credentials);
   const remoteDirectory = `/tmp/aquarium-production-deploy-${release.headSha.slice(0, 12)}`;

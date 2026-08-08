@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
-  confirmationMatches,
   parseBackupResult,
   parsePiCredentials,
   parsePublishedImageReference,
@@ -98,12 +97,6 @@ test("accepts only a completed backup with a safe path and digest", () => {
     () => parseBackupResult(`LIVE_BACKUP_COMPLETE\nBUNDLE=/etc/passwd\nBUNDLE_SHA256=${digest}`, "adrian"),
     /unsafe bundle path/,
   );
-});
-
-test("deployment confirmation includes the selected commit", () => {
-  assert.equal(confirmationMatches("DEPLOY 111111111111", commit), true);
-  assert.equal(confirmationMatches("DEPLOY", commit), false);
-  assert.equal(confirmationMatches("DEPLOY 000000000000", commit), false);
 });
 
 test("backs up the verified currently running release before an upgrade", () => {

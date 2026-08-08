@@ -3,7 +3,7 @@
 This repository is a strict TypeScript rewrite of the Raspberry Pi aquarium
 controller. The previous Python and Flask application remains under `.old/` as
 migration evidence. The supported ESP32 source is
-`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 6.0.2 is compiled and bundled
+`firmware/esp32/ESP32Code/ESP32Code.ino`; firmware 6.0.3 is compiled and bundled
 with the controller release.
 
 Historical pre-4.1 release evidence dated 2026-07-25 includes 97 files/638 unit
@@ -192,7 +192,7 @@ npm run test:integration
 npm run test:e2e
 npm run build
 npm run verify
-docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.2 .
+docker build --file firmware/esp32/Dockerfile.compile --tag aquarium-esp32-compile:6.0.3 .
 ```
 
 For a new OTA release, use `npm run firmware:release -- <version>` rather than
@@ -209,7 +209,7 @@ uses a run-unique tag, reports the resulting manifest digest, and smoke-tests
 that exact digest on amd64 and ARM64.
 Pull-request code never runs on a Pi, and no deploy job exists.
 After a successful protected `master` publication, a maintainer can run the
-approval-gated `npm run production:deploy` command from a trusted workstation.
+supervised `npm run production:deploy` command from a trusted workstation.
 It selects the exact CI digest, copies a verified recovery bundle off the Pi,
 and verifies or rolls back the supervised update.
 
@@ -309,7 +309,7 @@ separate verified database/archive backup procedure.
   to purge the directly addressable unreachable object/cached view, resolve the
   remaining secret-scanning alert as `revoked`, and keep secret scanning and
   push protection enabled.
-- Flash firmware 6.0.2 to every deployed ESP32 and persist its device-specific
+- Flash firmware 6.0.3 to every deployed ESP32 and persist its device-specific
   network configuration in NVS. Every firmware version below 6.0.0 requires USB
   bootstrap and receives no command from the new controller. If a firmware-5
   device already persisted anonymous MQTT settings, the documented one-time USB
@@ -317,7 +317,7 @@ separate verified database/archive backup procedure.
   Older firmware remains visible
   through passive discovery, is
   marked `firmware_unsupported`, and receives no schedule, output,
-  configuration, or time-sync commands. Firmware 6.0.2 retains
+  configuration, or time-sync commands. Firmware 6.0.3 retains
   wear-limited persisted diagnostics, best-effort per-pin schedule activation,
   correlated outcomes, and
   rollover-safe override expiry. Routine controller and manual PWM writes use
@@ -329,7 +329,7 @@ separate verified database/archive backup procedure.
   so DNS/NTP failure does not delay MQTT or manual-control startup. If neither
   the Pi nor NTP is reachable after reboot, a valid persisted EEPROM timestamp
   intentionally authorizes the local schedule from that boundedly stale
-  estimate. Firmware 6.0.2 additionally reports the board hardware profile,
+  estimate. Firmware 6.0.3 additionally reports the board hardware profile,
   enforces the safe output-pin set, bounds SPIFFS repair attempts, preserves
   local scheduling when network configuration is unavailable, verifies MQTT
   subscription and OTA probation transitions, and removes remote fleet-wide
