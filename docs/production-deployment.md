@@ -9,7 +9,7 @@ commands are run by an operator on the intended Pi from a reviewed checkout.
 
 For a shorter inventory of missing inputs and approvals, start with the
 [Pi production handoff checklist](pi-production-handoff.md). The current
-firmware 6.0.2 and structured per-device protocol are the release candidate. Every
+firmware 6.0.3 and structured per-device protocol are the release candidate. Every
 future candidate must still pass protected CI, merge, publish, and receive a
 newly selected immutable digest before its deployment. Historical pre-4.1
 validation is recorded in the
@@ -49,8 +49,7 @@ OpenSSH without putting it on the command line. The file is excluded by
 `.gitignore`; never commit or paste its contents into logs. Other platforms use
 the operator's normal SSH authentication.
 
-Before restarting anything, the command asks for a commit-specific typed
-confirmation. It then:
+Before restarting anything, the command:
 
 1. verifies the currently running release and both SQLite databases;
 2. creates a schema-v2 database backup plus a matching archive-set manifest;
@@ -705,7 +704,7 @@ docker compose --file compose.production.yaml exec -T controller \
   --events-db /var/lib/aquarium/events/events.db
 ```
 
-Confirm the snapshot and UI, firmware version 6.0.2 for every ESP32, MQTT
+Confirm the snapshot and UI, firmware version 6.0.3 for every ESP32, MQTT
 discovery, schedules, overrides, alert history, notification destination,
 storage-health readings, and the latest verified backup. Confirm a
 nonresponding ESP becomes offline without stopping healthy device lanes, and

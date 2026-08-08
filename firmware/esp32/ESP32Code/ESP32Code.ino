@@ -49,7 +49,7 @@ const int ALLOWED_ANALOG_INPUT_PINS[] = {32, 33, 34, 35, 36, 39};
 const unsigned long MAX_SYNC_UNIX_TIME = 2147483647UL;
 const uint64_t LEDC_SOURCE_CLOCK_HZ = 80000000ULL;
 
-const char* VERSION = "6.0.2";
+const char* VERSION = "6.0.3";
 const bool TEST = false;
 const long gmtOffset_sec = 0;           // GMT offset in seconds (UTC)
 const int daylightOffset_sec = 0;      // No daylight savings offset

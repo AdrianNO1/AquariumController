@@ -2,7 +2,7 @@
 
 Assessment date: 2026-08-07
 
-Basis: the current firmware 6.0.2 structured per-device protocol branch, plus
+Basis: the current firmware 6.0.3 structured per-device protocol branch, plus
 the explicitly historical pre-4.1 release evidence recorded below. The
 aquarium Raspberry Pi and live ESPs were not contacted or used for this
 assessment.
@@ -53,7 +53,7 @@ branch's protected validation and merge succeed.
 
 | Boundary                          | Evidence                                                                     | Remaining boundary                                                         |
 | --------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Current ESP32 firmware 6.0.2      | Pinned release build passes at 90% flash and 16% global RAM                  | Protected firmware job, fleet flash, and physical soak                     |
+| Current ESP32 firmware 6.0.3      | Pinned release build passes at 90% flash and 16% global RAM                  | Protected firmware job, fleet flash, and physical soak                     |
 | Current transport/schedulers      | Local verification passes 111 files/762 unit and 88 files/638 critical tests | Full protected branch validation                                           |
 | Historical host verification      | Unit 97 files/638 tests; critical 82 files/571 tests                         | Historical pre-4.1 result; not current-branch evidence                     |
 | Current real Mosquitto            | Local current-branch integration passes 5/5                                  | Current protected integration job; production broker and LAN not contacted |
@@ -77,7 +77,7 @@ without reducing importer behavior coverage.
 
 ### Current branch verification
 
-The current firmware 6.0.2/structured-protocol source passed local lint, all
+The current firmware 6.0.3/structured-protocol source passed local lint, all
 workspace and E2E typechecks, and production builds. Its current test
 counts are:
 
@@ -120,7 +120,7 @@ current branch.
 
 ### Real broker integration
 
-The current firmware 6.0.2/structured-protocol real-wire suite passes 5/5 against
+The current firmware 6.0.3/structured-protocol real-wire suite passes 5/5 against
 digest-pinned Mosquitto
 `eclipse-mosquitto:2.0.22-openssl@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c`.
 It covers multi-device discovery, controller/broker/fake restarts, command and
@@ -150,10 +150,10 @@ includes:
 
 The harness rejects unexpected external requests and browser console errors.
 
-### ESP32 firmware 6.0.2 and historical 4.0 compile evidence
+### ESP32 firmware 6.0.3 and historical 4.0 compile evidence
 
 The supported sketch is `firmware/esp32/ESP32Code/ESP32Code.ino`, now version
-6.0.2. Its pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and
+6.0.3. Its pinned Arduino CLI 1.5.0, ESP32 core 3.0.7, ArduinoJson 7.4.3, and
 PubSubClient 2.8 build passes. The compiler image verifies the official Arduino
 CLI archive SHA-256 before extraction.
 
@@ -171,7 +171,7 @@ build. They are historical and are not claimed for 4.1:
 | Global RAM                        |    63,180 bytes |
 | Local-variable capacity remaining |   264,500 bytes |
 
-Firmware 6.0.2 retains rollover-safe override expiry, schedule restoration,
+Firmware 6.0.3 retains rollover-safe override expiry, schedule restoration,
 cache invalidation, and normalized 0-255 duty scaling. It adds correlated
 request IDs, strict typed JSON, per-device topics, wear-limited diagnostics,
 controller-owned overwrite behavior, and valid-EEPROM-time fallback when
@@ -292,7 +292,7 @@ exact digest before the Pi handoff starts.
 ### ESP32 fleet
 
 - Build the ignored local firmware configuration without committing secrets.
-- Flash every deployed board with 6.0.2 and confirm its reported version.
+- Flash every deployed board with 6.0.3 and confirm its reported version.
 - Bench-test override expiry, schedule restoration, resolution changes, time
   acquisition, Wi-Fi/broker loss, reboot, and power cycling before enabling
   aquarium actuators.
