@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 
 import { replaceControlAreaChannels } from "./api.js";
+import { createClientId } from "./client-id.js";
 import {
   configurationErrorMessage,
   currentRevisionFromError,
@@ -99,7 +100,7 @@ export function ChannelManagementDialog({
     const name = newName.trim();
     if (name.length === 0) return;
     const draft: ChannelDraft = {
-      id: `channel-${crypto.randomUUID()}`,
+      id: createClientId("channel"),
       name,
       color: newColor,
       isNew: true,

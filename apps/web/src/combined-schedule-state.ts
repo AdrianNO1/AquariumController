@@ -5,6 +5,8 @@ import {
   type SchedulePoint,
 } from "@aquarium/contracts";
 
+import { createClientId } from "./client-id.js";
+
 export const COMBINED_SCHEDULE_VIEW_BOX = {
   width: 1_000,
   height: 360,
@@ -548,7 +550,7 @@ export function timeToMinute(value: string): number | null {
 }
 
 export function createSchedulePointId(): string {
-  return `point-${crypto.randomUUID()}`;
+  return createClientId("point");
 }
 
 function createCombinedScheduleDraft(
